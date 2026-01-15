@@ -1,0 +1,5 @@
+# Core dependencies
+# Add your runtime dependencies here
+
+# Build dependencies
+build>=1.0.0

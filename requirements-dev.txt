@@ -1,0 +1,12 @@
+# Development dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.0
+
+# Code quality
+pylint>=3.0
+
+# Build tools
+build>=1.0.0
+twine>=4.0.0
