@@ -1,0 +1,46 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build pytest pylint
+    
+    - name: Run linters
+      run: |
+        ./scripts/run_lint.sh
+    
+    - name: Build package
+      run: |
+        python -m build --sdist
+        python -m build --wheel
+    
+    - name: Install package
+      run: |
+        pip install dist/*.whl
+    
+    - name: Run tests
+      run: |
+        pytest tests/ -v
