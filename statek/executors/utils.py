@@ -5,7 +5,7 @@ import traceback
 import dbzero as db0
 
 
-from statek.executors.exceptions import FutureError
+from statek.exceptions import FutureError
 from statek.executors.job import Job
 
 def wrap_param(param):
