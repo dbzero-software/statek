@@ -124,7 +124,6 @@ async def exec_step(code_str: str, job: Job) -> bool:
     del local_context['exit']
     del local_context['_smart_call']
     del local_context['wrap_param']
-    print(f"Local context after exec_step: {local_context}", file=sys.stderr)
     job.py_env.local_state = local_context
     return job.py_env.exit_status is None
 
