@@ -85,7 +85,7 @@ def db0_fixture_preloaded():
 
         # Initialize db0
         db0.init(DB0_DIR, read_write=True)
-
+        db0.open("test_prefix", "rw")
         # Create empty db0 snapshot
         paths = {}
         paths["EMPTY_DB0"] = os.path.join(TEST_FILES_DIR_ROOT, "empty_db0")
@@ -120,5 +120,6 @@ def db0_fixture(db0_fixture_preloaded):
 
         # Initialize db0
         db0.init(DB0_DIR, read_write=True)
-
+        db0.open("test_prefix", "rw")
         yield db0
+        db0.close()  # pylint: disable=no-member
