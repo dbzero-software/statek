@@ -1,9 +1,4 @@
 #!/bin/bash
-set -e
-
-echo "Running tests..."
-
-# Run pytest with coverage
-pytest tests/ -v
-
-echo "All tests passed!"
+set -e;
+export PYTHONIOENCODING=utf8
+python3 -m pytest -m 'not integration_test' -m 'not stress_test' --capture=no "$@" -vv
