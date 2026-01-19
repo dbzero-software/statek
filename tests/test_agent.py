@@ -2,21 +2,7 @@
 
 from statek.agent import Agent
 from statek.utils import format_callable_decl
-
-
-def clock():
-    """clock mock."""
-    return None
-
-
-def docs(class_name: type, method_name: str = None) -> str:  # pylint: disable=unused-argument
-    """docs mock."""
-    return ""
-
-
-def exit_tool(reason: str) -> None:  # pylint: disable=unused-argument
-    """exit mock."""
-    return None
+from tests.conftest import clock, docs, exit_tool
 
 
 class TestAgent:

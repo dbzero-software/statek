@@ -4,42 +4,19 @@ import pytest
 import dbzero as db0
 
 from statek.executors.utils import exec_step
-from statek.executors.job import Job, JobDef, JobStatus
-from statek.agent import Agent
 
 @db0.memo
 class MemoObject:  # pylint: disable=too-few-public-methods
     value: int = 0
 
 
-@pytest.fixture
-def simple_job(db0_fixture):  # pylint: disable=unused-argument,redefined-outer-name
-    """Create a simple job for testing."""
-    agent = Agent(
-        _system_prompt="Test agent with {tools}",
-        _tools=[]
-    )
-    job_def = JobDef(
-        agent=agent,
-        description="Test job",
-        goal="Test goal",
-        startup_code=None
-    )
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,  # pylint: disable=no-member
-        model_family="test",
-        model="test-model"
-    )
-    return job
-
-
 class TestExecStep:  # pylint: disable=too-few-public-methods
     """Test cases for exec_step function."""
 
     @pytest.mark.asyncio
-    async def test_exec_step_simple_print(self, simple_job, db0_fixture):  # pylint: disable=redefined-outer-name,unused-argument
-        """Test exec_step with simple print statement."""
+    async def test_exec_step_simple_print(self, job_factory):
+        """Test exec_step with simple print statement."""        
+        simple_job = job_factory(description="Test job", goal="Test goal")        
         code = 'print("Hello, World!")'
 
         result = await exec_step(code, simple_job)
@@ -50,8 +27,9 @@ class TestExecStep:  # pylint: disable=too-few-public-methods
         assert "Hello, World!" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
-    async def test_exec_step_variable_assignment(self, simple_job):  # pylint: disable=redefined-outer-name
+    async def test_exec_step_variable_assignment(self, job_factory):
         """Test exec_step with variable assignment."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code = 'x = 42'
 
         result = await exec_step(code, simple_job)
@@ -60,8 +38,9 @@ class TestExecStep:  # pylint: disable=too-few-public-methods
         assert simple_job.py_env.local_state.get('x') == 42
 
     @pytest.mark.asyncio
-    async def test_exec_step_multiple_statements(self, simple_job):  # pylint: disable=redefined-outer-name
+    async def test_exec_step_multiple_statements(self, job_factory):
         """Test exec_step with multiple statements."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code = '''
 x = 10
 y = 20
@@ -79,8 +58,9 @@ print(f"Result: {z}")
         assert "Result: 30" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
-    async def test_exec_step_with_exit(self, simple_job):  # pylint: disable=redefined-outer-name
+    async def test_exec_step_with_exit(self, job_factory):
         """Test exec_step with exit call."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code = 'exit("completed")'
 
         result = await exec_step(code, simple_job)
@@ -89,8 +69,9 @@ print(f"Result: {z}")
         assert simple_job.py_env.exit_status == "completed"
 
     @pytest.mark.asyncio
-    async def test_exec_step_preserves_state(self, simple_job):  # pylint: disable=redefined-outer-name
+    async def test_exec_step_preserves_state(self, job_factory):
         """Test that exec_step preserves state across calls."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code1 = 'counter = 0'
         code2 = 'counter += 1'
         code3 = 'print(counter)'
@@ -104,8 +85,9 @@ print(f"Result: {z}")
         assert "1" in simple_job.py_env.console[-1]
 
     @pytest.mark.asyncio
-    async def test_exec_step_print_with_separator(self, simple_job):  # pylint: disable=redefined-outer-name
+    async def test_exec_step_print_with_separator(self, job_factory):
         """Test exec_step with print using custom separator."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code = 'print("a", "b", "c", sep="-")'
 
         result = await exec_step(code, simple_job)
@@ -114,8 +96,9 @@ print(f"Result: {z}")
         assert "a-b-c" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
-    async def test_exec_with_db0_objects(self, simple_job):  # pylint: disable=redefined-outer-name
+    async def test_exec_with_db0_objects(self, job_factory):
         """Test exec_step finishes execution on exit call."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code = '''memo_object.value = 15'''
         obj = MemoObject()
         simple_job.py_env.local_state = {'memo_object': obj}
@@ -125,8 +108,9 @@ print(f"Result: {z}")
         assert obj.value == 15
 
     @pytest.mark.asyncio
-    async def test_exec_step_finishing_on_exit(self, simple_job):  # pylint: disable=redefined-outer-name
+    async def test_exec_step_finishing_on_exit(self, job_factory):
         """Test exec_step finishes execution on exit call."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code = '''print("Start")
 exit("Success")
 print("This should not run")'''

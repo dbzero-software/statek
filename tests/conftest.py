@@ -123,3 +123,78 @@ def db0_fixture(db0_fixture_preloaded):
         db0.open("test_prefix", "rw")  # pylint: disable=no-member
         yield db0
         db0.close()  # pylint: disable=no-member
+
+
+# Shared fixtures for Job-related tests
+from statek.agent import Agent
+from statek.executors.job import JobDef, Job, JobStatus
+from statek.executors.chat_log_item import ChatLogItem
+from datetime import datetime
+
+
+@pytest.fixture
+def agent(db0_fixture):
+    """Create a test agent."""
+    return Agent(_system_prompt="Test agent", _tools=[])
+
+
+@pytest.fixture
+def job_def_factory(agent):
+    """Factory fixture to create JobDef instances with custom parameters."""
+    def _create_job_def(description="Test task", goal=None, startup_code=None):
+        return JobDef(
+            agent=agent,
+            description=description,
+            goal=goal,
+            startup_code=startup_code
+        )
+    return _create_job_def
+
+
+@pytest.fixture
+def job_factory(job_def_factory):
+    """Factory fixture to create Job instances with custom parameters."""
+    def _create_job(description="Test task", goal=None, model_family="test", model="test-model"):
+        job_def = job_def_factory(description=description, goal=goal)
+        return Job(
+            job_def=job_def,
+            model_family=model_family,
+            model=model,
+            job_status=JobStatus.READY  # pylint: disable=no-member
+        )
+    return _create_job
+
+
+def create_chat_log_item(console_pos, llm_resp):
+    """Helper function to create ChatLogItem instances."""
+    return ChatLogItem(
+        console_pos=console_pos,
+        llm_resp=llm_resp,
+        timestamp=datetime.now()
+    )
+
+
+# Mock tool functions for testing
+def clock():
+    """clock mock."""
+    return None
+
+
+def docs(class_name: type, method_name: str = None) -> str:  # pylint: disable=unused-argument
+    """docs mock."""
+    return ""
+
+
+def exit_tool(reason: str) -> None:  # pylint: disable=unused-argument
+    """exit mock."""
+    return None
+
+
+@pytest.fixture
+def mock_tools():
+    """Provide common mock tools for testing."""
+    return {
+        'clock': clock,
+        'docs': docs,
+        'exit_tool': exit_tool
+    }
