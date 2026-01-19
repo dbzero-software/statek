@@ -11,4 +11,4 @@ class ChatLogItem:
     # Response received from the LLM
     llm_resp: str
     # Date and time of receiving the response (generating this log item)
-    timestamp: datetime = field(default_factory = datetime.now())
+    timestamp: datetime = field(default_factory=datetime.now)

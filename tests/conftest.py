@@ -10,6 +10,9 @@ import shutil
 import pytest
 import dbzero as db0
 
+from statek.executors.job import Job, JobDef, JobStatus
+from statek.agent import Agent
+
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
 TEST_DIR = os.path.join(os.path.dirname(__file__))
@@ -123,3 +126,25 @@ def db0_fixture(db0_fixture_preloaded):
         db0.open("test_prefix", "rw")  # pylint: disable=no-member
         yield db0
         db0.close()  # pylint: disable=no-member
+
+
+@pytest.fixture
+def simple_job(db0_fixture):  # pylint: disable=unused-argument
+    """Create a simple job for testing."""
+    agent = Agent(
+        _system_prompt="Test agent with {tools}",
+        _tools=[]
+    )
+    job_def = JobDef(
+        agent=agent,
+        description="Test job",
+        goal="Test goal",
+        startup_code=None
+    )
+    job = Job(
+        job_def=job_def,
+        job_status=JobStatus.READY,  # pylint: disable=no-member
+        model_family="test",
+        model="test-model"
+    )
+    return job

@@ -20,7 +20,7 @@ class JobStatus:
 @dataclass
 class JobDef:
     """
-    The `JobDescr` instances, as the name suggests - hold job descriptions / definitions. 
+    The `JobDescr` instances, as the name suggests - hold job descriptions / definitions.
     """
     # An agent assigned to this job
     agent: Agent
@@ -49,3 +49,29 @@ class Job:
     py_env: PyEnv = field(default_factory=PyEnv)
     # Current chat state
     chat_log: List[ChatLogItem] = field(default_factory=list)
+
+    @property
+    def last_response(self) -> str | None:
+        """
+        Retrieves the last response received from the LLM (i.e. the Python code to be executed)
+        or None if the last chat entry remains unanswered.
+        """
+        if not self.chat_log:
+            return None
+        return self.chat_log[-1].llm_resp
+
+    @property
+    def get_next_code_block(self) -> str | None:
+        """
+        Retrieves the Python code block pending execution (or execution continuation).
+
+        Returns:
+            - None if job_status is DONE
+            - job_def.startup_code if job_status is READY
+            - last_response in all other cases
+        """
+        if self.job_status == JobStatus.DONE:
+            return None
+        if self.job_status == JobStatus.READY:
+            return self.job_def.startup_code
+        return self.last_response

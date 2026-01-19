@@ -6,8 +6,8 @@ import dbzero as db0
 @dataclass
 class PyEnv:
     """
-        This is a class representing the state of execution of the LLM-submitted Python code. 
-        It holds the job-specific global / local variables (agent’s state) 
+        This is a class representing the state of execution of the LLM-submitted Python code.
+        It holds the job-specific global / local variables (agent’s state)
         as well as the instruction ID to continue from (in case of suspended or failed executions).
     """
     # The LLM program's global state (its persistent part)
