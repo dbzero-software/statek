@@ -20,7 +20,5 @@ class Agent:
         Places all available tool descriptions in the placeholder using
         newlines and > character to start each line.
         """
-        tools_str = "\n>".join(
-            format_callable_decl(tool) for tool in self._tools
-        )
+        tools_str = "\n".join(">" + format_callable_decl(tool) for tool in self._tools)
         return self._system_prompt.format(tools=tools_str)

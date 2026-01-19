@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import os
 import shutil
 
 import pytest
 import dbzero as db0
 
+from statek.executors.job import Job, JobDef, JobStatus
+from statek.agent import Agent
+from statek.executors.chat_log_item import ChatLogItem
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
 TEST_DIR = os.path.join(os.path.dirname(__file__))
@@ -125,15 +129,11 @@ def db0_fixture(db0_fixture_preloaded):
         db0.close()  # pylint: disable=no-member
 
 
-# Shared fixtures for Job-related tests
-from statek.agent import Agent
-from statek.executors.job import JobDef, Job, JobStatus
-from statek.executors.chat_log_item import ChatLogItem
-from datetime import datetime
+
 
 
 @pytest.fixture
-def agent(db0_fixture):
+def agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
     return Agent(_system_prompt="Test agent", _tools=[])
 

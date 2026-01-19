@@ -125,8 +125,11 @@ def test_prompt_append_console_basic():
     console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
     prompt = 'print(user)\nprint(clock.now())'
     result = prompt_append_console(console, prompt)
-    
-    expected = 'print(user)\nprint(clock.now())\n> User(name = "Kowalski Adam")\n> 2026-01-03 12:13:32'
+
+    expected = (
+        'print(user)\nprint(clock.now())\n'
+        '> User(name = "Kowalski Adam")\n> 2026-01-03 12:13:32'
+    )
     assert result == expected
 
 
@@ -134,7 +137,7 @@ def test_prompt_append_console_no_prompt():
     """Test console output without initial prompt."""
     console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
     result = prompt_append_console(console)
-    
+
     expected = '> User(name = "Kowalski Adam")\n> 2026-01-03 12:13:32'
     assert result == expected
 
@@ -149,7 +152,7 @@ def test_prompt_append_console_with_from_pos():
     """Test with from_pos parameter to skip initial elements."""
     console = ['line1', 'line2', 'line3', 'line4']
     result = prompt_append_console(console, 'test', from_pos=2)
-    
+
     expected = 'test\n> line3\n> line4'
     assert result == expected
 
@@ -158,7 +161,7 @@ def test_prompt_append_console_with_limit():
     """Test with limit parameter to restrict number of elements."""
     console = ['line1', 'line2', 'line3', 'line4', 'line5']
     result = prompt_append_console(console, 'test', limit=3)
-    
+
     expected = 'test\n> line1\n> line2\n> line3'
     assert result == expected
 
@@ -167,6 +170,6 @@ def test_prompt_append_console_limit_exceeds_length():
     """Test when limit exceeds available elements."""
     console = ['line1', 'line2']
     result = prompt_append_console(console, from_pos=0, limit=10)
-    
+
     expected = '> line1\n> line2'
     assert result == expected

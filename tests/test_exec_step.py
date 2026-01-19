@@ -15,8 +15,8 @@ class TestExecStep:  # pylint: disable=too-few-public-methods
 
     @pytest.mark.asyncio
     async def test_exec_step_simple_print(self, job_factory):
-        """Test exec_step with simple print statement."""        
-        simple_job = job_factory(description="Test job", goal="Test goal")        
+        """Test exec_step with simple print statement."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
         code = 'print("Hello, World!")'
 
         result = await exec_step(code, simple_job)

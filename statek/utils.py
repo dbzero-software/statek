@@ -148,21 +148,21 @@ def prompt_append_console(console: List[str], prompt: str = None,
     """
     # Start with the initial prompt if provided
     result = prompt if prompt else ""
-    
+
     # Handle case when console is None or empty
     if not console:
         return result
-    
+
     # Determine the range of console elements to include
     end_pos = len(console)
     if limit is not None:
         end_pos = min(from_pos + limit, end_pos)
-    
+
     # Append console outputs with "> " prefix
     console_outputs = []
     for i in range(from_pos, end_pos):
         console_outputs.append(f"> {console[i]}")
-    
+
     # Join console outputs and append to result
     if console_outputs:
         console_text = "\n".join(console_outputs)
@@ -170,5 +170,5 @@ def prompt_append_console(console: List[str], prompt: str = None,
             result += "\n" + console_text
         else:
             result = console_text
-    
+
     return result
