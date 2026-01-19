@@ -33,14 +33,14 @@ class _ResilientTransformer(ast.NodeTransformer):
     def visit_Call(self, node):
         # Visit function (e.g., to wrap the function name itself)
         new_func = self.visit(node.func)
-        
+
         # Process args: Skip wrapping Names directly so _smart_call handles them; visit others
         new_args = [
-            arg if isinstance(arg, ast.Name) else self.visit(arg) 
+            arg if isinstance(arg, ast.Name) else self.visit(arg)
             for arg in node.args
         ]
         new_keywords = [
-            ast.keyword(arg=k.arg, value=(k.value if isinstance(k.value, ast.Name) else self.visit(k.value))) 
+            ast.keyword(arg=k.arg, value=(k.value if isinstance(k.value, ast.Name) else self.visit(k.value)))
             for k in node.keywords
         ]
 
@@ -93,11 +93,11 @@ async def exec_step(code_str: str, job: Job) -> bool:
         local_context = {}
     else:
         local_context = {key: value for key, value in job.py_env.local_state.items()}
-    
+
     # Inject the helper into the execution context
 
 
-    
+
     # Inject custom print and exit functions
     local_context['print'] = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
     local_context['_smart_call'] = _smart_call

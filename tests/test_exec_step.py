@@ -4,34 +4,10 @@ import pytest
 import dbzero as db0
 
 from statek.executors.utils import exec_step
-from statek.executors.job import Job, JobDef, JobStatus
-from statek.agent import Agent
 
 @db0.memo
 class MemoObject:  # pylint: disable=too-few-public-methods
     value: int = 0
-
-
-@pytest.fixture
-def simple_job(db0_fixture):  # pylint: disable=unused-argument,redefined-outer-name
-    """Create a simple job for testing."""
-    agent = Agent(
-        _system_prompt="Test agent with {tools}",
-        _tools=[]
-    )
-    job_def = JobDef(
-        agent=agent,
-        description="Test job",
-        goal="Test goal",
-        startup_code=None
-    )
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,  # pylint: disable=no-member
-        model_family="test",
-        model="test-model"
-    )
-    return job
 
 
 class TestExecStep:  # pylint: disable=too-few-public-methods
