@@ -1,5 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Iterable, Dict, Any
+import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.agent import Agent
@@ -39,23 +40,58 @@ class JobDef:
 
 
 @memo
-@dataclass
 class Job:
     """
-    A single “job” is a stateful class representing the current state of a single unit-of-work, being performed end-to-end by a single agent. By a “job” we might mean either a very simple operation such as answering a basic question (“Hey, what day of week is today”) or a complex task involving retrieving information from external systems, communicating with external actors, waiting for approvals etc. - before the final response is generated.
+    A single "job" is a stateful class representing the current state of a single unit-of-work, being performed end-to-end by a single agent. By a "job" we might mean either a very simple operation such as answering a basic question ("Hey, what day of week is today") or a complex task involving retrieving information from external systems, communicating with external actors, waiting for approvals etc. - before the final response is generated.
     """
-    job_def: JobDef
-    #The LLM model family assigned to this job (e.g. Gemini)
-    model_family: str
-    # The LLM model assigned to this job (includes version)
-    model: str
-    job_status: JobStatus = JobStatus.READY
-    # Associated LLM API's session ID (where available)
-    session_id: str = None
-    # LLM program's execution environment
-    py_env: PyEnv = field(default_factory=PyEnv)
-    # Current chat state
-    chat_log: List[ChatLogItem] = field(default_factory=list)
+
+    def __init__(
+        self,
+        job_def: JobDef,
+        model_family: str,
+        model: str,
+        job_status: JobStatus = JobStatus.READY,
+        session_id: str = None,
+        py_env: PyEnv = None,
+        chat_log: List[ChatLogItem] = None
+    ):
+        self.job_def = job_def
+        # The LLM model family assigned to this job (e.g. Gemini)
+        self.model_family = model_family
+        # The LLM model assigned to this job (includes version)
+        self.model = model
+        # Private job status attribute
+        self.__job_status = None
+        self.set_status(job_status)
+        # Associated LLM API's session ID (where available)
+        self.session_id = session_id
+        # LLM program's execution environment
+        self.py_env = py_env if py_env is not None else PyEnv()
+        # Current chat state
+        self.chat_log = chat_log if chat_log is not None else []
+
+    @property
+    def status(self) -> JobStatus:
+        """
+        Returns the current job status.
+
+        Returns:
+            JobStatus: The current status of the job
+        """
+        return self.__job_status
+
+    def set_status(self, new_status: JobStatus):
+        """
+        Sets or updates job status. If state is updated - existing tag is removed
+        and new status tag applied.
+
+        Args:
+            new_status: The status/tag to be assigned or updated
+        """
+        if self.__job_status is not None:
+            db0.tags(self).remove(self.__job_status)
+        db0.tags(self).add(new_status)
+        self.__job_status = new_status
 
     def get_next_prompt(self) -> str:
         """
@@ -206,12 +242,12 @@ class Job:
         Retrieves the Python code block pending execution (or execution continuation).
 
         Returns:
-            - None if job_status is DONE
-            - job_def.warmup_code if job_status is READY
+            - None if status is DONE
+            - job_def.warmup_code if status is READY
             - last_response in all other cases
         """
-        if self.job_status == JobStatus.DONE:
+        if self.status == JobStatus.DONE:
             return None
-        if self.job_status == JobStatus.READY:
+        if self.status == JobStatus.READY:
             return self.job_def.warmup_code
         return self.last_response

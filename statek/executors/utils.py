@@ -2,6 +2,8 @@ import ast
 import sys
 import inspect
 import traceback
+import asyncio
+from typing import Callable
 import dbzero as db0
 
 
@@ -150,7 +152,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         see: experiments/ai/run_job_step.ipynb
     """
     # Step 1: If job status is DONE, exit with True
-    if job.job_status == JobStatus.DONE:
+    if job.status == JobStatus.DONE:
         return True
 
     # Step 2: Get next code block pending execution
@@ -158,25 +160,25 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 3: If code is None, change status to STARTED and go to step #9
     if code is None:
-        job.job_status = JobStatus.STARTED
+        job.status = JobStatus.STARTED
     else:
         # Step 4: Update status READY -> WARMING_UP or SUSPENDED -> STARTED
-        if job.job_status == JobStatus.READY:
-            job.job_status = JobStatus.WARMING_UP
-        elif job.job_status == JobStatus.SUSPENDED:
-            job.job_status = JobStatus.STARTED
+        if job.status == JobStatus.READY:
+            job.status = JobStatus.WARMING_UP
+        elif job.status == JobStatus.SUSPENDED:
+            job.status = JobStatus.STARTED
 
         # Step 5: Execute the code using exec_step
         not_exited = await exec_step(code, job)
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
-            job.job_status = JobStatus.DONE
+            job.status = JobStatus.DONE
             return True
 
         # Step 8: Update status WARMING_UP -> STARTED
-        if job.job_status == JobStatus.WARMING_UP:
-            job.job_status = JobStatus.STARTED
+        if job.status == JobStatus.WARMING_UP:
+            job.status = JobStatus.STARTED
 
     # Step 9: Get LLM API provider
     if provider is None:
@@ -199,3 +201,64 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 13: Return False
     return False
+
+
+async def job_worker(semaphore, job: Job, provider: str = None):
+    async with semaphore:
+        await run_job_step(job, provider)
+
+async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
+    start_jobs_func: Callable = None):
+    """
+    Main loop responsible for processing registered jobs pending execution.
+    
+    The loop iterates over all active jobs so that none is starved off resources.
+    It's assumed that only a single jobs-loop is running in one process.
+    
+    Args:
+        max_concurrency: the execution concurrency level
+        provider: the LLM API provider (or None for default)
+        start_jobs_func: optional callable for starting new jobs
+    """
+    # Track pending job tasks to avoid exceeding max_concurrency
+    pending_tasks = {}  # Dict[Job, asyncio.Task]
+    ready_or_started_jobs = []
+    semaphore = asyncio.Semaphore(max_concurrency)
+    while True:
+        # Step 1: TODO: Clean up finished tasks from pending_tasks
+        
+        # Step 2: Call start_jobs_func if provided
+        if start_jobs_func is not None:
+            available_capacity = max_concurrency - len(pending_tasks)
+            start_jobs_func(available_capacity)
+        
+        # Step 3: Find jobs with status READY or STARTED, excluding jobs already pending
+        if len(ready_or_started_jobs) == 0:
+            ready_or_started_jobs = db0.filter(lambda job: job not in pending_tasks, 
+                                               db0.find(Job, [JobStatus.READY, JobStatus.STARTED]))
+
+    
+        # Step 4: Submit run_job_step for jobs that aren't already pending
+        # Make sure not to exceed max_concurrency
+        if len(pending_tasks) < max_concurrency:
+            for job in ready_or_started_jobs:
+                # Create task for this job. Add all tasks to pending_tasks
+                task = asyncio.create_task(job_worker(semaphore, job, provider))
+                pending_tasks[job] = task
+        
+        # Step 5: Wait for completion of at least 1 job or sleep 300ms
+        if pending_tasks:
+            # Wait for at least one task to complete or timeout after 300ms
+            done, pending = await asyncio.wait(
+                pending_tasks.values(),
+                timeout=0.3,
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Clean up completed tasks
+            for job, task in list(pending_tasks.items()):
+                if task in done:
+                    del pending_tasks[job]
+        else:
+            # No pending tasks, just sleep
+            await asyncio.sleep(0.3)

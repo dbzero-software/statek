@@ -1,8 +1,9 @@
 """Tests for Job class."""
 
 import types
-
+import dbzero as db0
 from tests.conftest import create_chat_log_item
+from statek.executors.job import Job, JobStatus
 
 
 class TestJobDef:
@@ -271,6 +272,29 @@ class TestJobGetNextRequest:
         ))
 
         assert job.last_response == "print('second response')"
+
+
+class TestJobSetStatus:  # pylint: disable=too-few-public-methods
+    """Test cases for Job.set_status method."""
+
+    def test_set_status_initial(self, job_factory):
+        """Test setting initial job status."""
+
+        job = job_factory(description="Test task")
+
+        # Initial status should be READY
+        assert job.status == JobStatus.READY  # pylint: disable=no-member
+        assert len(db0.find(Job, JobStatus.READY)) == 1  # pylint: disable=no-member
+
+        # Change status to STARTED
+        job.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+
+        # Verify status is updated
+        assert job.status == JobStatus.STARTED  # pylint: disable=no-member
+
+        # Verify tags are updated
+        assert len(db0.find(Job, JobStatus.READY)) == 0  # pylint: disable=no-member
+        assert len(db0.find(Job, JobStatus.STARTED)) == 1  # pylint: disable=no-member
 
 
 class TestJobAppendChatLog:
