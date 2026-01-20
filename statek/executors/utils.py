@@ -154,7 +154,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         return True
 
     # Step 2: Get next code block pending execution
-    code = job.get_next_code_block
+    code = job.get_next_code_block()
 
     # Step 3: If code is None, change status to STARTED and go to step #9
     if code is None:

@@ -201,7 +201,6 @@ class Job:
             return None
         return self.chat_log[-1].llm_resp
 
-    @property
     def get_next_code_block(self) -> str | None:
         """
         Retrieves the Python code block pending execution (or execution continuation).
