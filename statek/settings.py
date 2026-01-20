@@ -38,7 +38,7 @@ class StatekSettings(BaseSettings):
         default_llm_api_provider: The default provider to use
     """
     llm_api_settings: Dict[str, LLM_API_Settings] = Field(default_factory=dict)
-    default_llm_api_provider: str = ""
+    default_llm_api_provider: str = "OPENROUTER"
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -113,3 +113,8 @@ def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Se
     """Get LLM_API_Settings for a specific provider or the default provider."""
     settings = StatekSettings()
     return settings.get_provider_settings(provider)
+
+@lru_cache()
+def get_statek_settings() -> StatekSettings:
+    """Get the cached StatekSettings instance."""
+    return StatekSettings()

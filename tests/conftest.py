@@ -141,12 +141,12 @@ def agent(db0_fixture):  # pylint: disable=unused-argument
 @pytest.fixture
 def job_def_factory(agent):
     """Factory fixture to create JobDef instances with custom parameters."""
-    def _create_job_def(description="Test task", goal=None, startup_code=None):
+    def _create_job_def(description="Test task", goal=None, warmup_code=None):
         return JobDef(
             agent=agent,
             description=description,
             goal=goal,
-            startup_code=startup_code
+            warmup_code=warmup_code
         )
     return _create_job_def
 

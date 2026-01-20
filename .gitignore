@@ -23,11 +23,11 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+.dbzero_data
 # PyInstaller
 *.manifest
 *.spec
-
+*.env
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -52,6 +52,9 @@ env/
 *.swp
 *.swo
 *~
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
 
 # OS
 .DS_Store

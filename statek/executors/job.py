@@ -8,11 +8,12 @@ from statek.utils import prompt_append_console
 
 """
 READY: a fresh job instance ready for execution
+WARMING_UP: executing startup code before first LLM interaction
 STARTED: job execution in progress
 SUSPENDED: job execution suspended - waiting on external events
 DONE: execution has been completed (with either success or failure)
 """
-@enum(values=["READY", "STARTED", "SUSPENDED", "DONE"])
+@enum(values=["READY", "WARMING_UP", "STARTED", "SUSPENDED", "DONE"])
 class JobStatus:
     pass
 
@@ -28,8 +29,8 @@ class JobDef:
     # f-string with job / task description, might include the {goal}
     description: str
     goal: Optional[str]
-    # Optional startup code (executed) before the first prompt
-    startup_code: Optional[str]
+    # Optional warmup code (executed) before the first prompt
+    warmup_code: Optional[str]
 
     def prompt(self) -> str:
         if self.goal:
@@ -207,11 +208,11 @@ class Job:
 
         Returns:
             - None if job_status is DONE
-            - job_def.startup_code if job_status is READY
+            - job_def.warmup_code if job_status is READY
             - last_response in all other cases
         """
         if self.job_status == JobStatus.DONE:
             return None
         if self.job_status == JobStatus.READY:
-            return self.job_def.startup_code
+            return self.job_def.warmup_code
         return self.last_response
