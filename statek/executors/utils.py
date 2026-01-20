@@ -6,7 +6,9 @@ import dbzero as db0
 
 
 from statek.exceptions import FutureError
-from statek.executors.job import Job
+from statek.executors.job import Job, JobStatus
+from statek.llm_api import LLM_API
+from statek.settings import get_statek_settings
 
 def wrap_param(param):
     #FIXME: consider making this a proper FutureResult class
@@ -128,5 +130,72 @@ async def exec_step(code_str: str, job: Job) -> bool:
     return job.py_env.exit_status is None
 
 
+async def run_job_step(job: Job, provider: str = None) -> bool:
+    """
+    Execute a single step of the agentic pipeline.
 
+    This function performs one iteration of the agent execution loop:
+    1. Retrieves and executes pending code
+    2. Formulates a prompt and sends it to the LLM API
+    3. Processes the response and stores it in the result
 
+    Args:
+        job: The job object holding the job's state
+        provider: The LLM API provider name (or None for default)
+
+    Returns:
+        True if the job has been completed (exit called), False otherwise
+
+    example:
+        see: experiments/ai/run_job_step.ipynb
+    """
+    # Step 1: If job status is DONE, exit with True
+    if job.job_status == JobStatus.DONE:
+        return True
+
+    # Step 2: Get next code block pending execution
+    code = job.get_next_code_block()
+
+    # Step 3: If code is None, change status to STARTED and go to step #9
+    if code is None:
+        job.job_status = JobStatus.STARTED
+    else:
+        # Step 4: Update status READY -> WARMING_UP or SUSPENDED -> STARTED
+        if job.job_status == JobStatus.READY:
+            job.job_status = JobStatus.WARMING_UP
+        elif job.job_status == JobStatus.SUSPENDED:
+            job.job_status = JobStatus.STARTED
+
+        # Step 5: Execute the code using exec_step
+        not_exited = await exec_step(code, job)
+
+        # Step 6 & 7: Check if code has finished (exit_status not None)
+        if job.py_env.exit_status is not None:
+            job.job_status = JobStatus.DONE
+            return True
+
+        # Step 8: Update status WARMING_UP -> STARTED
+        if job.job_status == JobStatus.WARMING_UP:
+            job.job_status = JobStatus.STARTED
+
+    # Step 9: Get LLM API provider
+    if provider is None:
+        provider = get_statek_settings().default_llm_api_provider
+    llm_api = LLM_API.get(provider_name=provider, model=job.model)
+
+    # Step 10: Get next request parameters
+    request = job.get_next_request()
+
+    # Step 11: Run the request with LLM API - await response
+    response = await llm_api.process_request(**request)
+
+    # Update session_id if returned by the LLM API
+    if response.session_id:
+        job.session_id = response.session_id
+
+    # Step 12: Add new log item using append_chat_log
+    print(f"LLM Response:\n{response.text}\n{'-'*40}")
+    job.append_chat_log(request, response.text)
+
+    # Step 13: Return False
+    return False
