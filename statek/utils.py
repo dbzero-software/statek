@@ -1,7 +1,7 @@
 """Utility functions for statek package."""
 
 import inspect
-from typing import Callable, get_type_hints, get_origin, get_args, Union
+from typing import Callable, List, get_type_hints, get_origin, get_args, Union
 
 
 def format_callable_decl(func: Callable) -> str:
@@ -121,3 +121,54 @@ def _format_type(type_hint) -> str:
         type_str = type_str.replace("typing.", "")
 
     return type_str
+
+
+def prompt_append_console(console: List[str], prompt: str = None,
+                          from_pos: int = 0, limit: int = None) -> str:
+    """
+    Extend a prompt with the console outputs.
+
+    This is a helper function to format console output for LLM consumption by
+    appending console items (prefixed with "> ") to an optional initial prompt.
+
+    Args:
+        console: The list representation of the console state
+        prompt: Optional leading prompt (regular text)
+        from_pos: First element to start output from
+        limit: Optional limit of consecutive console elements to be included
+
+    Returns:
+        The complete formatted text ready for the LLM recipient
+
+    Examples:
+        >>> console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
+        >>> prompt = 'print(user)\\nprint(clock.now())'
+        >>> prompt_append_console(console, prompt)
+        'print(user)\\nprint(clock.now())\\n> User(name = "Kowalski Adam")\\n> 2026-01-03 12:13:32'
+    """
+    # Start with the initial prompt if provided
+    result = prompt if prompt else ""
+
+    # Handle case when console is None or empty
+    if not console:
+        return result
+
+    # Determine the range of console elements to include
+    end_pos = len(console)
+    if limit is not None:
+        end_pos = min(from_pos + limit, end_pos)
+
+    # Append console outputs with "> " prefix
+    console_outputs = []
+    for i in range(from_pos, end_pos):
+        console_outputs.append(f"> {console[i]}")
+
+    # Join console outputs and append to result
+    if console_outputs:
+        console_text = "\n".join(console_outputs)
+        if result:
+            result += "\n" + console_text
+        else:
+            result = console_text
+
+    return result

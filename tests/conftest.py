@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import os
 import shutil
 
@@ -12,7 +13,7 @@ import dbzero as db0
 
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agent import Agent
-
+from statek.executors.chat_log_item import ChatLogItem
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
 TEST_DIR = os.path.join(os.path.dirname(__file__))
@@ -128,23 +129,72 @@ def db0_fixture(db0_fixture_preloaded):
         db0.close()  # pylint: disable=no-member
 
 
+
+
+
 @pytest.fixture
-def simple_job(db0_fixture):  # pylint: disable=unused-argument
-    """Create a simple job for testing."""
-    agent = Agent(
-        _system_prompt="Test agent with {tools}",
-        _tools=[]
+def agent(db0_fixture):  # pylint: disable=unused-argument
+    """Create a test agent."""
+    return Agent(_system_prompt="Test agent", _tools=[])
+
+
+@pytest.fixture
+def job_def_factory(agent):
+    """Factory fixture to create JobDef instances with custom parameters."""
+    def _create_job_def(description="Test task", goal=None, startup_code=None):
+        return JobDef(
+            agent=agent,
+            description=description,
+            goal=goal,
+            startup_code=startup_code
+        )
+    return _create_job_def
+
+
+@pytest.fixture
+def job_factory(job_def_factory):
+    """Factory fixture to create Job instances with custom parameters."""
+    def _create_job(description="Test task", goal=None, model_family="test", model="test-model"):
+        job_def = job_def_factory(description=description, goal=goal)
+        return Job(
+            job_def=job_def,
+            model_family=model_family,
+            model=model,
+            job_status=JobStatus.READY  # pylint: disable=no-member
+        )
+    return _create_job
+
+
+def create_chat_log_item(console_pos, llm_resp):
+    """Helper function to create ChatLogItem instances."""
+    return ChatLogItem(
+        console_pos=console_pos,
+        llm_resp=llm_resp,
+        timestamp=datetime.now()
     )
-    job_def = JobDef(
-        agent=agent,
-        description="Test job",
-        goal="Test goal",
-        startup_code=None
-    )
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,  # pylint: disable=no-member
-        model_family="test",
-        model="test-model"
-    )
-    return job
+
+
+# Mock tool functions for testing
+def clock():
+    """clock mock."""
+    return None
+
+
+def docs(class_name: type, method_name: str = None) -> str:  # pylint: disable=unused-argument
+    """docs mock."""
+    return ""
+
+
+def exit_tool(reason: str) -> None:  # pylint: disable=unused-argument
+    """exit mock."""
+    return None
+
+
+@pytest.fixture
+def mock_tools():
+    """Provide common mock tools for testing."""
+    return {
+        'clock': clock,
+        'docs': docs,
+        'exit_tool': exit_tool
+    }

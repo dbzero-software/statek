@@ -2,7 +2,7 @@
 """Tests for statek.utils module."""
 
 from typing import Iterable, Union, List, Dict, Optional
-from statek.utils import format_callable_decl
+from statek.utils import format_callable_decl, prompt_append_console
 
 
 def test_simple_function():
@@ -118,3 +118,58 @@ def test_function_with_iterable():
     result = format_callable_decl(process_items)
     assert "items: Iterable[str]" in result or "items: Iterable" in result
     assert "List[str]" in result or "list[str]" in result
+
+
+def test_prompt_append_console_basic():
+    """Test basic usage with prompt and console."""
+    console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
+    prompt = 'print(user)\nprint(clock.now())'
+    result = prompt_append_console(console, prompt)
+
+    expected = (
+        'print(user)\nprint(clock.now())\n'
+        '> User(name = "Kowalski Adam")\n> 2026-01-03 12:13:32'
+    )
+    assert result == expected
+
+
+def test_prompt_append_console_no_prompt():
+    """Test console output without initial prompt."""
+    console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
+    result = prompt_append_console(console)
+
+    expected = '> User(name = "Kowalski Adam")\n> 2026-01-03 12:13:32'
+    assert result == expected
+
+
+def test_prompt_append_console_empty_console():
+    """Test with empty console list."""
+    result = prompt_append_console([], 'prompt only')
+    assert result == 'prompt only'
+
+
+def test_prompt_append_console_with_from_pos():
+    """Test with from_pos parameter to skip initial elements."""
+    console = ['line1', 'line2', 'line3', 'line4']
+    result = prompt_append_console(console, 'test', from_pos=2)
+
+    expected = 'test\n> line3\n> line4'
+    assert result == expected
+
+
+def test_prompt_append_console_with_limit():
+    """Test with limit parameter to restrict number of elements."""
+    console = ['line1', 'line2', 'line3', 'line4', 'line5']
+    result = prompt_append_console(console, 'test', limit=3)
+
+    expected = 'test\n> line1\n> line2\n> line3'
+    assert result == expected
+
+
+def test_prompt_append_console_limit_exceeds_length():
+    """Test when limit exceeds available elements."""
+    console = ['line1', 'line2']
+    result = prompt_append_console(console, from_pos=0, limit=10)
+
+    expected = '> line1\n> line2'
+    assert result == expected
