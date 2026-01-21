@@ -139,7 +139,8 @@ def function_with_mixed(regular_param, *args, **kwargs):
     return {'regular': regular_param, 'args': args, 'kwargs': kwargs}
 
 
-class TestExecStep:  # pylint: disable=too-few-public-methods
+# pylint: disable=too-many-public-methods
+class TestExecStep:
     """Test cases for exec_step function."""
 
     @pytest.mark.asyncio
@@ -456,7 +457,7 @@ y = 2'''
         # First execution should raise FutureError at instruction 1 (compute call)
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job)
-        
+
         assert exc_info.value.instr_num == 1
         assert exc_info.value.future_result is future_not_ready
         # First instruction executed, second failed, third not reached
@@ -467,7 +468,7 @@ y = 2'''
         # Now make the future ready
         future_ready = create_future_ready(20)
         simple_job.py_env.local_state['future_val'] = future_ready
-        
+
         # Continue from instruction 1 (the compute call)
         result = await exec_step(code, simple_job, instr_num=1)
         assert result is True
@@ -493,7 +494,7 @@ c = 3'''
         # First execution should raise FutureError at instruction 1
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job)
-        
+
         assert exc_info.value.instr_num == 1
         assert exc_info.value.future_result is future_not_ready
         assert simple_job.py_env.local_state['a'] == 5
@@ -503,7 +504,7 @@ c = 3'''
         # Now make the future ready
         future_ready = create_future_ready(10)
         simple_job.py_env.local_state['future_val'] = future_ready
-        
+
         # Continue from instruction 1
         result = await exec_step(code, simple_job, instr_num=1)
         assert result is True
@@ -512,7 +513,7 @@ c = 3'''
 
     @pytest.mark.asyncio
     async def test_exec_step_multiple_future_errors_in_sequence(self, job_factory):
-        """Test multiple FutureErrors in different instructions - demonstrates step-by-step continuation."""
+        """Test multiple FutureErrors in different instructions - step-by-step continuation."""
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create two FutureResults that raise FutureError
@@ -534,7 +535,7 @@ w = 4'''
         # First execution should raise FutureError at instruction 2 (first print)
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job)
-        
+
         assert exc_info.value.instr_num == 2
         assert exc_info.value.future_result is future_not_ready_1
         assert simple_job.py_env.local_state['x'] == 1
@@ -543,11 +544,11 @@ w = 4'''
         # Make first future ready but second still not ready
         future_ready_1 = create_future_ready()
         simple_job.py_env.local_state['future_val_1'] = future_ready_1
-        
+
         # Continue from instruction 2, should now fail at instruction 4 (second print)
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job, instr_num=2)
-        
+
         assert exc_info.value.instr_num == 4
         assert exc_info.value.future_result is future_not_ready_2
         assert simple_job.py_env.local_state['z'] == 3
@@ -559,7 +560,7 @@ w = 4'''
         # Make second future ready
         future_ready_2 = create_future_ready(99)
         simple_job.py_env.local_state['future_val_2'] = future_ready_2
-        
+
         # Continue from instruction 4, should complete successfully
         result = await exec_step(code, simple_job, instr_num=4)
         assert result is True
