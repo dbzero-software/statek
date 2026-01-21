@@ -108,7 +108,7 @@ class TestGetAny:
         assert combined.value == "value2"
 
     def test_get_any_result_value_raises_when_not_ready(self, db0_fixture):
-        """Test accessing value property of get_any_future result raises when no futures are ready."""
+        """Test accessing get_any_future result raises when no futures are ready."""
         fut1 = make_mock_future("value1", condition=False)
         fut2 = make_mock_future("value2", condition=False)
 
@@ -155,7 +155,7 @@ class TestGetAll:
         assert set(combined.value) == set(("value1", "value2"))
 
     def test_get_all_result_value_raises_when_not_ready(self, db0_fixture):
-        """Test accessing value property of get_all_future result raises when any future is not ready."""
+        """Test accessing get_all_future result raises when any future is not ready."""
         fut1 = make_mock_future("value1", condition=True)
         fut2 = make_mock_future("value2", condition=False)
 
@@ -174,7 +174,7 @@ class TestGetAll:
         assert combined.check_condition() is True
 
     def test_get_all_check_condition_returns_false(self, db0_fixture):
-        """Test check_condition on get_all_future result returns False when any future is not ready."""
+        """Test check_condition on get_all_future returns False when any future is not ready."""
         fut1 = make_mock_future("value1", condition=True)
         fut2 = make_mock_future("value2", condition=False)
 
