@@ -28,36 +28,32 @@ def docs(tool_or_class: type | Callable, method_name: str = None):
         docs(add)  # Get documentation for the 'add' function
         docs(User, "send_message")  # Get documentation for User.send_message method
     """
-    try:
-        # If method_name is provided, get the method from the class
-        if method_name is not None:
-            if not isinstance(tool_or_class, type):
-                print(f"Error: {tool_or_class} is not a class")
-                return
+    # If method_name is provided, get the method from the class
+    if method_name is not None:
+        if not isinstance(tool_or_class, type):
+            print(f"Error: {tool_or_class} is not a class")
+            return
 
-            # Get the method from the class
-            if not hasattr(tool_or_class, method_name):
-                print(f"Error: {tool_or_class.__name__} has no method '{method_name}'")
-                return
+        # Get the method from the class
+        if not hasattr(tool_or_class, method_name):
+            print(f"Error: {tool_or_class.__name__} has no method '{method_name}'")
+            return
 
-            target = getattr(tool_or_class, method_name)
+        target = getattr(tool_or_class, method_name)
+    else:
+        target = tool_or_class
+
+    # Get the docstring
+    docstring = inspect.getdoc(target)
+
+    if docstring:
+        print(docstring)
+    else:
+        if method_name:
+            print(f"No docstring found for {tool_or_class.__name__}.{method_name}")
         else:
-            target = tool_or_class
-
-        # Get the docstring
-        docstring = inspect.getdoc(target)
-
-        if docstring:
-            print(docstring)
-        else:
-            if method_name:
-                print(f"No docstring found for {tool_or_class.__name__}.{method_name}")
-            else:
-                name = getattr(tool_or_class, '__name__', str(tool_or_class))
-                print(f"No docstring found for {name}")
-
-    except Exception as e: # pylint: disable=broad-exception-caught
-        print(f"Error retrieving documentation: {e}")
+            name = getattr(tool_or_class, '__name__', str(tool_or_class))
+            print(f"No docstring found for {name}")
 
 
 @tool
