@@ -4,6 +4,7 @@ import functools
 import inspect
 import dbzero as db0
 from . import tool
+from .exceptions import FutureError
 
 @db0.memo
 @dataclass
@@ -37,19 +38,6 @@ class FutureResult:
 
     def check_condition(self):
         return self.__check_condition(self)
-
-
-@dataclass
-class FutureError(Exception):
-    """
-    Raised by a temporal function when trying to retrieve a response which is not available yet.
-
-    Attributes:
-        future_result: The awaited result.
-        instr_num: The instruction number (to continue from).
-    """
-    future_result: FutureResult
-    instr_num: Optional[int] = None
 
 
 @db0.memo
