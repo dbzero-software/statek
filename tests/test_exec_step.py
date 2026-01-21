@@ -46,6 +46,38 @@ def local_print(some_argument):
     print(some_argument)
 
 
+def compute(a, b, c):
+    """Function that computes sum of three arguments."""
+    return a + b + c
+
+
+# Helper functions for creating FutureResults
+def create_future_not_ready():
+    """Create a FutureResult that raises FutureError when accessed."""
+    future = FutureResult(
+        deps=MemoObject(value=0),
+        state_num=0
+    )
+    future.set_complement_functions(
+        complement=_fetch_result_not_ready,
+        condition=_check_condition_false
+    )
+    return future
+
+
+def create_future_ready(value=42):
+    """Create a ready FutureResult with a specific value."""
+    future = FutureResult(
+        deps=MemoObject(value=value),
+        state_num=0
+    )
+    future.set_complement_functions(
+        complement=_fetch_result_from_deps,
+        condition=_check_condition_true
+    )
+    return future
+
+
 # Define temporal functions as globals
 @temporal(complement=_fetch_result_ready, condition=_check_condition_true)
 def get_value():
@@ -239,14 +271,7 @@ print("This should not run")'''
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create a FutureResult that initially raises FutureError
-        future_not_ready = FutureResult(
-            deps=MemoObject(value=0),
-            state_num=0
-        )
-        future_not_ready.set_complement_functions(
-            complement=_fetch_result_not_ready,
-            condition=_check_condition_false
-        )
+        future_not_ready = create_future_not_ready()
 
         simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
         code = 'print(future_val)'
@@ -262,14 +287,7 @@ print("This should not run")'''
         assert simple_job.py_env.console is None
 
         # Now create a FutureResult that's ready
-        future_ready = FutureResult(
-            deps=MemoObject(value=42),
-            state_num=0
-        )
-        future_ready.set_complement_functions(
-            complement=_fetch_result_ready,
-            condition=_check_condition_true
-        )
+        future_ready = create_future_ready()
 
         simple_job.py_env.local_state = {'future_val': future_ready, 'local_print': local_print}
 
@@ -288,14 +306,7 @@ print("This should not run")'''
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create a FutureResult that initially raises FutureError
-        future_not_ready = FutureResult(
-            deps=MemoObject(value=0),
-            state_num=0
-        )
-        future_not_ready.set_complement_functions(
-            complement=_fetch_result_not_ready,
-            condition=_check_condition_false
-        )
+        future_not_ready = create_future_not_ready()
 
         simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
         code = 'local_print(future_val)'
@@ -311,14 +322,7 @@ print("This should not run")'''
         assert simple_job.py_env.console is None
 
         # Now create a FutureResult that's ready
-        future_ready = FutureResult(
-            deps=MemoObject(value=42),
-            state_num=0
-        )
-        future_ready.set_complement_functions(
-            complement=_fetch_result_ready,
-            condition=_check_condition_true
-        )
+        future_ready = create_future_ready()
 
         simple_job.py_env.local_state = {'future_val': future_ready, 'local_print': local_print}
 
@@ -401,14 +405,7 @@ z = 3'''
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create a FutureResult that initially raises FutureError
-        future_not_ready = FutureResult(
-            deps=MemoObject(value=0),
-            state_num=0
-        )
-        future_not_ready.set_complement_functions(
-            complement=_fetch_result_not_ready,
-            condition=_check_condition_false
-        )
+        future_not_ready = create_future_not_ready()
 
         # Multi-statement code where second statement will raise FutureError
         code = '''x = 1
@@ -427,14 +424,7 @@ y = 2'''
         assert simple_job.py_env.console is None
 
         # Now make the future ready
-        future_ready = FutureResult(
-            deps=MemoObject(value=42),
-            state_num=0
-        )
-        future_ready.set_complement_functions(
-            complement=_fetch_result_ready,
-            condition=_check_condition_true
-        )
+        future_ready = create_future_ready()
         simple_job.py_env.local_state['future_val'] = future_ready
 
         # Continue from instruction 1 (where error occurred)
@@ -446,19 +436,146 @@ y = 2'''
         assert simple_job.py_env.local_state['y'] == 2
 
     @pytest.mark.asyncio
+    async def test_exec_step_future_error_in_function_argument(self, job_factory):
+        """Test FutureError raised in function argument evaluation."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
+
+        # Create a FutureResult that initially raises FutureError
+        future_not_ready = create_future_not_ready()
+
+        simple_job.py_env.local_state = {
+            'future_val': future_not_ready,
+            'compute': compute
+        }
+
+        # Code where FutureError occurs in middle of argument evaluation
+        code = '''x = 1
+result = compute(10, future_val, 30)
+y = 2'''
+
+        # First execution should raise FutureError at instruction 1 (compute call)
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+        
+        assert exc_info.value.instr_num == 1
+        assert exc_info.value.future_result is future_not_ready
+        # First instruction executed, second failed, third not reached
+        assert simple_job.py_env.local_state['x'] == 1
+        assert 'result' not in simple_job.py_env.local_state
+        assert 'y' not in simple_job.py_env.local_state
+
+        # Now make the future ready
+        future_ready = create_future_ready(20)
+        simple_job.py_env.local_state['future_val'] = future_ready
+        
+        # Continue from instruction 1 (the compute call)
+        result = await exec_step(code, simple_job, instr_num=1)
+        assert result is True
+        # Now compute should succeed with value 20 and y should be assigned
+        assert simple_job.py_env.local_state['result'] == 60  # 10 + 20 + 30
+        assert simple_job.py_env.local_state['y'] == 2
+
+    @pytest.mark.asyncio
+    async def test_exec_step_future_error_in_nested_expression(self, job_factory):
+        """Test FutureError raised in nested expression evaluation."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
+
+        # Create a FutureResult that initially raises FutureError
+        future_not_ready = create_future_not_ready()
+
+        simple_job.py_env.local_state = {'future_val': future_not_ready}
+
+        # Code with nested expression containing FutureResult
+        code = '''a = 5
+b = a + future_val * 2
+c = 3'''
+
+        # First execution should raise FutureError at instruction 1
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+        
+        assert exc_info.value.instr_num == 1
+        assert exc_info.value.future_result is future_not_ready
+        assert simple_job.py_env.local_state['a'] == 5
+        assert 'b' not in simple_job.py_env.local_state
+        assert 'c' not in simple_job.py_env.local_state
+
+        # Now make the future ready
+        future_ready = create_future_ready(10)
+        simple_job.py_env.local_state['future_val'] = future_ready
+        
+        # Continue from instruction 1
+        result = await exec_step(code, simple_job, instr_num=1)
+        assert result is True
+        assert simple_job.py_env.local_state['b'] == 25  # 5 + 10 * 2
+        assert simple_job.py_env.local_state['c'] == 3
+
+    @pytest.mark.asyncio
+    async def test_exec_step_multiple_future_errors_in_sequence(self, job_factory):
+        """Test multiple FutureErrors in different instructions - demonstrates step-by-step continuation."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
+
+        # Create two FutureResults that raise FutureError
+        future_not_ready_1 = create_future_not_ready()
+        future_not_ready_2 = create_future_not_ready()
+
+        simple_job.py_env.local_state = {
+            'future_val_1': future_not_ready_1,
+            'future_val_2': future_not_ready_2
+        }
+
+        code = '''x = 1
+y = 2
+print(future_val_1)
+z = 3
+print(future_val_2)
+w = 4'''
+
+        # First execution should raise FutureError at instruction 2 (first print)
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+        
+        assert exc_info.value.instr_num == 2
+        assert exc_info.value.future_result is future_not_ready_1
+        assert simple_job.py_env.local_state['x'] == 1
+        assert simple_job.py_env.local_state['y'] == 2
+
+        # Make first future ready but second still not ready
+        future_ready_1 = create_future_ready()
+        simple_job.py_env.local_state['future_val_1'] = future_ready_1
+        
+        # Continue from instruction 2, should now fail at instruction 4 (second print)
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job, instr_num=2)
+        
+        assert exc_info.value.instr_num == 4
+        assert exc_info.value.future_result is future_not_ready_2
+        assert simple_job.py_env.local_state['z'] == 3
+        assert 'w' not in simple_job.py_env.local_state
+        # Should have printed 42
+        assert len(simple_job.py_env.console) == 1
+        assert "42" in simple_job.py_env.console[0]
+
+        # Make second future ready
+        future_ready_2 = create_future_ready(99)
+        simple_job.py_env.local_state['future_val_2'] = future_ready_2
+        
+        # Continue from instruction 4, should complete successfully
+        result = await exec_step(code, simple_job, instr_num=4)
+        assert result is True
+        assert simple_job.py_env.local_state['w'] == 4
+        # Should now have both prints
+        assert len(simple_job.py_env.console) == 2
+        assert "42" in simple_job.py_env.console[0]
+        assert "99" in simple_job.py_env.console[1]
+
+    @pytest.mark.asyncio
     async def test_exec_step_future_typehint_not_unwrapped(self, job_factory):
         """Test that function with FutureResult typehint receives unwrapped FutureResult."""
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create a ready FutureResult
-        future_ready = FutureResult(
-            deps=MemoObject(value=42),
-            state_num=0
-        )
-        future_ready.set_complement_functions(
-            complement=_fetch_result_ready,
-            condition=_check_condition_true
-        )
+        future_ready = create_future_ready()
 
         simple_job.py_env.local_state = {
             'function_with_future_typehint': function_with_future_typehint,
@@ -481,14 +598,7 @@ y = 2'''
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create a ready FutureResult
-        future_ready = FutureResult(
-            deps=MemoObject(value=42),
-            state_num=0
-        )
-        future_ready.set_complement_functions(
-            complement=_fetch_result_ready,
-            condition=_check_condition_true
-        )
+        future_ready = create_future_ready()
 
         simple_job.py_env.local_state = {
             'function_without_typehint': function_without_typehint,
@@ -511,23 +621,9 @@ y = 2'''
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create multiple FutureResult objects
-        future1 = FutureResult(deps=MemoObject(value=10), state_num=0)
-        future1.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
-
-        future2 = FutureResult(deps=MemoObject(value=20), state_num=0)
-        future2.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
-
-        future3 = FutureResult(deps=MemoObject(value=30), state_num=0)
-        future3.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
+        future1 = create_future_ready(10)
+        future2 = create_future_ready(20)
+        future3 = create_future_ready(30)
 
         simple_job.py_env.local_state = {
             'function_with_args': function_with_args,
@@ -554,17 +650,8 @@ y = 2'''
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create FutureResult objects
-        future_a = FutureResult(deps=MemoObject(value=100), state_num=0)
-        future_a.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
-
-        future_b = FutureResult(deps=MemoObject(value=200), state_num=0)
-        future_b.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
+        future_a = create_future_ready(100)
+        future_b = create_future_ready(200)
 
         simple_job.py_env.local_state = {
             'function_with_kwargs': function_with_kwargs,
@@ -589,29 +676,10 @@ y = 2'''
         simple_job = job_factory(description="Test job", goal="Test goal")
 
         # Create FutureResult objects
-        future_reg = FutureResult(deps=MemoObject(value=1), state_num=0)
-        future_reg.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
-
-        future_arg1 = FutureResult(deps=MemoObject(value=2), state_num=0)
-        future_arg1.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
-
-        future_arg2 = FutureResult(deps=MemoObject(value=3), state_num=0)
-        future_arg2.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
-
-        future_kw = FutureResult(deps=MemoObject(value=4), state_num=0)
-        future_kw.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true
-        )
+        future_reg = create_future_ready(1)
+        future_arg1 = create_future_ready(2)
+        future_arg2 = create_future_ready(3)
+        future_kw = create_future_ready(4)
 
         simple_job.py_env.local_state = {
             'function_with_mixed': function_with_mixed,
