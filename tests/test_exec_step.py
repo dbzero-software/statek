@@ -15,22 +15,22 @@ class MemoObject:  # pylint: disable=too-few-public-methods
     value: int = 0
 
 
-def _check_condition_false(self):
+def _check_condition_false(_):
     """Check condition that always returns False."""
     return False
 
 
-def _fetch_result_not_ready(self):
+def _fetch_result_not_ready(_):
     """Fetch result that raises FutureError."""
     raise FutureError("Not ready")
 
 
-def _check_condition_true(self):
+def _check_condition_true(_):
     """Check condition that always returns True."""
     return True
 
 
-def _fetch_result_ready(self):
+def _fetch_result_ready(_):
     """Fetch result that returns 42."""
     return 42
 
@@ -71,9 +71,8 @@ def function_with_future_typehint(future_param: FutureResult):
     if isinstance(future_param, FutureResult):
         print("Received FutureResult object")
         return True
-    else:
-        print(f"Received unwrapped value: {future_param}")
-        return False
+    print(f"Received unwrapped value: {future_param}")
+    return False
 
 
 def function_without_typehint(param):
@@ -106,7 +105,7 @@ def function_with_mixed(regular_param, *args, **kwargs):
     print(f"Args: {args}")
     print(f"Kwargs: {kwargs}")
     return {'regular': regular_param, 'args': args, 'kwargs': kwargs}
-        
+
 
 class TestExecStep:  # pylint: disable=too-few-public-methods
     """Test cases for exec_step function."""
@@ -116,7 +115,7 @@ class TestExecStep:  # pylint: disable=too-few-public-methods
         """Test exec_step with simple print statement."""
         simple_job = job_factory(description="Test job", goal="Test goal")
         code = 'print("Hello, World!")'
-    
+
         result = await exec_step(code, simple_job)
 
         assert result is True
@@ -236,9 +235,9 @@ print("This should not run")'''
     @pytest.mark.asyncio
     async def test_exec_step_print_with_future_result(self, job_factory):
         """Test exec_step with print statement accepting FutureResult."""
-        
+
         simple_job = job_factory(description="Test job", goal="Test goal")
-        
+
         # Create a FutureResult that initially raises FutureError
         future_not_ready = FutureResult(
             deps=MemoObject(value=0),
@@ -248,17 +247,17 @@ print("This should not run")'''
             complement=_fetch_result_not_ready,
             condition=_check_condition_false
         )
-        
+
         simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
         code = 'print(future_val)'
-        
+
         # First execution should skip the print due to FutureError
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         # Console should be empty since print was skipped
         assert simple_job.py_env.console is None
-        
+
         # Now create a FutureResult that's ready
         future_ready = FutureResult(
             deps=MemoObject(value=42),
@@ -268,12 +267,12 @@ print("This should not run")'''
             complement=_fetch_result_ready,
             condition=_check_condition_true
         )
-        
+
         simple_job.py_env.local_state = {'future_val': future_ready, 'local_print': local_print}
-        
+
         # Second execution should print the value
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert len(simple_job.py_env.console) == 1
         assert "42" in simple_job.py_env.console[0]
@@ -282,9 +281,9 @@ print("This should not run")'''
     @pytest.mark.asyncio
     async def test_exec_step_local_function_with_future_result(self, job_factory):
         """Test exec_step with local function statement accepting FutureResult."""
-        
+
         simple_job = job_factory(description="Test job", goal="Test goal")
-        
+
         # Create a FutureResult that initially raises FutureError
         future_not_ready = FutureResult(
             deps=MemoObject(value=0),
@@ -294,17 +293,17 @@ print("This should not run")'''
             complement=_fetch_result_not_ready,
             condition=_check_condition_false
         )
-        
+
         simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
         code = 'local_print(future_val)'
-        
+
         # First execution should skip the print due to FutureError
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         # Console should be empty since print was skipped
         assert simple_job.py_env.console is None
-        
+
         # Now create a FutureResult that's ready
         future_ready = FutureResult(
             deps=MemoObject(value=42),
@@ -314,12 +313,12 @@ print("This should not run")'''
             complement=_fetch_result_ready,
             condition=_check_condition_true
         )
-        
+
         simple_job.py_env.local_state = {'future_val': future_ready, 'local_print': local_print}
-        
+
         # Second execution should print the value
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert len(simple_job.py_env.console) == 2
         assert "42" in simple_job.py_env.console[1]
@@ -329,13 +328,13 @@ print("This should not run")'''
         """Test exec_step with temporal function and print."""
         simple_job = job_factory(description="Test job", goal="Test goal")
         simple_job.py_env.local_state = {'get_value': get_value}
-        
+
         code = '''result = get_value()
 print(result)'''
-        
+
         # Execute and check that print works with temporal function result
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert simple_job.py_env.console is not None
         assert len(simple_job.py_env.console) == 1
@@ -347,13 +346,13 @@ print(result)'''
         simple_job = job_factory(description="Test job", goal="Test goal")
         simple_job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
         simple_job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
-        
+
         code = '''result = get_value_not_ready()
 print(result)'''
-        
+
         # Execute - should skip the print due to FutureError
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         # Console should be empty since print was skipped
         assert simple_job.py_env.console is None
@@ -362,7 +361,7 @@ print(result)'''
     async def test_exec_step_future_typehint_not_unwrapped(self, job_factory):
         """Test that function with FutureResult typehint receives unwrapped FutureResult."""
         simple_job = job_factory(description="Test job", goal="Test goal")
-        
+
         # Create a ready FutureResult
         future_ready = FutureResult(
             deps=MemoObject(value=42),
@@ -372,17 +371,17 @@ print(result)'''
             complement=_fetch_result_ready,
             condition=_check_condition_true
         )
-        
+
         simple_job.py_env.local_state = {
             'function_with_future_typehint': function_with_future_typehint,
             'future_val': future_ready
         }
-        
+
         code = '''result = function_with_future_typehint(future_val)'''
-        
+
         # Execute - function should receive FutureResult object, not unwrapped value
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert simple_job.py_env.console is not None
         assert "Received FutureResult object" in simple_job.py_env.console[0]
@@ -392,7 +391,7 @@ print(result)'''
     async def test_exec_step_no_typehint_unwrapped(self, job_factory):
         """Test that function without typehint receives unwrapped value."""
         simple_job = job_factory(description="Test job", goal="Test goal")
-        
+
         # Create a ready FutureResult
         future_ready = FutureResult(
             deps=MemoObject(value=42),
@@ -402,17 +401,17 @@ print(result)'''
             complement=_fetch_result_ready,
             condition=_check_condition_true
         )
-        
+
         simple_job.py_env.local_state = {
             'function_without_typehint': function_without_typehint,
             'future_val': future_ready
         }
-        
+
         code = '''result = function_without_typehint(future_val)'''
-        
+
         # Execute - function should receive unwrapped value (42), not FutureResult
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert simple_job.py_env.console is not None
         assert "Received value: 42" in simple_job.py_env.console[0]
@@ -422,38 +421,38 @@ print(result)'''
     async def test_exec_step_function_with_args(self, job_factory):
         """Test that function with *args receives unwrapped values."""
         simple_job = job_factory(description="Test job", goal="Test goal")
-        
+
         # Create multiple FutureResult objects
         future1 = FutureResult(deps=MemoObject(value=10), state_num=0)
         future1.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         future2 = FutureResult(deps=MemoObject(value=20), state_num=0)
         future2.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         future3 = FutureResult(deps=MemoObject(value=30), state_num=0)
         future3.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         simple_job.py_env.local_state = {
             'function_with_args': function_with_args,
             'f1': future1,
             'f2': future2,
             'f3': future3
         }
-        
+
         code = '''result = function_with_args(f1, f2, f3)'''
-        
+
         # Execute - function should receive unwrapped values
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert simple_job.py_env.console is not None
         assert "Arg 0: 10" in simple_job.py_env.console[0]
@@ -465,31 +464,31 @@ print(result)'''
     async def test_exec_step_function_with_kwargs(self, job_factory):
         """Test that function with **kwargs receives unwrapped values."""
         simple_job = job_factory(description="Test job", goal="Test goal")
-        
+
         # Create FutureResult objects
         future_a = FutureResult(deps=MemoObject(value=100), state_num=0)
         future_a.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         future_b = FutureResult(deps=MemoObject(value=200), state_num=0)
         future_b.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         simple_job.py_env.local_state = {
             'function_with_kwargs': function_with_kwargs,
             'fa': future_a,
             'fb': future_b
         }
-        
+
         code = '''result = function_with_kwargs(x=fa, y=fb)'''
-        
+
         # Execute - function should receive unwrapped values
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert simple_job.py_env.console is not None
         assert "Kwarg x: 100" in simple_job.py_env.console[0]
@@ -500,32 +499,32 @@ print(result)'''
     async def test_exec_step_function_with_mixed_params(self, job_factory):
         """Test that function with mixed parameters receives unwrapped values."""
         simple_job = job_factory(description="Test job", goal="Test goal")
-        
+
         # Create FutureResult objects
         future_reg = FutureResult(deps=MemoObject(value=1), state_num=0)
         future_reg.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         future_arg1 = FutureResult(deps=MemoObject(value=2), state_num=0)
         future_arg1.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         future_arg2 = FutureResult(deps=MemoObject(value=3), state_num=0)
         future_arg2.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         future_kw = FutureResult(deps=MemoObject(value=4), state_num=0)
         future_kw.set_complement_functions(
             complement=_fetch_result_from_deps,
             condition=_check_condition_true
         )
-        
+
         simple_job.py_env.local_state = {
             'function_with_mixed': function_with_mixed,
             'fr': future_reg,
@@ -533,12 +532,12 @@ print(result)'''
             'fa2': future_arg2,
             'fk': future_kw
         }
-        
+
         code = '''result = function_with_mixed(fr, fa1, fa2, key=fk)'''
-        
+
         # Execute - function should receive all unwrapped values
         result = await exec_step(code, simple_job)
-        
+
         assert result is True
         assert simple_job.py_env.console is not None
         retrieved_result = simple_job.py_env.local_state.get('result')
