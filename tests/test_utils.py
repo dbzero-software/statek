@@ -3,6 +3,7 @@
 
 from typing import Iterable, Union, List, Dict, Optional
 from statek.utils import format_callable_decl, prompt_append_console
+from statek.future import temporal, FutureResult
 
 
 def test_simple_function():
@@ -173,3 +174,54 @@ def test_prompt_append_console_limit_exceeds_length():
 
     expected = '> line1\n> line2'
     assert result == expected
+
+
+def test_format_callable_decl_temporal_function():
+    """Test formatting a temporal function shows non-FutureResult return type."""
+
+    def complement_func(fut: FutureResult) -> str:
+        return "result"
+
+    def condition_func(fut: FutureResult) -> bool:
+        return True
+
+    @temporal(complement_func, condition_func)
+    def temporal_func(x: int) -> FutureResult | int:
+        return x
+
+    result = format_callable_decl(temporal_func)
+    # Should show the complement function's return type
+    assert result == "def temporal_func(x: int) -> str"
+
+
+def test_format_callable_decl_multiple_temporal_function():
+    """Test formatting a temporal function shows non-FutureResult return type."""
+
+    def complement_func(fut: FutureResult) -> str:
+        return "result"
+
+    def complement_func_2(fut: FutureResult) -> int:
+        return 5
+
+    def condition_func(fut: FutureResult) -> bool:
+        return True
+
+    @temporal(complement_func, condition_func)
+    def temporal_func(x: int) -> FutureResult | int:
+        return x
+
+    @temporal(complement_func_2, condition_func)
+    def temporal_func_2(x: int) -> FutureResult | int:
+        return x
+
+    result = format_callable_decl(temporal_func)
+    # Should show the complement function's return type
+    assert result == "def temporal_func(x: int) -> str"
+
+    result = format_callable_decl(temporal_func_2)
+    # Should show the complement function's return type
+    assert result == "def temporal_func_2(x: int) -> int"
+
+    result = format_callable_decl(temporal_func)
+    # Should show the complement function's return type
+    assert result == "def temporal_func(x: int) -> str"

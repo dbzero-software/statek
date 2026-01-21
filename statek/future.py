@@ -92,12 +92,14 @@ def temporal(complement: Callable[[FutureResult], Any], condition: Callable[[Fut
             async def async_wrapper(*args, **kwargs):
                 result = await f(*args, **kwargs)
                 return _handle_temporal_function_result(result, complement, condition)
+            async_wrapper.__is_temporal__ = True
             return async_wrapper
 
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
             result = f(*args, **kwargs)
             return _handle_temporal_function_result(result, complement, condition)
+        wrapper.__is_temporal__ = True
         return wrapper
 
     return decorator
