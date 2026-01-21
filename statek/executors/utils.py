@@ -15,7 +15,7 @@ from statek.executors.job import Job, JobStatus
 from statek.llm_api import LLM_API
 from statek.settings import get_statek_settings
 
-def wrap_param(param):
+def _wrap_param (param):
     if isinstance(param, FutureResult):
         value = param.value
         return value
@@ -48,20 +48,19 @@ def _smart_call(func, *args, **kwargs):
             if param.kind == inspect.Parameter.VAR_POSITIONAL:
                 # val is a tuple, wrap each element unless annotated as FutureResult
                 if not check_for_future_typehint(param, anno):
-                    bound.arguments[name] = tuple(wrap_param(v) for v in val)
+                    bound.arguments[name] = tuple(_wrap_param(v) for v in val)
             # Handle **kwargs (VAR_KEYWORD)
             elif param.kind == inspect.Parameter.VAR_KEYWORD:
                 # val is a dict, wrap each value unless annotated as FutureResult
                 if not check_for_future_typehint(param, anno):
-                    bound.arguments[name] = {k: wrap_param(v) for k, v in val.items()}
+                    bound.arguments[name] = {k: _wrap_param(v) for k, v in val.items()}
             # Handle regular parameters
             elif not check_for_future_typehint(param, anno):
-                bound.arguments[name] = wrap_param(val)
+                bound.arguments[name] = _wrap_param(val)
         return func(*bound.args, **bound.kwargs)
     except (ValueError, TypeError):
         # Fallback: wrap everything if signature inspection fails
-        return func(*[wrap_param(a) for a in args], **{k: wrap_param(v) for k, v in kwargs.items()})
-
+        return func(*[_wrap_param(a) for a in args], **{k: _wrap_param(v) for k, v in kwargs.items()})
 class _ResilientTransformer(ast.NodeTransformer):
     def visit_Call(self, node):
         # Visit function (e.g., to wrap the function name itself)
@@ -86,9 +85,9 @@ class _ResilientTransformer(ast.NodeTransformer):
 
     def visit_Name(self, node):
         # Wrap variables used in expressions (outside of function arguments handled above)
-        if isinstance(node.ctx, ast.Load) and node.id not in {'wrap_param', '_smart_call'}:
+        if isinstance(node.ctx, ast.Load) and node.id not in {'_wrap_param', '_smart_call'}:
             new_node = ast.Call(
-                func=ast.Name(id='wrap_param', ctx=ast.Load()),
+                func=ast.Name(id='_wrap_param', ctx=ast.Load()),
                 args=[node],
                 keywords=[]
             )
@@ -131,7 +130,7 @@ def _setup_execution_context(job: Job, local_context: dict):
     # Inject into local context
     local_context['print'] = custom_print_fn
     local_context['_smart_call'] = _smart_call
-    local_context['wrap_param'] = wrap_param
+    local_context['_wrap_param'] = _wrap_param
     local_context['exit'] = custom_exit_fn
     
     try:
@@ -141,7 +140,7 @@ def _setup_execution_context(job: Job, local_context: dict):
         builtins.print = original_print
         
         # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', 'wrap_param']:
+        for key in ['print', 'exit', '_smart_call', '_wrap_param']:
             if key in local_context:
                 del local_context[key]
 
