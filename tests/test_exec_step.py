@@ -20,9 +20,9 @@ def _check_condition_false(_):
     return False
 
 
-def _fetch_result_not_ready(_):
+def _fetch_result_not_ready(future_result):
     """Fetch result that raises FutureError."""
-    raise FutureError("Not ready")
+    raise FutureError(future_result=future_result)
 
 
 def _check_condition_true(_):
@@ -251,11 +251,14 @@ print("This should not run")'''
         simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
         code = 'print(future_val)'
 
-        # First execution should skip the print due to FutureError
-        result = await exec_step(code, simple_job)
-
-        assert result is True
-        # Console should be empty since print was skipped
+        # First execution should raise FutureError with instr_num
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+        
+        # Verify the exception has instr_num set
+        assert exc_info.value.instr_num == 0
+        assert exc_info.value.future_result is future_not_ready
+        # Console should be empty since print was not executed
         assert simple_job.py_env.console is None
 
         # Now create a FutureResult that's ready
@@ -297,11 +300,14 @@ print("This should not run")'''
         simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
         code = 'local_print(future_val)'
 
-        # First execution should skip the print due to FutureError
-        result = await exec_step(code, simple_job)
-
-        assert result is True
-        # Console should be empty since print was skipped
+        # First execution should raise FutureError with instr_num
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+        
+        # Verify the exception has instr_num set
+        assert exc_info.value.instr_num == 0
+        assert exc_info.value.future_result is future_not_ready
+        # Console should be empty since print was not executed
         assert simple_job.py_env.console is None
 
         # Now create a FutureResult that's ready
@@ -350,12 +356,94 @@ print(result)'''
         code = '''result = get_value_not_ready()
 print(result)'''
 
-        # Execute - should skip the print due to FutureError
-        result = await exec_step(code, simple_job)
-
-        assert result is True
-        # Console should be empty since print was skipped
+        # Execute - should raise FutureError with instr_num on the second statement (print)
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+        
+        # Verify the exception has instr_num set to the second instruction (1)
+        # The first instruction assigns the FutureResult, the second tries to print it
+        assert exc_info.value.instr_num == 1
+        # Console should be empty since print was not executed
         assert simple_job.py_env.console is None
+
+    @pytest.mark.asyncio
+    async def test_exec_step_continuation_with_instr_num(self, job_factory):
+        """Test exec_step continuation from specific instruction using instr_num."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
+
+        # Multi-statement code
+        code = '''x = 1
+y = 2
+print(x)
+print(y)
+z = 3'''
+
+        # Execute first time and check all statements execute
+        result = await exec_step(code, simple_job)
+        assert result is True
+        assert len(simple_job.py_env.console) == 2
+        
+        # Clear console for next test
+        simple_job.py_env.console = None
+        
+        # Now execute starting from instruction 2 (third statement: print(x))
+        result = await exec_step(code, simple_job, instr_num=2)
+        assert result is True
+        # Should only execute print(x), print(y), and z = 3
+        assert len(simple_job.py_env.console) == 2
+        assert "1" in simple_job.py_env.console[0]
+        assert "2" in simple_job.py_env.console[1]
+        assert simple_job.py_env.local_state['z'] == 3
+
+    @pytest.mark.asyncio
+    async def test_exec_step_continuation_after_future_error(self, job_factory):
+        """Test exec_step continuation after FutureError using instr_num."""
+        simple_job = job_factory(description="Test job", goal="Test goal")
+
+        # Create a FutureResult that initially raises FutureError
+        future_not_ready = FutureResult(
+            deps=MemoObject(value=0),
+            state_num=0
+        )
+        future_not_ready.set_complement_functions(
+            complement=_fetch_result_not_ready,
+            condition=_check_condition_false
+        )
+
+        # Multi-statement code where second statement will raise FutureError
+        code = '''x = 1
+print(future_val)
+y = 2'''
+
+        simple_job.py_env.local_state = {'future_val': future_not_ready}
+
+        # First execution should raise FutureError at instruction 1
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+        
+        assert exc_info.value.instr_num == 1
+        # x should be assigned but console should be empty
+        assert simple_job.py_env.local_state['x'] == 1
+        assert simple_job.py_env.console is None
+        
+        # Now make the future ready
+        future_ready = FutureResult(
+            deps=MemoObject(value=42),
+            state_num=0
+        )
+        future_ready.set_complement_functions(
+            complement=_fetch_result_ready,
+            condition=_check_condition_true
+        )
+        simple_job.py_env.local_state['future_val'] = future_ready
+        
+        # Continue from instruction 1 (where error occurred)
+        result = await exec_step(code, simple_job, instr_num=1)
+        assert result is True
+        # Now print should succeed and y should be assigned
+        assert len(simple_job.py_env.console) == 1
+        assert "42" in simple_job.py_env.console[0]
+        assert simple_job.py_env.local_state['y'] == 2
 
     @pytest.mark.asyncio
     async def test_exec_step_future_typehint_not_unwrapped(self, job_factory):

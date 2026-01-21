@@ -4,7 +4,7 @@ import inspect
 import traceback
 import asyncio
 import builtins
-from typing import Callable
+from typing import Callable, Optional
 from contextlib import contextmanager
 import dbzero as db0
 
@@ -145,16 +145,29 @@ def _setup_execution_context(job: Job, local_context: dict):
                 del local_context[key]
 
 
-async def exec_step(code_str: str, job: Job) -> bool:
+async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) -> bool:
     """
     Execute a single step of code within the job's Python environment.
+    
+    The function executes a single step defined as a Python code block within the job's context
+    - i.e. globals, locals, console and exit_status. The execution results are reflected in the
+    provided job's state.
 
     Args:
-        code: The code string to execute.
-        job: The Job instance containing the Python environment.
+        code: Python code (or expression) to be executed
+        job: the Job defining the execution context
+        instr_num: optional instruction number to start from (for continuation)
 
     Returns:
-        True if execution completed without exit signal, False if exit was called.
+        True if the exit was called (program finished), False otherwise
+        
+    Raises:
+        FutureError: decorated with instr_num - execution needs to be suspended until
+                     continuation criteria are satisfied
+                     
+    Side effects:
+        Console outputs (print results) are appended to _X_console
+        local_state might be updated by the program
     """
     # Global and local contexts needs to be dictionaries in order to be used with exec
     if job.py_env.global_state is None:
@@ -167,25 +180,39 @@ async def exec_step(code_str: str, job: Job) -> bool:
         local_context = {key: value for key, value in job.py_env.local_state.items()}
 
     # Use context manager to setup and cleanup execution environment
-    with _setup_execution_context(job, local_context):
-        tree = ast.parse(code_str)
-        _ResilientTransformer().visit(tree)
-        ast.fix_missing_locations(tree)
+    try:
+        with _setup_execution_context(job, local_context):
+            tree = ast.parse(code_str)
+            _ResilientTransformer().visit(tree)
+            ast.fix_missing_locations(tree)
 
-        for node in tree.body:
-            try:
-
-                wrapper = ast.Module(body=[node], type_ignores=[])
-                code_obj = compile(wrapper, filename="<string>", mode="exec")
-                exec(code_obj, global_context, local_context)
-                # Check for exit signal
-                if job.py_env.exit_status is not None:
-                    break
-                # Save updated local context back to job
-            except FutureError:
-                continue
+            # Determine starting instruction number
+            start_instr = instr_num if instr_num is not None else 0
+            
+            for idx, node in enumerate(tree.body):
+                # Skip instructions before the starting point
+                if idx < start_instr:
+                    continue
+                    
+                try:
+                    wrapper = ast.Module(body=[node], type_ignores=[])
+                    code_obj = compile(wrapper, filename="<string>", mode="exec")
+                    exec(code_obj, global_context, local_context)
+                    # Check for exit signal
+                    if job.py_env.exit_status is not None:
+                        break
+                    # Save updated local context back to job
+                except FutureError as e:
+                    # Decorate FutureError with instruction number if not already set
+                    if e.instr_num is None:
+                        e.instr_num = idx
+                    # Re-raise the decorated exception
+                    raise
+    finally:
+        # Always save the local state, even if exception is raised
+        # This happens after the context manager cleanup, so helper functions are removed
+        job.py_env.local_state = local_context
     
-    job.py_env.local_state = local_context
     return job.py_env.exit_status is None
 
 
