@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Optional, Set, Tuple, Callable, Sequence
+from typing import Any, Set, Tuple, Callable, Sequence
 import functools
 import inspect
 import dbzero as db0

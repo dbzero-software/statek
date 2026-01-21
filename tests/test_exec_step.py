@@ -254,7 +254,7 @@ print("This should not run")'''
         # First execution should raise FutureError with instr_num
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job)
-        
+
         # Verify the exception has instr_num set
         assert exc_info.value.instr_num == 0
         assert exc_info.value.future_result is future_not_ready
@@ -303,7 +303,7 @@ print("This should not run")'''
         # First execution should raise FutureError with instr_num
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job)
-        
+
         # Verify the exception has instr_num set
         assert exc_info.value.instr_num == 0
         assert exc_info.value.future_result is future_not_ready
@@ -359,7 +359,7 @@ print(result)'''
         # Execute - should raise FutureError with instr_num on the second statement (print)
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job)
-        
+
         # Verify the exception has instr_num set to the second instruction (1)
         # The first instruction assigns the FutureResult, the second tries to print it
         assert exc_info.value.instr_num == 1
@@ -382,10 +382,10 @@ z = 3'''
         result = await exec_step(code, simple_job)
         assert result is True
         assert len(simple_job.py_env.console) == 2
-        
+
         # Clear console for next test
         simple_job.py_env.console = None
-        
+
         # Now execute starting from instruction 2 (third statement: print(x))
         result = await exec_step(code, simple_job, instr_num=2)
         assert result is True
@@ -420,12 +420,12 @@ y = 2'''
         # First execution should raise FutureError at instruction 1
         with pytest.raises(FutureError) as exc_info:
             await exec_step(code, simple_job)
-        
+
         assert exc_info.value.instr_num == 1
         # x should be assigned but console should be empty
         assert simple_job.py_env.local_state['x'] == 1
         assert simple_job.py_env.console is None
-        
+
         # Now make the future ready
         future_ready = FutureResult(
             deps=MemoObject(value=42),
@@ -436,7 +436,7 @@ y = 2'''
             condition=_check_condition_true
         )
         simple_job.py_env.local_state['future_val'] = future_ready
-        
+
         # Continue from instruction 1 (where error occurred)
         result = await exec_step(code, simple_job, instr_num=1)
         assert result is True
