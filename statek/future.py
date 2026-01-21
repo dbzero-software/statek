@@ -3,23 +3,26 @@ from typing import Any, Set, Tuple, Callable, Sequence
 import functools
 import inspect
 import dbzero as db0
-from . import tool
 from .exceptions import FutureError
 
 @db0.memo
 @dataclass
 class FutureResult:
-    """
-    Either a single or a set of alternative memo class instances
-    Set - awaits change in ANY of the instances
-    Tuple - awaits change in ALL of the instances
+    """Represents a future result that tracks dependencies and their state changes.
+    
+    This class is used to represent asynchronous or pending operations that depend on
+    changes to memo class instances. It can track single instances or multiple instances
+    with different completion criteria.
+    
+    Attributes:
+        deps: Either a single or a set of alternative memo class instances.
+              Set - awaits change in ANY of the instances.
+              Tuple - awaits change in ALL of the instances.
+        state_num: The state number from which modifications are tracked from
+                   (state before change). The state is associated with the prefix
+                   of `deps` objects.
     """
     deps: Any | Set[Any] | Tuple[Any]
-    """
-    The state number from which the modifications are tracked from
-    (state before change)
-    The state is associated with the prefix of `deps` objects
-    """
     state_num: int
     """Continuation condition"""
     __check_condition: Callable = None
@@ -31,19 +34,17 @@ class FutureResult:
 
     @property
     def value(self):
-        """
-        Retrieve result (if available) or raise FutureError
-        """
+        """Retrieve result (if available) or raise FutureError"""
         return self.__fetch_result(self)
 
     def check_condition(self):
+        """Check if completion condition was met"""
         return self.__check_condition(self)
 
 
 @db0.memo
 class CombinedFutureResult(FutureResult):
-    """
-    A FutureResult that aggregates multiple FutureResult instances.
+    """A FutureResult that aggregates multiple FutureResult instances.
     
     This class allows combining multiple futures and checking their completion
     status collectively. It's used to create composite futures that can be
@@ -74,8 +75,8 @@ def _handle_temporal_function_result(
 
 
 def temporal(complement: Callable[[FutureResult], Any], condition: Callable[[FutureResult], bool]):
-    """
-    Decorates a temporal function to properly handle future results.
+    """Decorates a temporal function to properly handle future results.
+
     This decorator is mandatory for marking temporal functions.
 
     Args:
@@ -106,8 +107,7 @@ def temporal(complement: Callable[[FutureResult], Any], condition: Callable[[Fut
 
 
 def check_any_completed(combined: CombinedFutureResult) -> bool:
-    """
-    Check if any of the futures in a combined future have completed.
+    """Check if any of the futures in a combined future have completed.
     
     Args:
         combined: A CombinedFutureResult containing multiple futures.
@@ -119,8 +119,7 @@ def check_any_completed(combined: CombinedFutureResult) -> bool:
 
 
 def get_any_result(combined: CombinedFutureResult) -> Any:
-    """
-    Retrieve the value of the first completed future from a combined future.
+    """Retrieve the value of the first completed future from a combined future.
     
     Args:
         combined: A CombinedFutureResult containing multiple futures.
@@ -139,11 +138,9 @@ def get_any_result(combined: CombinedFutureResult) -> Any:
 
 
 @temporal(complement=get_any_result, condition=check_any_completed)
-@tool
-def get_any(*args: FutureResult) -> CombinedFutureResult:
-    """
-    Create a combined future that will yield a result when any of the input futures complete.
-    
+def get_any_future(*args: FutureResult) -> CombinedFutureResult:
+    """Create a combined future that will yield a result when any of the input futures complete.
+
     This function combines multiple futures into a single CombinedFutureResult.
     When the result's value is accessed, it will return the value of the first
     completed future, or raise FutureError if none have completed yet.
@@ -158,13 +155,12 @@ def get_any(*args: FutureResult) -> CombinedFutureResult:
         TypeError: If no futures are provided.
     """
     if not args:
-        raise TypeError("get_any requires at least one FutureResult argument")
+        raise TypeError("get_any_future requires at least one argument")
     return CombinedFutureResult(args, deps=None, state_num=0)
 
 
 def check_all_completed(combined: CombinedFutureResult) -> bool:
-    """
-    Check if all futures in a combined future have completed.
+    """Check if all futures in a combined future have completed.
     
     Args:
         combined: A CombinedFutureResult containing multiple futures.
@@ -176,8 +172,7 @@ def check_all_completed(combined: CombinedFutureResult) -> bool:
 
 
 def get_all_result(combined: CombinedFutureResult) -> Tuple[Any]:
-    """
-    Retrieve the values of all futures from a combined future.
+    """Retrieve the values of all futures from a combined future.
     
     Args:
         combined: A CombinedFutureResult containing multiple futures.
@@ -198,10 +193,8 @@ def get_all_result(combined: CombinedFutureResult) -> Tuple[Any]:
 
 
 @temporal(complement=get_all_result, condition=check_all_completed)
-@tool
-def get_all(*args: FutureResult) -> CombinedFutureResult:
-    """
-    Create a combined future that will yield a result when all input futures complete.
+def get_all_future(*args: FutureResult) -> CombinedFutureResult:
+    """Create a combined future that will yield a result when all input futures complete.
     
     This function combines multiple futures into a single CombinedFutureResult.
     When the result's value is accessed, it will return a tuple of all futures' values
@@ -217,5 +210,5 @@ def get_all(*args: FutureResult) -> CombinedFutureResult:
         TypeError: If no futures are provided.
     """
     if not args:
-        raise TypeError("get_all requires at least one FutureResult argument")
+        raise TypeError("get_all_future requires at least one argument")
     return CombinedFutureResult(args, deps=None, state_num=0)
