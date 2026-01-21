@@ -8,8 +8,8 @@ from statek.future import (
     temporal,
     FutureResult,
     FutureError,
-    get_any,
-    get_all,
+    get_any_future,
+    get_all_future,
 )
 
 @db0.memo
@@ -95,94 +95,94 @@ class TestTemporalDecorator:
 
 
 class TestGetAny:
-    """Test cases for get_any and related functions."""
+    """Test cases for get_any_future and related functions."""
 
     def test_get_any_result_value_when_ready(self, db0_fixture):
-        """Test accessing value property of get_any result when a future is ready."""
+        """Test accessing value property of get_any_future result when a future is ready."""
         fut1 = make_mock_future("value1", condition=False)
         fut2 = make_mock_future("value2", condition=True)
 
-        combined = get_any(fut1, fut2)
+        combined = get_any_future(fut1, fut2)
 
         # The temporal decorator should have set the complement functions
         assert combined.value == "value2"
 
     def test_get_any_result_value_raises_when_not_ready(self, db0_fixture):
-        """Test accessing value property of get_any result raises when no futures are ready."""
+        """Test accessing get_any_future result raises when no futures are ready."""
         fut1 = make_mock_future("value1", condition=False)
         fut2 = make_mock_future("value2", condition=False)
 
-        combined = get_any(fut1, fut2)
+        combined = get_any_future(fut1, fut2)
 
         with pytest.raises(FutureError):
             _ = combined.value
 
     def test_get_any_check_condition_returns_true(self, db0_fixture):
-        """Test check_condition on get_any result returns True when any future is ready."""
+        """Test check_condition on get_any_future result returns True when any future is ready."""
         fut1 = make_mock_future("value1", condition=False)
         fut2 = make_mock_future("value2", condition=True)
 
-        combined = get_any(fut1, fut2)
+        combined = get_any_future(fut1, fut2)
 
         assert combined.check_condition() is True
 
     def test_get_any_check_condition_returns_false(self, db0_fixture):
-        """Test check_condition on get_any result returns False when no futures are ready."""
+        """Test check_condition on get_any_future result returns False when no futures are ready."""
         fut1 = make_mock_future("value1", condition=False)
         fut2 = make_mock_future("value2", condition=False)
 
-        combined = get_any(fut1, fut2)
+        combined = get_any_future(fut1, fut2)
 
         assert combined.check_condition() is False
 
     def test_get_any_raises_on_empty_args(self, db0_fixture):
-        """Test get_any raises TypeError when called with no arguments."""
+        """Test get_any_future raises TypeError when called with no arguments."""
         with pytest.raises(TypeError):
-            get_any()
+            get_any_future()
 
 
 class TestGetAll:
-    """Test cases for get_all and related functions."""
+    """Test cases for get_all_future and related functions."""
 
     def test_get_all_result_value_when_ready(self, db0_fixture):
-        """Test accessing value property of get_all result when all futures are ready."""
+        """Test accessing value property of get_all_future result when all futures are ready."""
         fut1 = make_mock_future("value1", condition=True)
         fut2 = make_mock_future("value2", condition=True)
 
-        combined = get_all(fut1, fut2)
+        combined = get_all_future(fut1, fut2)
 
         # The temporal decorator should have set the complement functions
         assert set(combined.value) == set(("value1", "value2"))
 
     def test_get_all_result_value_raises_when_not_ready(self, db0_fixture):
-        """Test accessing value property of get_all result raises when any future is not ready."""
+        """Test accessing get_all_future result raises when any future is not ready."""
         fut1 = make_mock_future("value1", condition=True)
         fut2 = make_mock_future("value2", condition=False)
 
-        combined = get_all(fut1, fut2)
+        combined = get_all_future(fut1, fut2)
 
         with pytest.raises(FutureError):
             _ = combined.value
 
     def test_get_all_check_condition_returns_true(self, db0_fixture):
-        """Test check_condition on get_all result returns True when all futures are ready."""
+        """Test check_condition on get_all_future result returns True when all futures are ready."""
         fut1 = make_mock_future("value1", condition=True)
         fut2 = make_mock_future("value2", condition=True)
 
-        combined = get_all(fut1, fut2)
+        combined = get_all_future(fut1, fut2)
 
         assert combined.check_condition() is True
 
     def test_get_all_check_condition_returns_false(self, db0_fixture):
-        """Test check_condition on get_all result returns False when any future is not ready."""
+        """Test check_condition on get_all_future returns False when any future is not ready."""
         fut1 = make_mock_future("value1", condition=True)
         fut2 = make_mock_future("value2", condition=False)
 
-        combined = get_all(fut1, fut2)
+        combined = get_all_future(fut1, fut2)
 
         assert combined.check_condition() is False
 
     def test_get_all_raises_on_empty_args(self, db0_fixture):
-        """Test get_all raises TypeError when called with no arguments."""
+        """Test get_all_future raises TypeError when called with no arguments."""
         with pytest.raises(TypeError):
-            get_all()
+            get_all_future()
