@@ -11,6 +11,9 @@ def format_callable_decl(func: Callable) -> str:
     Reproduces the original Python syntax used in the callable's declaration,
     without accessing the source code.
 
+    For temporal functions (decorated with @temporal), reports the return type
+    of the complement function instead of the original return type.
+
     Args:
         func: A callable (e.g., function) to format
 
@@ -27,54 +30,87 @@ def format_callable_decl(func: Callable) -> str:
         >>> format_callable_decl(find_user)
         'def find_user(pattern: str, max_result: int = None) -> User | Iterable[User]'
     """
-    # Get function name
     func_name = func.__name__
+    hints = _get_type_hints(func)
+    params_str = _format_parameters(func, hints)
+    return_annotation = _format_return_annotation(func, hints)
 
-    # Get signature
-    sig = inspect.signature(func)
+    return f"def {func_name}({params_str}){return_annotation}"
 
-    # Get type hints (this properly resolves forward references and string annotations)
+
+def _get_type_hints(func: Callable) -> dict:
+    """Get type hints for a callable, with fallback to annotations."""
     try:
-        hints = get_type_hints(func)
+        return get_type_hints(func)
     except Exception:  # pylint: disable=broad-exception-caught
-        # Fallback to annotations if get_type_hints fails
-        hints = getattr(func, "__annotations__", {})
+        return getattr(func, "__annotations__", {})
 
-    # Format parameters
-    params = []
-    for param_name, param in sig.parameters.items():
-        parts = [param_name]
 
-        # Add type annotation if available
-        if param_name in hints:
-            type_str = _format_type(hints[param_name])
-            parts.append(f": {type_str}")
+def _format_parameters(func: Callable, hints: dict) -> str:
+    """Format all parameters of a callable."""
+    sig = inspect.signature(func)
+    params = [_format_parameter(name, param, hints) for name, param in sig.parameters.items()]
+    return ", ".join(params)
 
-        # Add default value if present
-        if param.default is not inspect.Parameter.empty:
-            match param.default:
-                case None:
-                    parts.append(" = None")
-                case str():
-                    parts.append(f' = "{param.default}"')
-                case int() | float() | bool():
-                    parts.append(f" = {param.default}")
-                case _:
-                    parts.append(f" = {repr(param.default)}")
 
-        params.append("".join(parts))
+def _format_parameter(param_name: str, param: inspect.Parameter, hints: dict) -> str:
+    """Format a single parameter with its type and default value."""
+    parts = [param_name]
 
-    # Format return type
-    return_annotation = ""
-    if "return" in hints:
-        return_type_str = _format_type(hints["return"])
-        return_annotation = f" -> {return_type_str}"
+    if param_name in hints:
+        parts.append(f": {_format_type(hints[param_name])}")
 
-    # Construct the declaration
-    params_str = ", ".join(params)
-    declaration = f"def {func_name}({params_str}){return_annotation}"
+    if param.default is not inspect.Parameter.empty:
+        parts.append(_format_default_value(param.default))
 
-    return declaration
+    return "".join(parts)
+
+
+def _format_default_value(default) -> str:
+    """Format a default value for a parameter."""
+    match default:
+        case None:
+            return " = None"
+        case str():
+            return f' = "{default}"'
+        case int() | float() | bool():
+            return f" = {default}"
+        case _:
+            return f" = {repr(default)}"
+
+
+def _format_return_annotation(func: Callable, hints: dict) -> str:
+    """Format the return type annotation, handling temporal functions."""
+    if "return" not in hints:
+        return ""
+
+    return_type_str = _format_type(hints["return"])
+
+    if getattr(func, "__is_temporal__", False):
+        complement_type = _extract_complement_return_type(func)
+        if complement_type:
+            return_type_str = complement_type
+
+    return f" -> {return_type_str}"
+
+
+def _extract_complement_return_type(func: Callable) -> str:
+    """Extract return type from a temporal function's complement function."""
+    if not (hasattr(func, "__closure__") and func.__closure__):
+        return None
+
+    for cell in func.__closure__:
+        try:
+            complement_func = cell.cell_contents
+            if not callable(complement_func):
+                continue
+            complement_hints = get_type_hints(complement_func)
+            if "return" in complement_hints:
+                return _format_type(complement_hints["return"])
+        except (AttributeError, ValueError):
+            continue
+
+    return None
 
 
 def _format_type(type_hint) -> str:
