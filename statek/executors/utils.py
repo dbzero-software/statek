@@ -3,19 +3,36 @@ import sys
 import inspect
 import traceback
 import asyncio
+import builtins
 from typing import Callable
+from contextlib import contextmanager
 import dbzero as db0
 
 
 from statek.exceptions import FutureError
+from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus
 from statek.llm_api import LLM_API
 from statek.settings import get_statek_settings
 
 def wrap_param(param):
-    #FIXME: consider making this a proper FutureResult class
-    """Wrap parameter to raise FutureError when accessed."""
+    if isinstance(param, FutureResult):
+        value = param.value
+        return value
     return param
+
+def check_for_future_typehint(param, anno):
+    """Check if the type hint indicates FutureResult."""
+    # Check by name
+    if getattr(anno, "__name__", None) == 'FutureResult':
+        return True
+    # Check if it's the FutureResult class itself
+    if anno is FutureResult:
+        return True
+    # Check if annotation is a string representation
+    if str(anno) == 'FutureResult':
+        return True
+    return False
 
 def _smart_call(func, *args, **kwargs):
     """Wraps arguments unless the target function expects FutureResult."""
@@ -26,7 +43,19 @@ def _smart_call(func, *args, **kwargs):
             param = sig.parameters[name]
             anno = param.annotation
             # Check if type hint matches 'FutureResult' by name or type
-            if getattr(anno, "__name__", str(anno)) != 'FutureResult':
+            
+            # Handle *args (VAR_POSITIONAL)
+            if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                # val is a tuple, wrap each element unless annotated as FutureResult
+                if not check_for_future_typehint(param, anno):
+                    bound.arguments[name] = tuple(wrap_param(v) for v in val)
+            # Handle **kwargs (VAR_KEYWORD)
+            elif param.kind == inspect.Parameter.VAR_KEYWORD:
+                # val is a dict, wrap each value unless annotated as FutureResult
+                if not check_for_future_typehint(param, anno):
+                    bound.arguments[name] = {k: wrap_param(v) for k, v in val.items()}
+            # Handle regular parameters
+            elif not check_for_future_typehint(param, anno):
                 bound.arguments[name] = wrap_param(val)
         return func(*bound.args, **bound.kwargs)
     except (ValueError, TypeError):
@@ -77,6 +106,46 @@ def custom_exit(job, status=None):
     job.py_env.exit_status = status
 
 
+@contextmanager
+def _setup_execution_context(job: Job, local_context: dict):
+    """
+    Context manager to setup and cleanup execution environment.
+    
+    Args:
+        job: The Job instance
+        local_context: The local execution context dictionary
+    
+    Yields:
+        tuple: (custom_print_fn, custom_exit_fn) for reference
+    """
+    # Create custom functions
+    custom_print_fn = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
+    custom_exit_fn = lambda status=None: custom_exit(job, status)
+    
+    # Save original built-in print to restore later
+    original_print = builtins.print
+    
+    # Monkey-patch builtins.print so it works even in pre-defined functions
+    builtins.print = custom_print_fn
+    
+    # Inject into local context
+    local_context['print'] = custom_print_fn
+    local_context['_smart_call'] = _smart_call
+    local_context['wrap_param'] = wrap_param
+    local_context['exit'] = custom_exit_fn
+    
+    try:
+        yield custom_print_fn, custom_exit_fn
+    finally:
+        # Restore original built-in print
+        builtins.print = original_print
+        
+        # Remove helpers from context
+        for key in ['print', 'exit', '_smart_call', 'wrap_param']:
+            if key in local_context:
+                del local_context[key]
+
+
 async def exec_step(code_str: str, job: Job) -> bool:
     """
     Execute a single step of code within the job's Python environment.
@@ -98,36 +167,25 @@ async def exec_step(code_str: str, job: Job) -> bool:
     else:
         local_context = {key: value for key, value in job.py_env.local_state.items()}
 
-    # Inject the helper into the execution context
+    # Use context manager to setup and cleanup execution environment
+    with _setup_execution_context(job, local_context):
+        tree = ast.parse(code_str)
+        _ResilientTransformer().visit(tree)
+        ast.fix_missing_locations(tree)
 
+        for node in tree.body:
+            try:
 
-
-    # Inject custom print and exit functions
-    local_context['print'] = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
-    local_context['_smart_call'] = _smart_call
-    local_context['wrap_param'] = wrap_param
-    local_context['exit'] = lambda status=None: custom_exit(job, status)
-    tree = ast.parse(code_str)
-    _ResilientTransformer().visit(tree)
-    ast.fix_missing_locations(tree)
-
-    for node in tree.body:
-        try:
-
-            wrapper = ast.Module(body=[node], type_ignores=[])
-            code_obj = compile(wrapper, filename="<string>", mode="exec")
-            exec(code_obj, global_context, local_context)
-            # Check for exit signal
-            if job.py_env.exit_status is not None:
-                break
-            # Save updated local context back to job
-        except FutureError:
-            continue
-    # remove helper from context
-    del local_context['print']
-    del local_context['exit']
-    del local_context['_smart_call']
-    del local_context['wrap_param']
+                wrapper = ast.Module(body=[node], type_ignores=[])
+                code_obj = compile(wrapper, filename="<string>", mode="exec")
+                exec(code_obj, global_context, local_context)
+                # Check for exit signal
+                if job.py_env.exit_status is not None:
+                    break
+                # Save updated local context back to job
+            except FutureError:
+                continue
+    
     job.py_env.local_state = local_context
     return job.py_env.exit_status is None
 
