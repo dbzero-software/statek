@@ -29,6 +29,9 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
     Returns:
         A zero-argument callable with the specified name and docstring.
     """
+    if tool_name in context:
+        raise ValueError(f"tool {tool_name} already exists within the context")
+
     def tool_func():
         # Call the function with bound arguments
         return callable(*args, **kwargs)

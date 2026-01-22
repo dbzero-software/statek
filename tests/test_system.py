@@ -232,3 +232,17 @@ class TestCreateTool:
         tool_func = create_tool('greet_tool', greet, 'Greets someone', {}, 'Alice')
 
         assert tool_func() == "Hello, Alice!"
+
+    def test_create_tool_exception_if_exists(self):
+        """Test creating a basic tool with args."""
+        def add(a, b):
+            return a + b
+
+        context = {}
+
+        create_tool('add_tool', add, 'Adds two numbers', context, 5, 3)
+
+        with pytest.raises(ValueError):
+            create_tool('add_tool', add, 'Adds two numbers', context, 5, 3)
+
+        create_tool('add_tool2', add, 'Adds two numbers', context, 5, 3)
