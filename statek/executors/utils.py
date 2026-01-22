@@ -8,6 +8,9 @@ from typing import Callable, Optional
 from contextlib import contextmanager
 import dbzero as db0
 
+from statek.exceptions import FutureError
+from statek.future import FutureResult
+
 
 from statek.exceptions import FutureError
 from statek.future import FutureResult
@@ -106,17 +109,22 @@ def custom_exit(job, status=None):
 
 
 @contextmanager
-def _setup_execution_context(job: Job, local_context: dict):
+def _setup_execution_context(job: Job, global_context: dict, local_context: dict):
     """
     Context manager to setup and cleanup execution environment.
     
     Args:
         job: The Job instance
+        global_context: The global execution context dictionary
         local_context: The local execution context dictionary
     
     Yields:
         tuple: (custom_print_fn, custom_exit_fn) for reference
     """
+    # Merge agent's private context if available
+    if job.job_def.agent is not None and job.job_def.agent.context is not None:
+        global_context.update(job.job_def.agent.context)
+    
     # Create custom functions
     custom_print_fn = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
     custom_exit_fn = lambda status=None: custom_exit(job, status)
@@ -181,7 +189,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
 
     # Use context manager to setup and cleanup execution environment
     try:
-        with _setup_execution_context(job, local_context):
+        with _setup_execution_context(job, global_context, local_context):
             tree = ast.parse(code_str)
             _ResilientTransformer().visit(tree)
             ast.fix_missing_locations(tree)
@@ -244,25 +252,43 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 3: If code is None, change status to STARTED and go to step #9
     if code is None:
-        job.status = JobStatus.STARTED
+        job.set_status(JobStatus.STARTED)
     else:
         # Step 4: Update status READY -> WARMING_UP or SUSPENDED -> STARTED
+        # Store whether we're resuming from SUSPENDED before changing status
+        resuming_from_suspended = job.status == JobStatus.SUSPENDED
+        
         if job.status == JobStatus.READY:
-            job.status = JobStatus.WARMING_UP
+            job.set_status(JobStatus.WARMING_UP)
         elif job.status == JobStatus.SUSPENDED:
-            job.status = JobStatus.STARTED
+            job.set_status(JobStatus.STARTED)
 
         # Step 5: Execute the code using exec_step
-        not_exited = await exec_step(code, job)
+        # Pass next_instr_num if resuming from SUSPENDED
+        try:
+            instr_num = job.next_instr_num if resuming_from_suspended else None
+            not_exited = await exec_step(code, job, instr_num)
+            # Clear continuation state after successful execution
+            if resuming_from_suspended:
+                job.awaited_result = None
+                job.next_instr_num = None
+        except FutureError as e:
+            # Step 5a: Handle FutureError - suspend job
+            job.awaited_result = e.future_result
+            job.next_instr_num = e.instr_num
+            # Change status STARTED -> SUSPENDED (no change for WARMING_UP)
+            if job.status == JobStatus.STARTED:
+                job.set_status(JobStatus.SUSPENDED)
+            return False
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
-            job.status = JobStatus.DONE
+            job.set_status(JobStatus.DONE)
             return True
 
         # Step 8: Update status WARMING_UP -> STARTED
         if job.status == JobStatus.WARMING_UP:
-            job.status = JobStatus.STARTED
+            job.set_status(JobStatus.STARTED)
 
     # Step 9: Get LLM API provider
     if provider is None:
@@ -287,9 +313,37 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     return False
 
 
+def unsuspend_jobs():
+    """
+    Review continuation conditions of suspended jobs and change their status to STARTED
+    where the continuation criteria are satisfied.
+    
+    This function finds all jobs with status SUSPENDED, checks if their awaited_result
+    condition is satisfied, and changes their status to STARTED if the condition is met.
+    
+    Note: This implementation might be slow for a large number of suspended jobs.
+    Future versions will introduce a more robust Notifier engine and job expiration conditions.
+    """
+    # Find all suspended jobs
+    suspended_jobs = db0.find(Job, JobStatus.SUSPENDED)
+    
+    for job in suspended_jobs:
+        # Check if the job has an awaited_result and if its condition is satisfied
+        condition_met = job.awaited_result.check_condition()
+        if job.awaited_result is not None and condition_met:
+            # Change status from SUSPENDED to STARTED
+            job.set_status(JobStatus.STARTED)
+
+
 async def job_worker(semaphore, job: Job, provider: str = None):
     async with semaphore:
-        await run_job_step(job, provider)
+        try:
+            await run_job_step(job, provider)
+        except Exception as e:
+            # If job fails, set status to DONE
+            print(f"Job {job.id} failed with error: {e}")
+            traceback.print_exc()
+            job.set_status(JobStatus.DONE)
 
 async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     start_jobs_func: Callable = None):
@@ -306,10 +360,10 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     """
     # Track pending job tasks to avoid exceeding max_concurrency
     pending_tasks = {}  # Dict[Job, asyncio.Task]
-    ready_or_started_jobs = []
     semaphore = asyncio.Semaphore(max_concurrency)
     while True:
-        # Step 1: TODO: Clean up finished tasks from pending_tasks
+        # Step 1: Unsuspend jobs whose continuation conditions are satisfied
+        unsuspend_jobs()
         
         # Step 2: Call start_jobs_func if provided
         if start_jobs_func is not None:
@@ -317,11 +371,8 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
             start_jobs_func(available_capacity)
         
         # Step 3: Find jobs with status READY or STARTED, excluding jobs already pending
-        if len(ready_or_started_jobs) == 0:
-            ready_or_started_jobs = db0.filter(lambda job: job not in pending_tasks, 
-                                               db0.find(Job, [JobStatus.READY, JobStatus.STARTED]))
-
-    
+        ready_or_started_jobs = db0.filter(lambda found_job: found_job not in pending_tasks,
+                                            db0.find(Job, [JobStatus.READY, JobStatus.STARTED]))
         # Step 4: Submit run_job_step for jobs that aren't already pending
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:

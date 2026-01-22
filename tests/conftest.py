@@ -135,7 +135,7 @@ def db0_fixture(db0_fixture_preloaded):
 @pytest.fixture
 def agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
-    return Agent(_system_prompt="Test agent", _tools=[])
+    return Agent(role="test", _system_prompt="Test agent", _tools=[])
 
 
 @pytest.fixture

@@ -13,7 +13,7 @@ class TestAgent:
         system_prompt = "Available tools:\n{tools}"
         tools = [clock]
 
-        agent = Agent(_system_prompt=system_prompt, _tools=tools)
+        agent = Agent(role="test", _system_prompt=system_prompt, _tools=tools)
 
         assert format_callable_decl(clock) in agent.system_prompt
         assert "Available tools:\n" in agent.system_prompt
@@ -26,7 +26,7 @@ class TestAgent:
         system_prompt = "You have access to these tools:\n{tools}"
         tools = [clock, docs, exit_tool]
 
-        agent = Agent(_system_prompt=system_prompt, _tools=tools)
+        agent = Agent(role="test", _system_prompt=system_prompt, _tools=tools)
 
         for tool in tools:
             assert format_callable_decl(tool) in agent.system_prompt
@@ -40,7 +40,7 @@ class TestAgent:
         system_prompt = "Available tools: {tools}"
         tools = []
 
-        agent = Agent(_system_prompt=system_prompt, _tools=tools)
+        agent = Agent(role="test", _system_prompt=system_prompt, _tools=tools)
 
         assert "Available tools:" in agent.system_prompt
         # Verify empty tools list results in empty string (join of single empty element)

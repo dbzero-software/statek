@@ -701,3 +701,46 @@ w = 4'''
         assert retrieved_result['regular'] == 1
         assert retrieved_result['args'] == (2, 3)
         assert retrieved_result['kwargs'] == {'key': 4}
+
+    @pytest.mark.asyncio
+    async def test_exec_step_with_agent_context(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test that agent's private context is merged into global execution context."""
+        from statek.agent import Agent  # pylint: disable=import-outside-toplevel
+        from statek.executors.job import Job, JobDef, JobStatus  # pylint: disable=import-outside-toplevel
+
+        # Define a custom function to be available in agent's context
+        def custom_tool():
+            return "agent_context_value"
+
+        # Create agent with private context
+        agent = Agent(
+            role="test",
+            _system_prompt="Test agent with context",
+            _tools=[],
+            _X__context={"custom_tool": custom_tool, "agent_var": 42}
+        )
+
+        # Create job with this agent
+        job_def = JobDef(
+            agent=agent,
+            description="Test with agent context",
+            goal=None,
+            warmup_code=None
+        )
+        job = Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY  # pylint: disable=no-member
+        )
+
+        # Execute code that uses agent's context
+        code = """
+result = custom_tool()
+value = agent_var
+"""
+        await exec_step(code, job)
+
+        # Verify that agent's context was accessible
+        assert job.py_env.local_state.get('result') == "agent_context_value"
+        assert job.py_env.local_state.get('value') == 42
