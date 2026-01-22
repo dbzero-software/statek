@@ -1,4 +1,4 @@
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Tuple, Dict
 import functools
 import inspect
 from .future import get_any_future, get_all_future
@@ -10,6 +10,40 @@ def tool(f):
     def wrapper(*args, **kwargs):
         return f(*args, **kwargs)
     return wrapper
+
+
+# pylint: disable=redefined-builtin
+def create_tool(tool_name: str, callable: Callable, docstring: str,
+                context: Dict, *args, **kwargs) -> Callable:
+    """Creates a zero-argument tool function from a callable with bound
+    arguments and injects it into context.
+
+    Args:
+        tool_name: The name to assign to the created tool function.
+        callable: The callable to wrap into a tool.
+        docstring: The docstring to assign to the tool.
+        context: The context to put the created tool into.
+        *args: Positional arguments to bind to the callable.
+        **kwargs: Keyword arguments to bind to the callable.
+
+    Returns:
+        A zero-argument callable with the specified name and docstring.
+    """
+    if tool_name in context:
+        raise ValueError(f"tool {tool_name} already exists within the context")
+
+    def tool_func():
+        # Call the function with bound arguments
+        return callable(*args, **kwargs)
+
+    # Set the function name and docstring
+    tool_func.__name__ = tool_name
+    tool_func.__doc__ = docstring
+
+    # Apply the @tool decorator
+    new_tool = tool(tool_func)
+    context[tool_name] = new_tool
+    return new_tool
 
 
 @tool

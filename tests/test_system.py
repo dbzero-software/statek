@@ -2,7 +2,9 @@
 
 # pylint: disable=too-few-public-methods
 
-from statek.system import docs, tool
+import pytest
+from statek.system import docs, tool, create_tool
+from statek.utils import format_callable_decl
 
 class TestDocs:
     """Test cases for docs function."""
@@ -141,3 +143,106 @@ class TestDocs:
         docs(decorated_func)
         captured = capsys.readouterr()
         assert "This function is decorated." in captured.out
+
+
+class TestCreateTool:
+    """Test cases for create_tool function."""
+
+    def test_create_tool_basic(self):
+        """Test creating a basic tool with args."""
+        def add(a, b):
+            return a + b
+
+        context = {}
+        tool_func = create_tool('add_tool', add, 'Adds two numbers', context, 5, 3)
+
+        assert tool_func.__name__ == 'add_tool'
+        assert tool_func.__doc__ == 'Adds two numbers'
+        assert tool_func() == 8
+
+        ctx_tool = context['add_tool']
+
+        assert ctx_tool.__name__ == 'add_tool'
+        assert ctx_tool.__doc__ == 'Adds two numbers'
+        assert ctx_tool() == 8
+
+    def test_create_tool_zero_arguments(self):
+        """Test creating a tool from a callable with no arguments."""
+        def get_constant():
+            return 42
+
+        tool_func = create_tool('constant_tool', get_constant, 'Returns constant', {})
+
+        assert tool_func() == 42
+
+    def test_create_tool_with_mixed_args_kwargs(self):
+        """Test creating a tool with both args and kwargs."""
+        def format_string(template, name, age):
+            return template.format(name=name, age=age)
+
+        tool_func = create_tool(
+            'format_tool',
+            format_string,
+            'Formats a string',
+            {},
+            'Name: {name}, Age: {age}',
+            name='Alice',
+            age=30
+        )
+
+        assert tool_func() == 'Name: Alice, Age: 30'
+
+    def test_create_tool_with_docs(self, capsys):
+        """Test that created tool works with docs function."""
+        def sample_func(x):
+            return x * 2
+
+        tool_func = create_tool('sample_tool', sample_func, 'Doubles a number', {}, 5)
+
+        docs(tool_func)
+        captured = capsys.readouterr()
+        assert 'Doubles a number' in captured.out
+
+    def test_create_tool_with_format_callable_decl(self):
+        """Test that created tool works with format_callable_decl."""
+        def sample_func(x):
+            return x * 2
+
+        tool_func = create_tool('my_tool', sample_func, 'My custom tool', {}, 5)
+
+        result = format_callable_decl(tool_func)
+        assert 'my_tool' in result
+        assert result == 'def my_tool()'
+
+    def test_create_tool_with_exception(self):
+        """Test that exceptions from the callable are properly raised."""
+        def divide(a, b):
+            return a / b
+
+        tool_func = create_tool('divide_tool', divide, 'Divides numbers', {}, 10, 0)
+
+        with pytest.raises(ZeroDivisionError):
+            tool_func()
+
+    def test_create_tool_with_default_arguments(self):
+        """Test creating a tool from callable with default arguments."""
+        def greet(name, greeting="Hello"):
+            return f"{greeting}, {name}!"
+
+        tool_func = create_tool('greet_tool', greet, 'Greets someone', {}, 'Alice')
+
+        assert tool_func() == "Hello, Alice!"
+
+    def test_create_tool_exception_if_exists(self):
+        """Test creating a basic tool with args."""
+        def add(a, b):
+            return a + b
+
+        context = {}
+
+        create_tool('add_tool', add, 'Adds two numbers', context, 5, 3)
+
+        with pytest.raises(ValueError):
+            create_tool('add_tool', add, 'Adds two numbers', context, 5, 3)
+
+        create_tool('add_tool2', add, 'Adds two numbers', context, 5, 3)
