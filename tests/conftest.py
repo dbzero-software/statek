@@ -12,7 +12,7 @@ import pytest
 import dbzero as db0
 
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.agent import Agent
+from statek.agent import Agent, SupervisedAgent
 from statek.executors.chat_log_item import ChatLogItem
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
@@ -139,13 +139,20 @@ def agent(db0_fixture):  # pylint: disable=unused-argument
 
 
 @pytest.fixture
+def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
+    """Create a test agent."""
+    return SupervisedAgent(role="test", _system_prompt="Test agent", _tools=[])
+
+
+@pytest.fixture
 def job_def_factory(agent):
     """Factory fixture to create JobDef instances with custom parameters."""
-    def _create_job_def(description="Test task", goal=None, warmup_code=None):
+    def _create_job_def(description="Test task", goal=None, context=None, warmup_code=None):
         return JobDef(
             agent=agent,
             description=description,
             goal=goal,
+            context=context,
             warmup_code=warmup_code
         )
     return _create_job_def
