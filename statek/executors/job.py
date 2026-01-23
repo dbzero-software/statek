@@ -257,6 +257,6 @@ class Job:
         """
         if self.status == JobStatus.DONE:
             return None
-        if self.status == JobStatus.READY:
+        if self.status == JobStatus.READY or self.status == JobStatus.WARMING_UP:
             return self.job_def.warmup_code
         return self.last_response

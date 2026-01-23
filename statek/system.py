@@ -120,3 +120,9 @@ def get_all(*args: Any) -> Tuple[Any]:
         results = get_all(value1, value2)
     """
     return get_all_future(*args)
+
+
+@tool
+def delegate_task(agent_role: str, task_description: str, goal: str = None) -> str:
+    pass
+    """Delegate a task to another agent.
