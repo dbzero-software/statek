@@ -1,19 +1,64 @@
 from dataclasses import dataclass
-from typing import Any, Set, Tuple, Callable, Sequence
+from typing import Any, Set, Tuple, Callable, Sequence, get_origin, get_args
 import functools
 import inspect
 import dbzero as db0
 from .exceptions import FutureError
 
+
+def get_unpack_size(func: Callable) -> int | None:
+    """Determines the declared size (element count) of a tuple returned by a callable.
+
+    Args:
+        func: The function whose return type is to be analyzed.
+
+    Returns:
+        The tuple size if the return type is a tuple, None otherwise.
+
+    Examples:
+        def returns_pair() -> Tuple[int, str]: ...
+        get_unpack_size(returns_pair)  # Returns 2
+
+        def returns_int() -> int: ...
+        get_unpack_size(returns_int)  # Returns None
+    """
+    try:
+        # Get the function signature
+        sig = inspect.signature(func)
+        return_annotation = sig.return_annotation
+
+        # If there's no annotation or it's empty, return None
+        if return_annotation is inspect.Signature.empty:
+            return None
+
+        # Get the origin of the type (e.g., tuple from Tuple[int, str])
+        origin = get_origin(return_annotation)
+
+        # Check if it's a tuple type
+        if origin is tuple:
+            # Get the tuple element types
+            args = get_args(return_annotation)
+
+            # Handle Tuple[int, ...] (variable length tuple)
+            if len(args) == 2 and args[1] is Ellipsis:
+                return None
+
+            # Return the number of elements in the tuple
+            return len(args) if args else None
+
+        return None
+    except (ValueError, TypeError):
+        return None
+
 @db0.memo
 @dataclass
 class FutureResult:
     """Represents a future result that tracks dependencies and their state changes.
-    
+
     This class is used to represent asynchronous or pending operations that depend on
     changes to memo class instances. It can track single instances or multiple instances
     with different completion criteria.
-    
+
     Attributes:
         deps: Either a single or a set of alternative memo class instances.
               Set - awaits change in ANY of the instances.
@@ -41,20 +86,81 @@ class FutureResult:
         """Check if completion condition was met"""
         return self.__check_condition(self)
 
+    def __iter__(self):
+        """Allow unpacking of FutureResult if it returns a tuple.
+
+        Yields:
+            FutureElement instances for each element in the tuple.
+
+        Raises:
+            FutureError: If the result cannot be unpacked.
+        """
+        # Get the size of the tuple to unpack
+        unpack_size = get_unpack_size(self.__fetch_result)
+
+        if unpack_size is None:
+            raise FutureError(self, "Cannot unpack FutureResult: return type is not a tuple")
+
+        # Yield FutureElement for each element
+        for elem_id in range(unpack_size):
+            yield FutureElement(self, elem_id)
+
+
+def _future_element_get_value(elem: 'FutureElement'):
+    """Get the value of a FutureElement by accessing its parent's value."""
+    return elem.get_result()
+
+def _future_element_check_condition(elem: 'FutureElement'):
+    """Check if a FutureElement's parent condition is met."""
+    return elem.check_condition()
+
+@db0.memo
+class FutureElement(FutureResult):
+    """Represents a single element of a tuple returned by a FutureResult.
+
+    FutureElement instances allow the use of Python's unpacking syntax for
+    FutureResult objects without having to await them immediately.
+
+    Attributes:
+        __parent_result: The parent FutureResult instance.
+        __elem_id: The index of this element in the parent's tuple result.
+    """
+    def check_condition(self):
+        return self.__parent_result.check_condition()
+
+    def get_result(self):
+        return self.__parent_result.value[self.__elem_id]
+
+    def __init__(self, parent_result: FutureResult, elem_id: int):
+        """Initialize a FutureElement.
+
+        Args:
+            parent_result: The parent FutureResult instance.
+            elem_id: The index of this element in the parent's tuple result.
+        """
+        super().__init__(deps=parent_result.deps, state_num=parent_result.state_num)
+        self.__parent_result = parent_result
+        self.__elem_id = elem_id
+        # Set complement functions using global functions
+        self.set_complement_functions(
+            _future_element_get_value,
+            _future_element_check_condition
+        )
+
 
 @db0.memo
 class CombinedFutureResult(FutureResult):
     """A FutureResult that aggregates multiple FutureResult instances.
-    
+
     This class allows combining multiple futures and checking their completion
     status collectively. It's used to create composite futures that can be
     evaluated based on whether any or all of the constituent futures have completed.
-    
+
     Args:
         futures: A sequence of FutureResult instances to combine.
         *args: Positional arguments passed to the parent FutureResult.
         **kwargs: Peyword arguments passed to the parent FutureResult.
-    
+
     Attributes:
         futures: The sequence of FutureResult instances being tracked.
     """
@@ -108,10 +214,10 @@ def temporal(complement: Callable[[FutureResult], Any], condition: Callable[[Fut
 
 def check_any_completed(combined: CombinedFutureResult) -> bool:
     """Check if any of the futures in a combined future have completed.
-    
+
     Args:
         combined: A CombinedFutureResult containing multiple futures.
-    
+
     Returns:
         True if at least one future has completed, False otherwise.
     """
@@ -120,13 +226,13 @@ def check_any_completed(combined: CombinedFutureResult) -> bool:
 
 def get_any_result(combined: CombinedFutureResult) -> Any:
     """Retrieve the value of the first completed future from a combined future.
-    
+
     Args:
         combined: A CombinedFutureResult containing multiple futures.
-    
+
     Returns:
         The value of the first future that has completed.
-    
+
     Raises:
         FutureError: If none of the futures have completed yet.
     """
@@ -144,13 +250,13 @@ def get_any_future(*args: FutureResult) -> CombinedFutureResult:
     This function combines multiple futures into a single CombinedFutureResult.
     When the result's value is accessed, it will return the value of the first
     completed future, or raise FutureError if none have completed yet.
-    
+
     Args:
         *args: Variable number of FutureResult instances to combine.
-    
+
     Returns:
         A CombinedFutureResult that tracks all input futures.
-    
+
     Raises:
         TypeError: If no futures are provided.
     """
@@ -161,10 +267,10 @@ def get_any_future(*args: FutureResult) -> CombinedFutureResult:
 
 def check_all_completed(combined: CombinedFutureResult) -> bool:
     """Check if all futures in a combined future have completed.
-    
+
     Args:
         combined: A CombinedFutureResult containing multiple futures.
-    
+
     Returns:
         True if all futures have completed, False otherwise.
     """
@@ -173,13 +279,13 @@ def check_all_completed(combined: CombinedFutureResult) -> bool:
 
 def get_all_result(combined: CombinedFutureResult) -> Tuple[Any]:
     """Retrieve the values of all futures from a combined future.
-    
+
     Args:
         combined: A CombinedFutureResult containing multiple futures.
-    
+
     Returns:
         A tuple containing the values of all completed futures, in order.
-    
+
     Raises:
         FutureError: If any of the futures have not completed yet.
     """
@@ -195,17 +301,17 @@ def get_all_result(combined: CombinedFutureResult) -> Tuple[Any]:
 @temporal(complement=get_all_result, condition=check_all_completed)
 def get_all_future(*args: FutureResult) -> CombinedFutureResult:
     """Create a combined future that will yield a result when all input futures complete.
-    
+
     This function combines multiple futures into a single CombinedFutureResult.
     When the result's value is accessed, it will return a tuple of all futures' values
     if all have completed, or raise FutureError if any have not completed yet.
-    
+
     Args:
         *args: Variable number of FutureResult instances to combine.
-    
+
     Returns:
         A CombinedFutureResult that tracks all input futures.
-    
+
     Raises:
         TypeError: If no futures are provided.
     """
