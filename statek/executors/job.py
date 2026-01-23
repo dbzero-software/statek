@@ -6,6 +6,7 @@ from statek.pyenv import PyEnv
 from statek.agent import Agent
 from statek.executors.chat_log_item import ChatLogItem
 from statek.utils import prompt_append_console
+from statek.future import FutureResult
 
 """
 READY: a fresh job instance ready for execution
@@ -53,9 +54,13 @@ class Job:
         job_status: JobStatus = JobStatus.READY,
         session_id: str = None,
         py_env: PyEnv = None,
-        chat_log: List[ChatLogItem] = None
+        chat_log: List[ChatLogItem] = None,
+        awaited_result: Optional[FutureResult] = None,
+        next_instr_num: Optional[int] = None
     ):
         self.job_def = job_def
+        if self.job_def.agent is not None:
+            db0.tags(self).add(self.job_def.agent)
         # The LLM model family assigned to this job (e.g. Gemini)
         self.model_family = model_family
         # The LLM model assigned to this job (includes version)
@@ -69,6 +74,10 @@ class Job:
         self.py_env = py_env if py_env is not None else PyEnv()
         # Current chat state
         self.chat_log = chat_log if chat_log is not None else []
+        # Suspended job's awaited result
+        self.awaited_result = awaited_result
+        # Continuation instruction number
+        self.next_instr_num = next_instr_num
 
     @property
     def status(self) -> JobStatus:
