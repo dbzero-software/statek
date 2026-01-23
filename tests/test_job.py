@@ -19,6 +19,38 @@ class TestJobDef:
         job_def = job_def_factory(description="Complete the task", goal=None)
         assert job_def.prompt() == "Complete the task"
 
+    def test_prompt_with_context_parameter(self, job_def_factory):
+        """Test prompt method formats description with context parameter."""
+        job_def = job_def_factory(
+            description="Process {data_type} for {user}",
+            goal=None
+        )
+        context = {"data_type": "transactions", "user": "John"}
+        assert job_def.prompt(context=context) == "Process transactions for John"
+
+    def test_prompt_with_class_context(self, job_def_factory):
+        """Test prompt method formats description with class-level context attribute."""
+        class_context = {"data_type": "orders", "user": "Alice"}
+        job_def = job_def_factory(
+            description="Process {data_type} for {user}",
+            goal=None,
+            context=class_context
+        )
+        assert job_def.prompt() == "Process orders for Alice"
+
+    def test_prompt_with_combined_context(self, job_def_factory):
+        """Test prompt method combines class context and parameter context."""
+        class_context = {"data_type": "orders", "status": "pending"}
+        job_def = job_def_factory(
+            description="Process {data_type} with {status} for {user}. Complete the {goal}.",
+            goal="analysis",
+            context=class_context
+        )
+        # Parameter context should override class context for overlapping keys
+        param_context = {"user": "Bob", "status": "completed"}
+        result = job_def.prompt(context=param_context)
+        assert result == "Process orders with completed for Bob. Complete the analysis."
+
 
 class TestJob:
     """Test cases for Job class."""
