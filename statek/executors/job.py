@@ -3,7 +3,6 @@ from typing import List, Optional, Iterable, Dict, Any
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
-from statek.agent import Agent
 from statek.executors.chat_log_item import ChatLogItem
 from statek.utils import prompt_append_console
 from statek.future import FutureResult
@@ -27,16 +26,26 @@ class JobDef:
     The `JobDescr` instances, as the name suggests - hold job descriptions / definitions.
     """
     # An agent assigned to this job
-    agent: Agent
+    agent: "Agent"
     # f-string with job / task description, might include the {goal}
     description: str
-    goal: Optional[str]
+    goal: Optional[str] = None
+    # optional context for `format` (e.g. job local variables)
+    context: Optional[Dict[str, Any]] = None
     # Optional warmup code (executed) before the first prompt
-    warmup_code: Optional[str]
+    warmup_code: Optional[str] = None
 
-    def prompt(self) -> str:
+    def prompt(self, context: Dict[str, Any] = None) -> str:
+        format_ctx = {}
+        if self.context:
+            format_ctx.update(self.context)
+        if context:
+            format_ctx.update(context)
         if self.goal:
-            return self.description.format(goal=self.goal)
+            format_ctx["goal"] = self.goal
+ 
+        if format_ctx:
+            return self.description.format_map(format_ctx)
         return self.description
 
 

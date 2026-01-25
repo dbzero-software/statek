@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Callable, Dict, Optional
 import dbzero as db0
 from statek.utils import format_callable_decl
+from statek.executors.job import JobDef
 
 @db0.memo
 @dataclass
@@ -31,3 +32,12 @@ class Agent:
         Get agent's private context.
         """
         return self._X__context
+
+@db0.memo
+class SupervisedAgent(Agent):
+    """
+    Base class for implementing agents initiated and supervised by other agents or system functions
+    """
+
+    def create_job_def(self, warmup_code: str = None, **kwargs) -> JobDef:
+        return JobDef(self, description=None, warmup_code=warmup_code, context=kwargs)
