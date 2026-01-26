@@ -16,7 +16,7 @@ from statek.exceptions import FutureError
 from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus
 from statek.llm_api import LLM_API
-from statek.settings import get_statek_settings
+from statek.settings import get_statek_settings, get_provider_settings
 
 def _wrap_param (param):
     if isinstance(param, FutureResult):
@@ -124,6 +124,8 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     # Merge agent's private context if available
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         global_context.update(job.job_def.agent.context)
+    for tool in job.job_def.agent._tools:
+        global_context[tool.__name__] = tool
     
     # Create custom functions
     custom_print_fn = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
@@ -341,7 +343,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             await run_job_step(job, provider)
         except Exception as e:
             # If job fails, set status to DONE
-            print(f"Job {job.id} failed with error: {e}")
+            print(f"Job {db0.uuid(job)} failed with error: {e}")
             traceback.print_exc()
             job.set_status(JobStatus.DONE)
 
@@ -397,3 +399,108 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
         else:
             # No pending tasks, just sleep
             await asyncio.sleep(0.3)
+
+
+async def run_agentic_loop(agent: 'Agent', warmup_code: str,
+                           task_queue_size_func: Callable, max_concurrency: int = 100,
+                           provider: str = None):
+    """
+    Helper function to start listening on arriving new tasks (e.g incoming user messages) 
+    and process them with a specific agent such as Coordinator or MessageDispatcher. 
+    
+    This function can be used as the agentic system's main loop - where the incoming user 
+    messages are processed with a specific specialized agent. Internally the function calls 
+    `run_jobs_loop` and runs indefinitely.
+    
+    Args:
+        agent: the Agent instance (e.g. Coordinator or MessageDispatcher)
+        warmup_code: the agent's warmup code (e.g. "user, message = fetch_next_message()")
+        task_queue_size_func: a function for calculating the number of queued tasks 
+                              (e.g. incoming messages) awaiting processing
+        max_concurrency: maximum number of concurrent jobs (default: 100)
+        provider: the default LLM provider (or None for default)
+    
+    Example warmup code:
+        ```
+        user, message = fetch_next_message()
+        print(message)
+        ```
+        
+    Example task_queue_size function:
+        ```
+        def task_queue_size() -> int:
+            return len(db0.find(Message, MessageStatus.PENDING))
+        ```
+    """
+    from statek.executors.job import JobDef
+    from statek.pyenv import PyEnv
+    
+    def start_jobs_func(capacity: int):
+        """
+        Internal function to create new jobs based on available capacity and pending tasks.
+        
+        This function:
+        1. Calls task_queue_size() to check the number of awaiting tasks
+        2. Uses db0.find to identify the number of agent-related jobs in READY or WARMING_UP state
+        3. Creates N new agent jobs where N = min(capacity, task_queue_size - ready_jobs)
+        """
+        if capacity <= 0:
+            return
+        
+        # Get the number of awaiting tasks
+        num_awaiting_tasks = task_queue_size_func()
+        
+        if num_awaiting_tasks <= 0:
+            return
+        
+        # Find the number of jobs related to this agent that are in READY or WARMING_UP state
+        ready_jobs = db0.filter(
+            lambda job: job.job_def.agent == agent,
+            db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP])
+        )
+        #FIXME: Change when len of filter returns correct value
+        ready_jobs_count = len(list(ready_jobs))
+        
+        # Calculate how many new jobs we need to create
+        # N = min(capacity, task_queue_size - ready_jobs)
+        jobs_to_create = min(capacity, num_awaiting_tasks - ready_jobs_count)
+        
+        if jobs_to_create <= 0:
+            return
+        
+        # Create the new jobs
+        for _ in range(jobs_to_create):
+            # Create job definition
+            job_def = JobDef(
+                agent=agent,
+                description=agent._system_prompt,
+                goal=None,
+                warmup_code=warmup_code
+            )
+            
+            # Create PyEnv with agent's context if available
+            pyenv = PyEnv(local_state={})
+            
+            # Get model info from settings if provider not specified
+            if provider is None:
+                settings = get_statek_settings()
+                model_to_use = settings.default_model
+            else:
+                settings = get_provider_settings(provider)
+                model_to_use = settings.default_model
+            
+            # Create the job
+            Job(
+                job_def=job_def,
+                model_family=provider or "default",
+                model=model_to_use,
+                job_status=JobStatus.READY,
+                py_env=pyenv
+            )
+    
+    # Run the jobs loop indefinitely with our custom start_jobs_func
+    await run_jobs_loop(
+        max_concurrency=max_concurrency,
+        provider=provider,
+        start_jobs_func=start_jobs_func
+    )

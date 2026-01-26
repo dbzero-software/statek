@@ -3,6 +3,7 @@
 from typing import Dict, Optional
 from dataclasses import dataclass
 import dbzero as db0
+<<<<<<< HEAD
 from statek.agents.agent import Agent, SupervisedAgent
 <<<<<<< Updated upstream
 from statek.system import create_tool, docs
@@ -10,6 +11,10 @@ from statek.task import delegate_task
 =======
 from statek.system import create_tool, docs, delegate_task
 >>>>>>> Stashed changes
+=======
+from statek.agent import Agent
+from statek.system import create_tool, docs, delegate_task
+>>>>>>> feature/183_186_187_191
 
 
 # Coordinator's system prompt
@@ -41,7 +46,11 @@ Dont try to solve user requests yourself; always delegate to the most suitable s
 
 @db0.memo
 @dataclass
+<<<<<<< HEAD
 class Coordinator(SupervisedAgent):
+=======
+class Coordinator(Agent):
+>>>>>>> feature/183_186_187_191
     """
     Coordinator agent for analyzing user requests and delegating to specialized agents.
     
