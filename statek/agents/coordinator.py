@@ -4,7 +4,8 @@ from typing import Dict, Optional
 from dataclasses import dataclass
 import dbzero as db0
 from statek.agents.agent import Agent, SupervisedAgent
-from statek.system import create_tool, docs, delegate_task
+from statek.system import create_tool, docs
+from statek.task import delegate_task
 
 
 # Coordinator's system prompt
