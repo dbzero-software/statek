@@ -12,7 +12,7 @@ import pytest
 import dbzero as db0
 
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.agent import Agent, SupervisedAgent
+from statek.agents.agent import Agent, SupervisedAgent
 from statek.executors.chat_log_item import ChatLogItem
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
