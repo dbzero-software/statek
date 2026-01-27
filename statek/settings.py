@@ -130,27 +130,27 @@ def configure_logging(level: str = "WARNING") -> None:
     """
     # Convert string level to logging constant
     numeric_level = getattr(logging, level.upper(), logging.WARNING)
-    
+
     # Get statek logger
     logger = logging.getLogger('statek')
     logger.setLevel(numeric_level)
-    
+
     # Only add handler if logger doesn't already have one
     if not logger.handlers:
         # Create console handler with formatting
         handler = logging.StreamHandler()
         handler.setLevel(numeric_level)
-        
+
         # Create formatter
         formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         handler.setFormatter(formatter)
-        
+
         # Add handler to logger
         logger.addHandler(handler)
-    
+
     # Prevent propagation to root logger to keep it separate
     logger.propagate = False
 
@@ -158,9 +158,21 @@ def configure_logging(level: str = "WARNING") -> None:
 @lru_cache()
 def get_statek_logger() -> logging.Logger:
     """Get the cached statek logger instance.
-    
+
     Returns:
         logging.Logger: The statek logger instance.
     """
     return logging.getLogger('statek')
 
+
+def statek_log(message: str, level: str = 'info') -> None:
+    """Log a message with separator lines using STATEK_LOGGER.
+    
+    Args:
+        message: The message to log
+        level: The log level (info, debug, warning, error, critical). Defaults to 'info'.
+    """
+    logger = get_statek_logger()
+    log_func = getattr(logger, level.lower(), logger.info)
+    formatted_message = f"{'-'*40}\n{message}\n{'-'*40}"
+    log_func(formatted_message)
