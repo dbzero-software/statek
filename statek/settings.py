@@ -1,6 +1,7 @@
 """Settings module for Statek - LLM API configuration management."""
 
 import os
+import logging
 from functools import lru_cache
 from typing import Optional, Dict
 from pydantic import Field
@@ -118,3 +119,48 @@ def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Se
 def get_statek_settings() -> StatekSettings:
     """Get the cached StatekSettings instance."""
     return StatekSettings()
+
+
+def configure_logging(level: str = "WARNING") -> None:
+    """Configure logging for Statek only, without affecting other loggers.
+    
+    Args:
+        level: Logging level as string (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+               Defaults to WARNING.
+    """
+    # Convert string level to logging constant
+    numeric_level = getattr(logging, level.upper(), logging.WARNING)
+    
+    # Get statek logger
+    logger = logging.getLogger('statek')
+    logger.setLevel(numeric_level)
+    
+    # Only add handler if logger doesn't already have one
+    if not logger.handlers:
+        # Create console handler with formatting
+        handler = logging.StreamHandler()
+        handler.setLevel(numeric_level)
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+        
+        # Add handler to logger
+        logger.addHandler(handler)
+    
+    # Prevent propagation to root logger to keep it separate
+    logger.propagate = False
+
+
+@lru_cache()
+def get_statek_logger() -> logging.Logger:
+    """Get the cached statek logger instance.
+    
+    Returns:
+        logging.Logger: The statek logger instance.
+    """
+    return logging.getLogger('statek')
+

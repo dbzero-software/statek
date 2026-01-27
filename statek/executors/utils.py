@@ -16,7 +16,9 @@ from statek.exceptions import FutureError
 from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus
 from statek.llm_api import LLM_API
-from statek.settings import get_statek_settings, get_provider_settings
+from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger
+
+STATEK_LOGGER = get_statek_logger()
 
 def _wrap_param (param):
     if isinstance(param, FutureResult):
@@ -180,6 +182,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
         local_state might be updated by the program
     """
     # Global and local contexts needs to be dictionaries in order to be used with exec
+    STATEK_LOGGER.info(f"{'-'*40}\nExecuting code step (instr_num={instr_num}):\n{code_str}\n{'-'*40}")
     if job.py_env.global_state is None:
         global_context = globals()
     else:
@@ -308,7 +311,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         job.session_id = response.session_id
 
     # Step 12: Add new log item using append_chat_log
-    print(f"LLM Response:\n{response.text}\n{'-'*40}")
+    STATEK_LOGGER.info(f"{'-'*40}\nLLM Response:\n{response.text}\n{'-'*40}\n")
     job.append_chat_log(request, response.text)
 
     # Step 13: Return False
@@ -328,7 +331,8 @@ def unsuspend_jobs():
     """
     # Find all suspended jobs
     suspended_jobs = db0.find(Job, JobStatus.SUSPENDED)
-    
+    if len(suspended_jobs) != 0:
+        STATEK_LOGGER.info(f"{'-'*40}\nFound {len(suspended_jobs)} suspended jobs\n{'-'*40}\n")
     for job in suspended_jobs:
         # Check if the job has an awaited_result and if its condition is satisfied
         condition_met = job.awaited_result.check_condition()
@@ -378,6 +382,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
         # Step 4: Submit run_job_step for jobs that aren't already pending
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:
+            STATEK_LOGGER.info(f"{'-'*40}\nAdding new jobs to pending tasks\n{'-'*40}\n")
             for job in ready_or_started_jobs:
                 # Create task for this job. Add all tasks to pending_tasks
                 task = asyncio.create_task(job_worker(semaphore, job, provider))
@@ -434,7 +439,7 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
     """
     from statek.executors.job import JobDef
     from statek.pyenv import PyEnv
-    
+    STATEK_LOGGER.info(f"{'-'*40}\nStarting agentic loop...\n{'-'*40}")
     def start_jobs_func(capacity: int):
         """
         Internal function to create new jobs based on available capacity and pending tasks.
@@ -469,11 +474,12 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
             return
         
         # Create the new jobs
+        STATEK_LOGGER.info(f"{'-'*40}\nCreating {jobs_to_create} new jobs for agent {agent.role}\n{'-'*40}")
         for _ in range(jobs_to_create):
             # Create job definition
             job_def = JobDef(
                 agent=agent,
-                description=agent._system_prompt,
+                description=None,
                 goal=None,
                 warmup_code=warmup_code
             )

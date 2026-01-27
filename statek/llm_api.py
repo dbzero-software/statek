@@ -6,8 +6,9 @@ from functools import lru_cache
 from typing import Optional, Iterable, List, Dict
 import httpx
 
-from .settings import LLM_API_Settings, get_provider_settings
+from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
 
+STATEK_LOGGER = get_statek_logger()
 
 # Named tuple for LLM response
 LLM_Response = namedtuple("LLM_Response", ["text", "session_id"])
@@ -155,10 +156,12 @@ class OpenRouter_API(LLM_API):
             "model": self.model,
             "messages": messages
         }
-
+        STATEK_LOGGER.info(f"{'-'*40}\nSending request to OpenRouter with the following messages:\n")
+        for message in messages:
+            STATEK_LOGGER.info(f"Message role: {message['role']}, content: {message['content']}\n{'-'*40}")
         # set any additional parameters from kwargs
         payload.update(self.kwargs)
-
+        STATEK_LOGGER.info(f"{'-'*40}")
         # Prepare headers
         headers = {
             "Authorization": f"Bearer {self.api_key}",

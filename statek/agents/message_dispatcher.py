@@ -4,7 +4,7 @@ from typing import Callable, Dict, Optional
 from dataclasses import dataclass
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
-from statek.system import docs
+from statek.system import create_tool, docs
 
 
 # Message Dispatcher's system prompt
@@ -22,6 +22,13 @@ thread or requires a new one.
 ### Decision Logic
 - **Continuation:** If the message clearly relates to an existing thread (references previous context, answers a question, provides requested information), dispatch it to that specific thread.
 - **New Thread:** If the message introduces a new topic, request, or question that doesn't relate to any existing thread, start a new chat thread.
+
+### Response Format
+When you have classified the message, use the appropriate tool to either:
+- Dispatch the message to the identified existing thread.
+- Start a new chat thread for the new conversation.
+
+You can only response with python code that uses the available tools.
 
 ### Available Tools
 {tools}
@@ -65,14 +72,19 @@ class MessageDispatcher(SupervisedAgent):
         self.dispatch_to = dispatch_to
 
         # Initialize with basic tools (docs)
-        basic_tools = [docs]
-
+        basic_tools = [docs, chat_history, start_new_thread, dispatch_to]
+        # add insnces to _x_context
+        x_context = {
+            'chat_history': chat_history,
+            'start_new_thread': start_new_thread,
+            'dispatch_to': dispatch_to
+        }
         # Call parent constructor
         super().__init__(
             role="message_dispatcher",
             _system_prompt=MESSAGE_DISPATCHER_SYSTEM_PROMPT,
             _tools=basic_tools,
-            _X__context=None
+            _X__context=x_context
         )
 
     @property
@@ -116,11 +128,12 @@ class MessageDispatcher(SupervisedAgent):
         def chat_history_impl():
             return self.chat_history()
 
-        chat_history_impl.__name__ = 'chat_history'
-        chat_history_impl.__doc__ = docstring
-
-        # Store in context
-        self._X__context['chat_history'] = chat_history_impl
+        create_tool(
+            tool_name='chat_history',
+            callable=chat_history_impl,
+            docstring=docstring,
+            context=self._X__context
+        )
 
     def _create_start_new_thread_tool(self):
         """Create the start_new_chat_thread tool dynamically."""
@@ -128,22 +141,20 @@ class MessageDispatcher(SupervisedAgent):
         
         Use this when the incoming message introduces a new topic, request,
         or question that doesn't relate to any existing thread.
-        
-        Args:
-            message: The message content to start the new thread with
             
         Returns:
             The newly created thread identifier
         """
 
-        def start_new_thread_impl(message: str):
-            return self.start_new_thread(message)
+        def start_new_thread_impl():
+            return self.start_new_thread()
 
-        start_new_thread_impl.__name__ = 'start_new_chat_thread'
-        start_new_thread_impl.__doc__ = docstring
-
-        # Store in context
-        self._X__context['start_new_chat_thread'] = start_new_thread_impl
+        create_tool(
+            tool_name='start_new_chat_thread',
+            callable=start_new_thread_impl,
+            docstring=docstring,
+            context=self._X__context
+        )
 
     def _create_dispatch_to_tool(self):
         """Create the dispatch_to tool dynamically."""
@@ -152,20 +163,17 @@ class MessageDispatcher(SupervisedAgent):
         Use this when the incoming message is a continuation of an existing
         conversation thread (e.g., answering a question, providing requested
         information, or following up on a previous topic).
-        
-        Args:
-            thread_id: The identifier of the thread to dispatch to
-            message: The message content to dispatch
             
         Returns:
             Confirmation of successful dispatch
         """
 
-        def dispatch_to_impl(thread_id: str, message: str):
-            return self.dispatch_to(thread_id, message)
+        def dispatch_to_impl():
+            return self.dispatch_to()
 
-        dispatch_to_impl.__name__ = 'dispatch_to'
-        dispatch_to_impl.__doc__ = docstring
-
-        # Store in context
-        self._X__context['dispatch_to'] = dispatch_to_impl
+        create_tool(
+            tool_name='dispatch_to',
+            callable=dispatch_to_impl,
+            docstring=docstring,
+            context=self._X__context
+        )
