@@ -3,6 +3,7 @@ import functools
 import inspect
 from .future import get_any_future, get_all_future
 
+
 def tool(f):
     """Marks a function as a tool for LLM agent."""
 

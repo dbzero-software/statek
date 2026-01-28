@@ -705,7 +705,7 @@ w = 4'''
     @pytest.mark.asyncio
     async def test_exec_step_with_agent_context(self, db0_fixture):  # pylint: disable=unused-argument
         """Test that agent's private context is merged into global execution context."""
-        from statek.agent import Agent  # pylint: disable=import-outside-toplevel
+        from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel
         from statek.executors.job import Job, JobDef, JobStatus  # pylint: disable=import-outside-toplevel
 
         # Define a custom function to be available in agent's context

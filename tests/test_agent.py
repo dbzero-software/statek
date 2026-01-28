@@ -1,6 +1,6 @@
 """Tests for Agent class."""
 
-from statek.agent import Agent
+from statek.agents.agent import Agent
 from statek.utils import format_callable_decl
 from tests.conftest import clock, docs, exit_tool
 

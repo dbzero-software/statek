@@ -2,8 +2,10 @@
 
 # pylint: disable=too-few-public-methods
 
+from typing import Tuple
 import pytest
 from statek.system import docs, tool, create_tool
+from statek.future import get_unpack_size
 from statek.utils import format_callable_decl
 
 class TestDocs:
@@ -246,3 +248,50 @@ class TestCreateTool:
             create_tool('add_tool', add, 'Adds two numbers', context, 5, 3)
 
         create_tool('add_tool2', add, 'Adds two numbers', context, 5, 3)
+
+class TestGetUnpackSize:
+    """Test cases for get_unpack_size function."""
+
+    def test_get_unpack_size_with_tuple_annotation(self):
+        """Test with a function returning a tuple with explicit size."""
+        def returns_pair() -> Tuple[int, str]:
+            return (1, "hello")
+
+        assert get_unpack_size(returns_pair) == 2
+
+    def test_get_unpack_size_with_no_annotation(self):
+        """Test with a function that has no return type annotation."""
+        def no_annotation():
+            return (1, 2)
+
+        assert get_unpack_size(no_annotation) is None
+
+    def test_get_unpack_size_with_non_tuple_annotation(self):
+        """Test with a function returning a non-tuple type."""
+        def returns_int() -> int:
+            return 42
+
+        assert get_unpack_size(returns_int) is None
+
+    def test_get_unpack_size_with_empty_tuple(self):
+        """Test with a function returning an empty tuple annotation."""
+        def returns_empty() -> Tuple[()]:
+            return ()
+
+        # Tuple[()] is actually just Tuple with no args
+        result = get_unpack_size(returns_empty)
+        assert result is None or result == 0
+
+    def test_get_unpack_size_with_annotated_lambda(self):
+        """Test with an annotated callable."""
+        def returns_quad() -> Tuple[int, int, int, int]:
+            return (1, 2, 3, 4)
+
+        assert get_unpack_size(returns_quad) == 4
+
+    def test_get_unpack_size_with_builtin_tuple(self):
+        """Test with lowercase tuple annotation."""
+        def returns_builtin_tuple() -> tuple[int, str]:
+            return (1, "hello")
+
+        assert get_unpack_size(returns_builtin_tuple) == 2

@@ -6,7 +6,7 @@ import dbzero as db0
 from .exceptions import FutureError
 from .future import FutureResult, temporal
 from .system import tool
-from .agent import SupervisedAgent
+from .agents.agent import SupervisedAgent
 from .executors.job import Job, JobStatus
 from .pyenv import PyEnv
 from .settings import get_provider_settings, get_statek_settings
