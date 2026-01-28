@@ -69,6 +69,7 @@ class Coordinator(SupervisedAgent):
         super().__init__(
             role="coordinator",
             _system_prompt=COORDINATOR_SYSTEM_PROMPT,
+            _prompt_template="",  # Coordinator doesn't use prompt_template
             _tools=basic_tools,
             _X__context=None
         )

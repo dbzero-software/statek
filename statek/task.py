@@ -66,19 +66,17 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
 
 @temporal(complement = get_task_result, condition=is_job_completed)
 @tool
-def delegate_task(agent: SupervisedAgent, prompt: str, warmup_code: Optional[str] = None,
+def delegate_task(agent: SupervisedAgent, warmup_code: Optional[str] = None,
     **kwargs) -> TaskFutureResult:
     """Create a new job delegated to given agent.
     
     Args: 
         agent: The `Agent` to delegate task to
-        prompt: Task prompt (description) template
         warmup_code: Optional Python code to be executed prior to task start
-        kwargs: Agent-specific arguments 
+        kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
 
     job_def = agent.create_job_def(warmup_code=warmup_code, **kwargs)
-    job_def.description = prompt
 
     env = PyEnv()
     if warmup_code:
