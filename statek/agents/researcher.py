@@ -74,6 +74,7 @@ class Researcher(SupervisedAgent):
         super().__init__(
             role="researcher",
             _system_prompt=RESEARCHER_SYSTEM_PROMPT,
+            _prompt_template="",  # Researcher doesn't use prompt_template
             _tools=basic_tools,
             _X__context=None
         )

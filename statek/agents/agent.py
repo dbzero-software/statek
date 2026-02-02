@@ -12,6 +12,7 @@ class Agent:
     """
     role: str  # An arbitrary role name
     _system_prompt: str  # f-string with the {tools} placeholder
+    _prompt_template: str  # Agent's prompt template / to be formatted with job-specific params
     _tools: List[Callable]
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
 
@@ -33,11 +34,56 @@ class Agent:
         """
         return self._X__context
 
+    def prompt(self, job_params: Dict = None, **kwargs) -> str:
+        """
+        Format prompt message from prompt template by filling in job specific parameters.
+
+        Args:
+            job_params: optional context for format (e.g. job local variables)
+            kwargs: optional additional params
+
+        Returns:
+            Formatted prompt string
+        """
+        format_ctx = {}
+        if job_params:
+            format_ctx.update(job_params)
+        if kwargs:
+            format_ctx.update(kwargs)
+
+        if format_ctx:
+            return self._prompt_template.format_map(format_ctx)
+        return self._prompt_template
+
 @db0.memo
 class SupervisedAgent(Agent):
     """
     Base class for implementing agents initiated and supervised by other agents or system functions
     """
 
-    def create_job_def(self, warmup_code: str = None, **kwargs) -> JobDef:
-        return JobDef(self, description=None, warmup_code=warmup_code, context=kwargs)
+    def create_job_def(
+        self,
+        tools: Optional[List[Callable]] = None,
+        warmup_code: str = None,
+        **kwargs
+    ) -> JobDef:
+        # pylint: disable=unused-argument
+        """
+        Create a job definition with job-specific parameters.
+
+        Args:
+            tools: agent's tools additional tools (currently not used)
+            warmup_code: optional initialization code
+            kwargs: job specific parameters for prompt formatting (i.e. job_params)
+
+        Returns:
+            A new job definition object with specific job_params
+        """
+        # kwargs become job_params
+        job_params = kwargs if kwargs else None
+
+        return JobDef(
+            agent=self,
+            job_params=job_params,
+            warmup_code=warmup_code
+        )

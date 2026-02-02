@@ -182,20 +182,19 @@ class TestDelegateTask:
         self, db0_fixture, supervised_agent, mock_settings
     ):
         """Test delegate_task creates a Job with correct parameters."""
-        prompt = "Process this data"
-        result = delegate_task(supervised_agent, prompt)
+        result = delegate_task(supervised_agent)
 
         # Verify result is TaskFutureResult with a Job
         assert result.job.model_family == "OPENAI"
         assert result.job.model == "gpt-4"
         assert result.job.job_def.agent is supervised_agent
-        assert result.job.job_def.prompt() == prompt
+        # Prompt comes from agent's __prompt_template
+        assert result.job.job_def.prompt() == "Test task"
 
     def test_delegate_task_with_warmup_code_copies_referenced_locals(
         self, db0_fixture, supervised_agent, mock_settings
     ):
         """Test delegate_task copies referenced local variables when warmup_code is provided."""
-        prompt = "Process this data"
         warmup_code = "result = x + y"
 
         # Simulate calling delegate_task from a function with local variables
@@ -203,7 +202,7 @@ class TestDelegateTask:
         y = 20
         unused_var = 999
 
-        result = delegate_task(supervised_agent, prompt, warmup_code=warmup_code)
+        result = delegate_task(supervised_agent, warmup_code=warmup_code)
 
         # Verify local_state contains referenced variables
         assert result.job.py_env.local_state["x"] == 10
@@ -212,33 +211,38 @@ class TestDelegateTask:
         # Verify unused variable was not copied
         assert 'unused_var' not in result.job.py_env.local_state
 
-    def test_delegate_task_with_kwargs(self, db0_fixture, supervised_agent, mock_settings):
-        """Test delegate_task passes kwargs to agent.create_job_def."""
-        prompt = "Process {data_type} for {user}"
+    def test_delegate_task_with_kwargs(self, db0_fixture, mock_settings):
+        """Test delegate_task passes kwargs as job_params to agent.create_job_def."""
+        from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+
+        # Create agent with prompt template that uses job_params
+        agent = SupervisedAgent(
+            role="test",
+            _system_prompt="Test agent",
+            _prompt_template="Process {data_type} for {user}",
+            _tools=[]
+        )
 
         result = delegate_task(
-            supervised_agent,
-            prompt,
+            agent,
             data_type="orders",
             user="Alice"
         )
 
-        assert result.job.job_def.context["data_type"] == "orders"
-        assert result.job.job_def.context["user"] == "Alice"
+        assert result.job.job_def.job_params["data_type"] == "orders"
+        assert result.job.job_def.job_params["user"] == "Alice"
         assert result.job.job_def.prompt() == "Process orders for Alice"
 
     def test_delegate_task_future_result(self, db0_fixture, supervised_agent, mock_settings):
-        """Test delegate_task passes kwargs to agent.create_job_def."""
-        prompt = "Process this data"
-
-        result = delegate_task(supervised_agent, prompt)
+        """Test delegate_task returns proper future result."""
+        result = delegate_task(supervised_agent)
 
         assert result.check_condition() is False
 
         with pytest.raises(FutureError):
             _ = result.value
 
-        result.job.status = JobStatus.DONE
+        result.job.set_status(JobStatus.DONE)
         assert result.check_condition()
 
         result.job.py_env.exit_status = "OK"

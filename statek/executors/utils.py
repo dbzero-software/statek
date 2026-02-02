@@ -144,6 +144,10 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     local_context['_smart_call'] = _smart_call
     local_context['_wrap_param'] = _wrap_param
     local_context['exit'] = custom_exit_fn
+    global_context['print'] = custom_print_fn
+    global_context['exit'] = custom_exit_fn
+    global_context['_smart_call'] = _smart_call
+    global_context['_wrap_param'] = _wrap_param
     
     try:
         yield custom_print_fn, custom_exit_fn
@@ -479,8 +483,7 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
             # Create job definition
             job_def = JobDef(
                 agent=agent,
-                description=None,
-                goal=None,
+                job_params=None,
                 warmup_code=warmup_code
             )
             

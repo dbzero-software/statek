@@ -135,24 +135,40 @@ def db0_fixture(db0_fixture_preloaded):
 @pytest.fixture
 def agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
-    return Agent(role="test", _system_prompt="Test agent", _tools=[])
+    return Agent(role="test", _system_prompt="Test agent", _prompt_template="Test task", _tools=[])
+
+
+@pytest.fixture
+def agent_factory(db0_fixture):  # pylint: disable=unused-argument
+    """Factory fixture to create Agent instances with custom parameters."""
+    def _create_agent(prompt_template="Test task", role="test", system_prompt="Test", tools=None):
+        return Agent(
+            role=role,
+            _system_prompt=system_prompt,
+            _prompt_template=prompt_template,
+            _tools=tools or []
+        )
+    return _create_agent
 
 
 @pytest.fixture
 def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
-    return SupervisedAgent(role="test", _system_prompt="Test agent", _tools=[])
+    return SupervisedAgent(
+        role="test",
+        _system_prompt="Test agent",
+        _prompt_template="Test task",
+        _tools=[]
+    )
 
 
 @pytest.fixture
 def job_def_factory(agent):
     """Factory fixture to create JobDef instances with custom parameters."""
-    def _create_job_def(description="Test task", goal=None, context=None, warmup_code=None):
+    def _create_job_def(job_params=None, warmup_code=None):
         return JobDef(
             agent=agent,
-            description=description,
-            goal=goal,
-            context=context,
+            job_params=job_params,
             warmup_code=warmup_code
         )
     return _create_job_def
@@ -161,8 +177,8 @@ def job_def_factory(agent):
 @pytest.fixture
 def job_factory(job_def_factory):
     """Factory fixture to create Job instances with custom parameters."""
-    def _create_job(description="Test task", goal=None, model_family="test", model="test-model"):
-        job_def = job_def_factory(description=description, goal=goal)
+    def _create_job(job_params=None, model_family="test", model="test-model"):
+        job_def = job_def_factory(job_params=job_params)
         return Job(
             job_def=job_def,
             model_family=model_family,

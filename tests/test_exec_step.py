@@ -52,30 +52,44 @@ def compute(a, b, c):
 
 
 # Helper functions for creating FutureResults
-def create_future_not_ready():
-    """Create a FutureResult that raises FutureError when accessed."""
-    future = FutureResult(
-        deps=MemoObject(value=0),
-        state_num=0
-    )
-    future.set_complement_functions(
-        complement=_fetch_result_not_ready,
-        condition=_check_condition_false
-    )
-    return future
-
-
-def create_future_ready(value=42):
-    """Create a ready FutureResult with a specific value."""
+def create_future(value, complement, condition):
+    """Create a FutureResult with specified value and complement functions.
+    
+    Args:
+        value: The value to store in the MemoObject deps
+        complement: The complement function to fetch the result
+        condition: The condition function to check readiness
+        
+    Returns:
+        FutureResult configured with the provided parameters
+    """
     future = FutureResult(
         deps=MemoObject(value=value),
         state_num=0
     )
     future.set_complement_functions(
+        complement=complement,
+        condition=condition
+    )
+    return future
+
+
+def create_future_not_ready():
+    """Create a FutureResult that raises FutureError when accessed."""
+    return create_future(
+        value=0,
+        complement=_fetch_result_not_ready,
+        condition=_check_condition_false
+    )
+
+
+def create_future_ready(value=42):
+    """Create a ready FutureResult with a specific value."""
+    return create_future(
+        value=value,
         complement=_fetch_result_from_deps,
         condition=_check_condition_true
     )
-    return future
 
 
 # Define temporal functions as globals
@@ -139,14 +153,22 @@ def function_with_mixed(regular_param, *args, **kwargs):
     return {'regular': regular_param, 'args': args, 'kwargs': kwargs}
 
 
+# Default job parameters used across tests
+DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
+
+
 # pylint: disable=too-many-public-methods
 class TestExecStep:
     """Test cases for exec_step function."""
 
+    def create_job(self, job_factory, job_params=None):
+        """Helper to create job with default params."""
+        return job_factory(job_params=job_params or DEFAULT_JOB_PARAMS)
+
     @pytest.mark.asyncio
     async def test_exec_step_simple_print(self, job_factory):
         """Test exec_step with simple print statement."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = 'print("Hello, World!")'
 
         result = await exec_step(code, simple_job)
@@ -159,7 +181,7 @@ class TestExecStep:
     @pytest.mark.asyncio
     async def test_exec_step_print_from_function(self, job_factory):
         """Test exec_step with simple print statement."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = 'local_print("Hello, World!")'
         simple_job.py_env.local_state = {'local_print': local_print}
         result = await exec_step(code, simple_job)
@@ -173,7 +195,7 @@ class TestExecStep:
     @pytest.mark.asyncio
     async def test_exec_step_variable_assignment(self, job_factory):
         """Test exec_step with variable assignment."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = 'x = 42'
 
         result = await exec_step(code, simple_job)
@@ -184,7 +206,7 @@ class TestExecStep:
     @pytest.mark.asyncio
     async def test_exec_step_multiple_statements(self, job_factory):
         """Test exec_step with multiple statements."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = '''
 x = 10
 y = 20
@@ -204,7 +226,7 @@ print(f"Result: {z}")
     @pytest.mark.asyncio
     async def test_exec_step_with_exit(self, job_factory):
         """Test exec_step with exit call."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = 'exit("completed")'
 
         result = await exec_step(code, simple_job)
@@ -215,7 +237,7 @@ print(f"Result: {z}")
     @pytest.mark.asyncio
     async def test_exec_step_preserves_state(self, job_factory):
         """Test that exec_step preserves state across calls."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code1 = 'counter = 0'
         code2 = 'counter += 1'
         code3 = 'print(counter)'
@@ -231,7 +253,7 @@ print(f"Result: {z}")
     @pytest.mark.asyncio
     async def test_exec_step_print_with_separator(self, job_factory):
         """Test exec_step with print using custom separator."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = 'print("a", "b", "c", sep="-")'
 
         result = await exec_step(code, simple_job)
@@ -242,7 +264,7 @@ print(f"Result: {z}")
     @pytest.mark.asyncio
     async def test_exec_with_db0_objects(self, job_factory):
         """Test exec_step finishes execution on exit call."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = '''memo_object.value = 15'''
         obj = MemoObject()
         simple_job.py_env.local_state = {'memo_object': obj}
@@ -254,7 +276,7 @@ print(f"Result: {z}")
     @pytest.mark.asyncio
     async def test_exec_step_finishing_on_exit(self, job_factory):
         """Test exec_step finishes execution on exit call."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         code = '''print("Start")
 exit("Success")
 print("This should not run")'''
@@ -269,7 +291,7 @@ print("This should not run")'''
     async def test_exec_step_print_with_future_result(self, job_factory):
         """Test exec_step with print statement accepting FutureResult."""
 
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
@@ -304,7 +326,7 @@ print("This should not run")'''
     async def test_exec_step_local_function_with_future_result(self, job_factory):
         """Test exec_step with local function statement accepting FutureResult."""
 
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
@@ -337,7 +359,7 @@ print("This should not run")'''
     @pytest.mark.asyncio
     async def test_exec_step_temporal_function_print(self, job_factory):
         """Test exec_step with temporal function and print."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         simple_job.py_env.local_state = {'get_value': get_value}
 
         code = '''result = get_value()
@@ -354,7 +376,7 @@ print(result)'''
     @pytest.mark.asyncio
     async def test_exec_step_temporal_function_not_ready(self, job_factory):
         """Test exec_step with temporal function that's not ready."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
         simple_job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
         simple_job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
 
@@ -374,7 +396,7 @@ print(result)'''
     @pytest.mark.asyncio
     async def test_exec_step_continuation_with_instr_num(self, job_factory):
         """Test exec_step continuation from specific instruction using instr_num."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Multi-statement code
         code = '''x = 1
@@ -403,7 +425,7 @@ z = 3'''
     @pytest.mark.asyncio
     async def test_exec_step_continuation_after_future_error(self, job_factory):
         """Test exec_step continuation after FutureError using instr_num."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
@@ -439,7 +461,7 @@ y = 2'''
     @pytest.mark.asyncio
     async def test_exec_step_future_error_in_function_argument(self, job_factory):
         """Test FutureError raised in function argument evaluation."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
@@ -479,7 +501,7 @@ y = 2'''
     @pytest.mark.asyncio
     async def test_exec_step_future_error_in_nested_expression(self, job_factory):
         """Test FutureError raised in nested expression evaluation."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
@@ -514,7 +536,7 @@ c = 3'''
     @pytest.mark.asyncio
     async def test_exec_step_multiple_future_errors_in_sequence(self, job_factory):
         """Test multiple FutureErrors in different instructions - step-by-step continuation."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create two FutureResults that raise FutureError
         future_not_ready_1 = create_future_not_ready()
@@ -573,7 +595,7 @@ w = 4'''
     @pytest.mark.asyncio
     async def test_exec_step_future_typehint_not_unwrapped(self, job_factory):
         """Test that function with FutureResult typehint receives unwrapped FutureResult."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create a ready FutureResult
         future_ready = create_future_ready()
@@ -596,7 +618,7 @@ w = 4'''
     @pytest.mark.asyncio
     async def test_exec_step_no_typehint_unwrapped(self, job_factory):
         """Test that function without typehint receives unwrapped value."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create a ready FutureResult
         future_ready = create_future_ready()
@@ -619,7 +641,7 @@ w = 4'''
     @pytest.mark.asyncio
     async def test_exec_step_function_with_args(self, job_factory):
         """Test that function with *args receives unwrapped values."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create multiple FutureResult objects
         future1 = create_future_ready(10)
@@ -648,7 +670,7 @@ w = 4'''
     @pytest.mark.asyncio
     async def test_exec_step_function_with_kwargs(self, job_factory):
         """Test that function with **kwargs receives unwrapped values."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create FutureResult objects
         future_a = create_future_ready(100)
@@ -674,7 +696,7 @@ w = 4'''
     @pytest.mark.asyncio
     async def test_exec_step_function_with_mixed_params(self, job_factory):
         """Test that function with mixed parameters receives unwrapped values."""
-        simple_job = job_factory(description="Test job", goal="Test goal")
+        simple_job = self.create_job(job_factory)
 
         # Create FutureResult objects
         future_reg = create_future_ready(1)
@@ -716,6 +738,7 @@ w = 4'''
         agent = Agent(
             role="test",
             _system_prompt="Test agent with context",
+            _prompt_template="Test with agent context",
             _tools=[],
             _X__context={"custom_tool": custom_tool, "agent_var": 42}
         )
@@ -723,8 +746,7 @@ w = 4'''
         # Create job with this agent
         job_def = JobDef(
             agent=agent,
-            description="Test with agent context",
-            goal=None,
+            job_params=None,
             warmup_code=None
         )
         job = Job(

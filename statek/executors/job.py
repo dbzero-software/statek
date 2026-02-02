@@ -27,26 +27,22 @@ class JobDef:
     """
     # An agent assigned to this job
     agent: "Agent"
-    # f-string with job / task description, might include the {goal}
-    description: str
-    goal: Optional[str] = None
-    # optional context for `format` (e.g. job local variables)
-    context: Optional[Dict[str, Any]] = None
+    # Job params to be fed into the agent's prompt template
+    job_params: Optional[Dict[str, Any]] = None
     # Optional warmup code (executed) before the first prompt
     warmup_code: Optional[str] = None
 
-    def prompt(self, context: Dict[str, Any] = None) -> str:
-        format_ctx = {}
-        if self.context:
-            format_ctx.update(self.context)
-        if context:
-            format_ctx.update(context)
-        if self.goal:
-            format_ctx["goal"] = self.goal
- 
-        if format_ctx:
-            return self.description.format_map(format_ctx)
-        return self.description
+    def prompt(self) -> str:
+        """
+        Generate the prompt by calling agent's prompt method with job_params.
+        
+        Returns:
+            Formatted prompt string
+        """
+        if self.agent is None:
+            return ""
+        
+        return self.agent.prompt(job_params=self.job_params)
 
 
 @memo
