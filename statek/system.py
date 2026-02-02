@@ -2,6 +2,9 @@ from typing import Any, Callable, Tuple, Dict
 import functools
 import inspect
 from .future import get_any_future, get_all_future
+import nest_asyncio
+# This library patches asyncio to allow nested event loops
+nest_asyncio.apply()
 
 
 def tool(f):
