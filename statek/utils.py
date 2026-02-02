@@ -49,7 +49,9 @@ def _get_type_hints(func: Callable) -> dict:
 def _format_parameters(func: Callable, hints: dict) -> str:
     """Format all parameters of a callable."""
     sig = inspect.signature(func)
-    params = [_format_parameter(name, param, hints) for name, param in sig.parameters.items()]
+    params = [_format_parameter(name, param, hints)
+              for name, param in sig.parameters.items()
+              if not name.startswith('_')]  # Skip internal parameters
     return ", ".join(params)
 
 
@@ -96,6 +98,18 @@ def _format_return_annotation(func: Callable, hints: dict) -> str:
 
 def _extract_complement_return_type(func: Callable) -> str:
     """Extract return type from a temporal function's complement function."""
+    # First, try to get complement from the __temporal_complement__ attribute
+    # (set by the @temporal decorator for extended functions)
+    if hasattr(func, "__temporal_complement__"):
+        complement_func = func.__temporal_complement__
+        try:
+            complement_hints = get_type_hints(complement_func)
+            if "return" in complement_hints:
+                return _format_type(complement_hints["return"])
+        except (AttributeError, ValueError, TypeError):
+            pass
+
+    # Fallback to closure extraction for older temporal functions
     if not (hasattr(func, "__closure__") and func.__closure__):
         return None
 
@@ -107,7 +121,7 @@ def _extract_complement_return_type(func: Callable) -> str:
             complement_hints = get_type_hints(complement_func)
             if "return" in complement_hints:
                 return _format_type(complement_hints["return"])
-        except (AttributeError, ValueError):
+        except (AttributeError, ValueError, TypeError):
             continue
 
     return None

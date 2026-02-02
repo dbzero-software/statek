@@ -9,47 +9,47 @@ from statek.executors.job import Job, JobStatus
 class TestJobDef:
     """Test cases for JobDef class."""
 
-    def test_prompt_with_goal(self, job_def_factory):
-        """Test prompt property formats description with goal."""
-        job_def = job_def_factory(description="Complete the {goal} task", goal="analysis")
+    def test_prompt_with_goal_in_job_params(self, agent_factory, job_def_factory):
+        """Test prompt property formats template with goal in job_params."""
+        agent = agent_factory(prompt_template="Complete the {goal} task")
+        job_def = job_def_factory(job_params={"goal": "analysis"})
+        # Need to use custom agent
+        job_def.agent = agent
         assert job_def.prompt() == "Complete the analysis task"
 
-    def test_prompt_without_goal(self, job_def_factory):
-        """Test prompt property returns plain description when goal is None."""
-        job_def = job_def_factory(description="Complete the task", goal=None)
+    def test_prompt_without_goal(self, agent_factory, job_def_factory):
+        """Test prompt property returns plain template when no job_params."""
+        agent = agent_factory(prompt_template="Complete the task")
+        job_def = job_def_factory(job_params=None)
+        job_def.agent = agent
         assert job_def.prompt() == "Complete the task"
 
-    def test_prompt_with_context_parameter(self, job_def_factory):
-        """Test prompt method formats description with context parameter."""
-        job_def = job_def_factory(
-            description="Process {data_type} for {user}",
-            goal=None
-        )
-        context = {"data_type": "transactions", "user": "John"}
-        assert job_def.prompt(context=context) == "Process transactions for John"
+    def test_prompt_with_job_params(self, agent_factory, job_def_factory):
+        """Test prompt method formats description with job_params."""
+        agent = agent_factory(prompt_template="Process {data_type} for {user}")
+        job_params = {"data_type": "transactions", "user": "John"}
+        job_def = job_def_factory(job_params=job_params)
+        job_def.agent = agent
+        assert job_def.prompt() == "Process transactions for John"
 
-    def test_prompt_with_class_context(self, job_def_factory):
-        """Test prompt method formats description with class-level context attribute."""
-        class_context = {"data_type": "orders", "user": "Alice"}
-        job_def = job_def_factory(
-            description="Process {data_type} for {user}",
-            goal=None,
-            context=class_context
-        )
+    def test_prompt_with_job_params_in_jobdef(self, agent_factory, job_def_factory):
+        """Test prompt method formats description with job_params stored in JobDef."""
+        agent = agent_factory(prompt_template="Process {data_type} for {user}")
+        job_params = {"data_type": "orders", "user": "Alice"}
+        job_def = job_def_factory(job_params=job_params)
+        job_def.agent = agent
         assert job_def.prompt() == "Process orders for Alice"
 
-    def test_prompt_with_combined_context(self, job_def_factory):
-        """Test prompt method combines class context and parameter context."""
-        class_context = {"data_type": "orders", "status": "pending"}
-        job_def = job_def_factory(
-            description="Process {data_type} with {status} for {user}. Complete the {goal}.",
-            goal="analysis",
-            context=class_context
+    def test_prompt_with_job_params_and_goal(self, agent_factory, job_def_factory):
+        """Test prompt method with goal included in job_params."""
+        agent = agent_factory(
+            prompt_template="Process {data_type} with {status} for {user}. Complete the {goal}."
         )
-        # Parameter context should override class context for overlapping keys
-        param_context = {"user": "Bob", "status": "completed"}
-        result = job_def.prompt(context=param_context)
-        assert result == "Process orders with completed for Bob. Complete the analysis."
+        job_params = {"data_type": "orders", "status": "pending", "user": "Bob", "goal": "analysis"}
+        job_def = job_def_factory(job_params=job_params)
+        job_def.agent = agent
+        result = job_def.prompt()
+        assert result == "Process orders with pending for Bob. Complete the analysis."
 
 
 class TestJob:
@@ -57,15 +57,15 @@ class TestJob:
 
     def test_get_next_prompt_first_prompt_empty_console(self, job_factory):
         """Test get_next_prompt when chat_log is empty and console is empty."""
-        job = job_factory(description="Analyze the data")
+        job = job_factory()
         result = job.get_next_prompt()
 
         # Should return just the job_def.prompt() since console is empty
-        assert result == "Analyze the data"
+        assert result == "Test task"
 
     def test_get_next_prompt_first_prompt_with_console(self, job_factory):
         """Test get_next_prompt when chat_log is empty and console has content."""
-        job = job_factory(description="Process user data")
+        job = job_factory()
 
         # Add some console output
         job.py_env.console_append("Output line 1")
@@ -74,12 +74,12 @@ class TestJob:
         result = job.get_next_prompt()
 
         # Should include the prompt and all console outputs from position 0
-        expected = "Process user data\n> Output line 1\n> Output line 2"
+        expected = "Test task\n> Output line 1\n> Output line 2"
         assert result == expected
 
     def test_get_next_prompt_subsequent_prompt_from_console_pos(self, job_factory):
         """Test get_next_prompt when chat_log has entries."""
-        job = job_factory(description="Process data")
+        job = job_factory()
 
         # Setup console with multiple outputs
         job.py_env.console_append("Output 1")
@@ -97,7 +97,7 @@ class TestJob:
 
     def test_get_next_prompt_subsequent_prompt_no_new_console(self, job_factory):
         """Test get_next_prompt when no new console output since last chat."""
-        job = job_factory(description="Process data")
+        job = job_factory()
 
         # Setup console
         job.py_env.console_append("Output 1")
@@ -113,7 +113,7 @@ class TestJob:
 
     def test_get_next_prompt_multiple_chat_items(self, job_factory):
         """Test get_next_prompt uses the last chat log item's console_pos."""
-        job = job_factory(description="Multi-step task")
+        job = job_factory()
 
         # Setup console with multiple outputs
         job.py_env.console = ["Out1", "Out2", "Out3", "Out4", "Out5"]
@@ -135,7 +135,7 @@ class TestJobGetChatHistory:
 
     def test_get_chat_history_empty_chat_log(self, job_factory):
         """Test get_chat_history when chat_log is empty."""
-        job = job_factory(description="Test task")
+        job = job_factory()
 
         # With empty chat_log, should yield nothing
         history = list(job.get_chat_history())
@@ -143,7 +143,7 @@ class TestJobGetChatHistory:
 
     def test_get_chat_history_single_chat_item(self, job_factory):
         """Test get_chat_history with one chat log item."""
-        job = job_factory(description="Process data")
+        job = job_factory()
 
         # Setup console
         job.py_env.console_append("Output 1")
@@ -157,12 +157,12 @@ class TestJobGetChatHistory:
 
         # Should have 2 elements: [user_message, llm_response]
         assert len(history) == 2
-        assert history[0] == "Process data\n> Output 1\n> Output 2"
+        assert history[0] == "Test task\n> Output 1\n> Output 2"
         assert history[1] == "LLM response 1"
 
     def test_get_chat_history_multiple_chat_items(self, job_factory):
         """Test get_chat_history with multiple chat log items."""
-        job = job_factory(description="Multi-step task")
+        job = job_factory()
 
         # Setup console with multiple outputs
         job.py_env.console = ["Out1", "Out2", "Out3", "Out4", "Out5"]
@@ -179,7 +179,7 @@ class TestJobGetChatHistory:
         assert len(history) == 6
 
         # First user message: initial prompt + console from 0 to 2
-        assert history[0] == "Multi-step task\n> Out1\n> Out2"
+        assert history[0] == "Test task\n> Out1\n> Out2"
         # First assistant response
         assert history[1] == "resp1"
         # Second user message: console from 2 to 4
@@ -197,7 +197,7 @@ class TestJobGetNextRequest:
 
     def test_get_next_request_first_request_no_history(self, job_factory):
         """Test get_next_request for the first request with no chat history."""
-        job = job_factory(description="Analyze data")
+        job = job_factory()
 
         # Add some console output
         job.py_env.console_append("Output 1")
@@ -211,7 +211,7 @@ class TestJobGetNextRequest:
         assert "system_prompt" in request
 
         # Verify prompt includes description and console
-        assert request["prompt"] == "Analyze data\n> Output 1\n> Output 2"
+        assert request["prompt"] == "Test task\n> Output 1\n> Output 2"
 
         # Verify chat_history is empty generator (no history yet)
         assert not list(request["chat_history"])
@@ -224,7 +224,7 @@ class TestJobGetNextRequest:
 
     def test_get_next_request_with_session_id(self, job_factory):
         """Test get_next_request includes session_id when set."""
-        job = job_factory(description="Process data")
+        job = job_factory()
         job.session_id = "test-session-123"
 
         request = job.get_next_request()
@@ -235,7 +235,7 @@ class TestJobGetNextRequest:
 
     def test_get_next_request_with_chat_history(self, job_factory):
         """Test get_next_request with existing chat history."""
-        job = job_factory(description="Multi-step task")
+        job = job_factory()
 
         # Setup console
         job.py_env.console = ["Out1", "Out2", "Out3", "Out4"]
@@ -252,14 +252,14 @@ class TestJobGetNextRequest:
         # Verify chat_history contains alternating messages
         history = list(request["chat_history"])
         assert len(history) == 4
-        assert history[0] == "Multi-step task\n> Out1\n> Out2"
+        assert history[0] == "Test task\n> Out1\n> Out2"
         assert history[1] == "Response 1"
         assert history[2] == "> Out3\n> Out4"
         assert history[3] == "Response 2"
 
     def test_get_next_request_structure(self, job_factory):
         """Test that get_next_request returns a proper dictionary structure."""
-        job = job_factory(description="Test")
+        job = job_factory()
         job.session_id = "session-abc"
 
         request = job.get_next_request()
@@ -276,24 +276,24 @@ class TestJobGetNextRequest:
 
     def test_get_next_request_empty_console_no_history(self, job_factory):
         """Test get_next_request with no console output and no history."""
-        job = job_factory(description="Simple task")
+        job = job_factory()
 
         request = job.get_next_request()
 
         # Prompt should be just the description
-        assert request["prompt"] == "Simple task"
+        assert request["prompt"] == "Test task"
         assert not list(request["chat_history"])
         assert "session_id" not in request
 
     def test_last_response_empty_chat_log(self, job_factory):
         """Test last_response returns None when chat_log is empty."""
-        job = job_factory(description="Test job")
+        job = job_factory()
         assert job.chat_log == []
         assert job.last_response is None
 
     def test_last_response_with_chat_log(self, job_factory):
         """Test last_response returns the llm_resp from the last chat log item."""
-        job = job_factory(description="Test job")
+        job = job_factory()
 
         # Add chat log items
         job.chat_log.append(create_chat_log_item(
@@ -311,8 +311,7 @@ class TestJobSetStatus:  # pylint: disable=too-few-public-methods
 
     def test_set_status_initial(self, job_factory):
         """Test setting initial job status."""
-
-        job = job_factory(description="Test task")
+        job = job_factory()
 
         # Initial status should be READY
         assert job.status == JobStatus.READY  # pylint: disable=no-member
@@ -334,7 +333,7 @@ class TestJobAppendChatLog:
 
     def test_append_chat_log_empty_console(self, job_factory):
         """Test append_chat_log with empty console."""
-        job = job_factory(description="Test task")
+        job = job_factory()
 
         # Create a request (doesn't matter for this test)
         request = job.get_next_request()
@@ -350,7 +349,7 @@ class TestJobAppendChatLog:
 
     def test_append_chat_log_with_console_output(self, job_factory):
         """Test append_chat_log with console output."""
-        job = job_factory(description="Process data")
+        job = job_factory()
 
         # Add console output
         job.py_env.console_append("Output 1")
@@ -369,7 +368,7 @@ class TestJobAppendChatLog:
 
     def test_append_chat_log_multiple_times(self, job_factory):
         """Test append_chat_log called multiple times."""
-        job = job_factory(description="Multi-step task")
+        job = job_factory()
 
         # First interaction
         job.py_env.console_append("Step 1 output")

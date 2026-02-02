@@ -83,6 +83,7 @@ class MessageDispatcher(SupervisedAgent):
         super().__init__(
             role="message_dispatcher",
             _system_prompt=MESSAGE_DISPATCHER_SYSTEM_PROMPT,
+            _prompt_template="",  # MessageDispatcher doesn't use prompt_template
             _tools=basic_tools,
             _X__context=x_context
         )

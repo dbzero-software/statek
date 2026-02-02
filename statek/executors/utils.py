@@ -17,6 +17,7 @@ from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus
 from statek.llm_api import LLM_API
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log
+from statek.system import inject_context
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -127,7 +128,7 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         global_context.update(job.job_def.agent.context)
     for tool in job.job_def.agent._tools:
-        global_context[tool.__name__] = tool
+        global_context[tool.__name__] = inject_context(tool, job.job_def.agent._local_context)
     
     # Create custom functions
     custom_print_fn = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
@@ -144,6 +145,10 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     local_context['_smart_call'] = _smart_call
     local_context['_wrap_param'] = _wrap_param
     local_context['exit'] = custom_exit_fn
+    global_context['print'] = custom_print_fn
+    global_context['exit'] = custom_exit_fn
+    global_context['_smart_call'] = _smart_call
+    global_context['_wrap_param'] = _wrap_param
     
     try:
         yield custom_print_fn, custom_exit_fn
@@ -479,8 +484,7 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
             # Create job definition
             job_def = JobDef(
                 agent=agent,
-                description=None,
-                goal=None,
+                job_params=None,
                 warmup_code=warmup_code
             )
             

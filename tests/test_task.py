@@ -15,7 +15,7 @@ class TestCopyLocals:
         scope_locals = {'func': print, 'x': 1, 'y': 2, 'w': 3, 'unused': 999}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'func': print, 'x': 1, 'y': 2, 'w': 3}
 
 
@@ -29,7 +29,7 @@ class TestCopyLocals:
         scope_locals = {'obj': obj, 'value': 100}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'obj': obj}
 
     def test_copy_locals_method_call(self):
@@ -38,7 +38,7 @@ class TestCopyLocals:
         scope_locals = {'obj': object(), 'arg1': 'a', 'arg2': 'b', 'unused': 'c'}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert 'obj' in dest
         assert 'arg1' in dest
         assert 'arg2' in dest
@@ -51,7 +51,7 @@ class TestCopyLocals:
         scope_locals = {'x': 1, 'y': 2, 'z': 3, 'w': 4, 'unused': 5}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'x': 1, 'y': 2, 'z': 3, 'w': 4}
 
 
@@ -61,7 +61,7 @@ class TestCopyLocals:
         scope_locals = {'data': {'foo': 'bar'}, 'key': 'foo', 'unused': 'x'}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'data': {'foo': 'bar'}, 'key': 'foo'}
 
 
@@ -71,7 +71,7 @@ class TestCopyLocals:
         scope_locals = {'x': 10, 'items': [1, 2, 3], 'unused': 999}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'x': 10, 'items': [1, 2, 3]}
         # 'item' is local to the comprehension, should not be copied
 
@@ -87,7 +87,7 @@ class TestCopyLocals:
         scope_locals = {'a': 1, 'b': 2, 'c': 3, 'd': 4, 'x': 10, 'y': 20}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         # Should include a, b, c, d from first two lines
         # and x, y from third line (referencing existing scope_locals)
         assert 'a' in dest
@@ -106,7 +106,7 @@ class TestCopyLocals:
 
         # Should not raise an exception
         with pytest.raises(SyntaxError):
-            copy_locals(code, scope_locals, dest)
+            copy_locals(code, dest, scope_locals)
 
 
     def test_copy_locals_empty_code(self):
@@ -115,7 +115,7 @@ class TestCopyLocals:
         scope_locals = {'x': 1, 'y': 2}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert not dest
 
 
@@ -125,7 +125,7 @@ class TestCopyLocals:
         scope_locals = {'y': 1, 'z': 2}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert not dest # x is being assigned, not referenced
 
 
@@ -135,7 +135,7 @@ class TestCopyLocals:
         scope_locals = {'items': [1, 2, 3], 'values': [5, 10], 'len': 'custom', 'max': 'custom'}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         # Should copy items and values, and also len/max if they're in scope_locals
         assert 'items' in dest
         assert 'values' in dest
@@ -150,7 +150,7 @@ class TestCopyLocals:
         scope_locals = {'x': 1, 'y': 2, 'condition': True, 'unused': 3}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'x': 1, 'y': 2, 'condition': True}
 
 
@@ -182,20 +182,19 @@ class TestDelegateTask:
         self, db0_fixture, supervised_agent, mock_settings
     ):
         """Test delegate_task creates a Job with correct parameters."""
-        prompt = "Process this data"
-        result = delegate_task(supervised_agent, prompt)
+        result = delegate_task(supervised_agent)
 
         # Verify result is TaskFutureResult with a Job
         assert result.job.model_family == "OPENAI"
         assert result.job.model == "gpt-4"
         assert result.job.job_def.agent is supervised_agent
-        assert result.job.job_def.prompt() == prompt
+        # Prompt comes from agent's __prompt_template
+        assert result.job.job_def.prompt() == "Test task"
 
     def test_delegate_task_with_warmup_code_copies_referenced_locals(
         self, db0_fixture, supervised_agent, mock_settings
     ):
         """Test delegate_task copies referenced local variables when warmup_code is provided."""
-        prompt = "Process this data"
         warmup_code = "result = x + y"
 
         # Simulate calling delegate_task from a function with local variables
@@ -203,7 +202,7 @@ class TestDelegateTask:
         y = 20
         unused_var = 999
 
-        result = delegate_task(supervised_agent, prompt, warmup_code=warmup_code)
+        result = delegate_task(supervised_agent, warmup_code=warmup_code)
 
         # Verify local_state contains referenced variables
         assert result.job.py_env.local_state["x"] == 10
@@ -212,33 +211,38 @@ class TestDelegateTask:
         # Verify unused variable was not copied
         assert 'unused_var' not in result.job.py_env.local_state
 
-    def test_delegate_task_with_kwargs(self, db0_fixture, supervised_agent, mock_settings):
-        """Test delegate_task passes kwargs to agent.create_job_def."""
-        prompt = "Process {data_type} for {user}"
+    def test_delegate_task_with_kwargs(self, db0_fixture, mock_settings):
+        """Test delegate_task passes kwargs as job_params to agent.create_job_def."""
+        from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+
+        # Create agent with prompt template that uses job_params
+        agent = SupervisedAgent(
+            role="test",
+            _system_prompt="Test agent",
+            _prompt_template="Process {data_type} for {user}",
+            _tools=[]
+        )
 
         result = delegate_task(
-            supervised_agent,
-            prompt,
+            agent,
             data_type="orders",
             user="Alice"
         )
 
-        assert result.job.job_def.context["data_type"] == "orders"
-        assert result.job.job_def.context["user"] == "Alice"
+        assert result.job.job_def.job_params["data_type"] == "orders"
+        assert result.job.job_def.job_params["user"] == "Alice"
         assert result.job.job_def.prompt() == "Process orders for Alice"
 
     def test_delegate_task_future_result(self, db0_fixture, supervised_agent, mock_settings):
-        """Test delegate_task passes kwargs to agent.create_job_def."""
-        prompt = "Process this data"
-
-        result = delegate_task(supervised_agent, prompt)
+        """Test delegate_task returns proper future result."""
+        result = delegate_task(supervised_agent)
 
         assert result.check_condition() is False
 
         with pytest.raises(FutureError):
             _ = result.value
 
-        result.job.status = JobStatus.DONE
+        result.job.set_status(JobStatus.DONE)
         assert result.check_condition()
 
         result.job.py_env.exit_status = "OK"

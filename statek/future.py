@@ -180,18 +180,53 @@ def _handle_temporal_function_result(
     return result
 
 
-def temporal(complement: Callable[[FutureResult], Any], condition: Callable[[FutureResult], bool]):
+def temporal(complement: Callable[[FutureResult], Any] = None,
+             condition: Callable[[FutureResult], bool] = None,
+             extends: Callable = None):
     """Decorates a temporal function to properly handle future results.
 
-    This decorator is mandatory for marking temporal functions.
+    This decorator is mandatory for marking temporal functions. A temporal function
+    can either define its own complement/condition functions, or extend another
+    temporal function by forwarding to it with modified arguments.
 
     Args:
         complement: Function to retrieve the result value when temporal function completes.
+                   Not required when extending another function.
         condition: Function to check if completion criteria was met.
+                  Not required when extending another function.
+        extends: Another temporal function to extend. When provided, this function
+                should forward to the extended function and return its result.
 
     Returns:
         Decorated temporal function
+
+    Examples:
+        # Define a new temporal function
+        @temporal(complement=get_result, condition=is_complete)
+        def my_func(x: int) -> FutureResult:
+            return FutureResult(...)
+
+        # Extend an existing temporal function
+        @temporal(extends=my_func)
+        def extended_func(x: str) -> FutureResult:
+            return my_func(int(x))
     """
+    # Validate arguments
+    if extends is not None:
+        # When extending, we don't need complement/condition
+        if complement is not None or condition is not None:
+            raise ValueError("Cannot specify both 'extends' and 'complement'/'condition'")
+        # Get complement/condition from extended function
+        if not hasattr(extends, '__temporal_complement__') or \
+           not hasattr(extends, '__temporal_condition__'):
+            raise ValueError(
+                f"Cannot extend {extends.__name__}: it is not a temporal function")
+        complement = extends.__temporal_complement__
+        condition = extends.__temporal_condition__
+    else:
+        # When not extending, complement and condition are required
+        if complement is None or condition is None:
+            raise ValueError("Must specify either 'extends' or both 'complement' and 'condition'")
 
     def decorator(f):
         if inspect.iscoroutinefunction(f):
@@ -200,6 +235,10 @@ def temporal(complement: Callable[[FutureResult], Any], condition: Callable[[Fut
                 result = await f(*args, **kwargs)
                 return _handle_temporal_function_result(result, complement, condition)
             async_wrapper.__is_temporal__ = True
+            async_wrapper.__temporal_complement__ = complement
+            async_wrapper.__temporal_condition__ = condition
+            if extends is not None:
+                async_wrapper.__extends__ = extends
             return async_wrapper
 
         @functools.wraps(f)
@@ -207,6 +246,10 @@ def temporal(complement: Callable[[FutureResult], Any], condition: Callable[[Fut
             result = f(*args, **kwargs)
             return _handle_temporal_function_result(result, complement, condition)
         wrapper.__is_temporal__ = True
+        wrapper.__temporal_complement__ = complement
+        wrapper.__temporal_condition__ = condition
+        if extends is not None:
+            wrapper.__extends__ = extends
         return wrapper
 
     return decorator
