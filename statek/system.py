@@ -1,15 +1,51 @@
 from typing import Any, Callable, Tuple, Dict
 import functools
 import inspect
+from functools import wraps
+from copy import copy
 from .future import get_any_future, get_all_future
+
+
+def inject_context(func, __local_context):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        if "_local_context" in kwargs:
+            raise RuntimeError("_local_context is already set")
+
+        # defensive copy per invocation
+        kwargs["_local_context"] = copy(__local_context)
+
+        return func(*args, **kwargs)
+    return wrapped
 
 
 def tool(f):
     """Marks a function as a tool for LLM agent."""
+    
+    # Check if the function signature includes **kwargs
+    sig = inspect.signature(f)
+    has_var_keyword = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD 
+        for param in sig.parameters.values()
+    )
+    
+    if not has_var_keyword:
+        raise TypeError(
+            f"Function '{f.__name__}' must accept **kwargs to be used as a tool. "
+            f"Current signature: {sig}"
+        )
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        return f(*args, **kwargs)
+        # update globals with local context
+        result = None
+        if inspect.iscoroutinefunction(f):
+            # If f is async, run it using the event loop
+            result = asyncio.get_running_loop().run_until_complete(f(*args, **kwargs))
+        else:
+            # If f is sync, just call it
+            result = f(*args, **kwargs)
+        return result
     return wrapper
 
 
@@ -32,10 +68,13 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
     """
     if tool_name in context:
         raise ValueError(f"tool {tool_name} already exists within the context")
+    
+    # Capture the bound kwargs
+    bound_kwargs = kwargs
 
-    def tool_func():
+    def tool_func(**_tool_kwargs):
         # Call the function with bound arguments
-        return callable(*args, **kwargs)
+        return callable(*args, **bound_kwargs)
 
     # Set the function name and docstring
     tool_func.__name__ = tool_name
@@ -48,7 +87,7 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
 
 
 @tool
-def docs(tool_or_class: type | Callable, method_name: str = None):
+def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):
     """Prints the docstring associated with either a tool, class or its member name.
 
     Args:
@@ -92,7 +131,7 @@ def docs(tool_or_class: type | Callable, method_name: str = None):
 
 
 @tool
-def get_any(*args: Any) -> Any:
+def get_any(*args: Any, **kwargs) -> Any:
     """Waits until evaluation of given values completes and returns the first available result.
     
     Args:
@@ -108,7 +147,7 @@ def get_any(*args: Any) -> Any:
 
 
 @tool
-def get_all(*args: Any) -> Tuple[Any]:
+def get_all(*args: Any, **kwargs) -> Tuple[Any]:
     """Waits until evaluation of all given values completes and combines the results.
     
     Args:

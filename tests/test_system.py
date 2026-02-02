@@ -139,7 +139,7 @@ class TestDocs:
     def test_docs_with_tool_function(self, capsys):
         """Test docs with a function decorated by @tool."""
         @tool
-        def decorated_func():
+        def decorated_func(**kwargs):
             """This function is decorated."""
 
         docs(decorated_func)

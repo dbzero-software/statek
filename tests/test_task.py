@@ -15,7 +15,7 @@ class TestCopyLocals:
         scope_locals = {'func': print, 'x': 1, 'y': 2, 'w': 3, 'unused': 999}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'func': print, 'x': 1, 'y': 2, 'w': 3}
 
 
@@ -29,7 +29,7 @@ class TestCopyLocals:
         scope_locals = {'obj': obj, 'value': 100}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'obj': obj}
 
     def test_copy_locals_method_call(self):
@@ -38,7 +38,7 @@ class TestCopyLocals:
         scope_locals = {'obj': object(), 'arg1': 'a', 'arg2': 'b', 'unused': 'c'}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert 'obj' in dest
         assert 'arg1' in dest
         assert 'arg2' in dest
@@ -51,7 +51,7 @@ class TestCopyLocals:
         scope_locals = {'x': 1, 'y': 2, 'z': 3, 'w': 4, 'unused': 5}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'x': 1, 'y': 2, 'z': 3, 'w': 4}
 
 
@@ -61,7 +61,7 @@ class TestCopyLocals:
         scope_locals = {'data': {'foo': 'bar'}, 'key': 'foo', 'unused': 'x'}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'data': {'foo': 'bar'}, 'key': 'foo'}
 
 
@@ -71,7 +71,7 @@ class TestCopyLocals:
         scope_locals = {'x': 10, 'items': [1, 2, 3], 'unused': 999}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'x': 10, 'items': [1, 2, 3]}
         # 'item' is local to the comprehension, should not be copied
 
@@ -87,7 +87,7 @@ class TestCopyLocals:
         scope_locals = {'a': 1, 'b': 2, 'c': 3, 'd': 4, 'x': 10, 'y': 20}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         # Should include a, b, c, d from first two lines
         # and x, y from third line (referencing existing scope_locals)
         assert 'a' in dest
@@ -106,7 +106,7 @@ class TestCopyLocals:
 
         # Should not raise an exception
         with pytest.raises(SyntaxError):
-            copy_locals(code, scope_locals, dest)
+            copy_locals(code, dest, scope_locals)
 
 
     def test_copy_locals_empty_code(self):
@@ -115,7 +115,7 @@ class TestCopyLocals:
         scope_locals = {'x': 1, 'y': 2}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert not dest
 
 
@@ -125,7 +125,7 @@ class TestCopyLocals:
         scope_locals = {'y': 1, 'z': 2}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert not dest # x is being assigned, not referenced
 
 
@@ -135,7 +135,7 @@ class TestCopyLocals:
         scope_locals = {'items': [1, 2, 3], 'values': [5, 10], 'len': 'custom', 'max': 'custom'}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         # Should copy items and values, and also len/max if they're in scope_locals
         assert 'items' in dest
         assert 'values' in dest
@@ -150,7 +150,7 @@ class TestCopyLocals:
         scope_locals = {'x': 1, 'y': 2, 'condition': True, 'unused': 3}
         dest = {}
 
-        copy_locals(code, scope_locals, dest)
+        copy_locals(code, dest, scope_locals)
         assert dest == {'x': 1, 'y': 2, 'condition': True}
 
 
