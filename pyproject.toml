@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 dev = [
@@ -38,6 +38,9 @@ Repository = "https://github.com/yourusername/statek"
 where = ["."]
 include = ["statek*"]
 exclude = ["tests*", "experiments*"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
 
 [tool.pylint.messages_control]
 disable = ["C0111", "C0103"]

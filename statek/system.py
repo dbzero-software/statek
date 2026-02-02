@@ -4,8 +4,9 @@ import functools
 import inspect
 from functools import wraps
 from copy import copy
-from .future import get_any_future, get_all_future
 import nest_asyncio
+from .future import get_any_future, get_all_future
+
 # This library patches asyncio to allow nested event loops
 nest_asyncio.apply()
 

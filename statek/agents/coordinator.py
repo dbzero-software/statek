@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import dbzero as db0
 from statek.agents.agent import Agent, SupervisedAgent
 from statek.system import create_tool, docs
-from statek.task import delegate_task
 
 
 # Coordinator's system prompt
@@ -59,6 +58,9 @@ class Coordinator(SupervisedAgent):
         Args:
             task_agents: Dictionary of available task-specialized agents (by role)
         """
+        # Import here to avoid circular dependency
+        from statek.task import delegate_task # pylint: disable=import-outside-toplevel
+
         # Store task agents
         self.task_agents = task_agents if task_agents is not None else {}
 

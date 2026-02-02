@@ -65,17 +65,41 @@ def find_locals(var_type: Optional[Type] = None,
         Matching variables from the caller's context. If neither var_type nor var_name 
         is specified, all variables from the local context will be yielded.
     """
-    # Get caller's frame and locals
+    # Search through up to 10 frames up the call stack
     caller_frame = inspect.currentframe().f_back
-    caller_locals = caller_frame.f_locals.copy()
+    frames_to_search = []
 
-    # Check if _local_context is set and extend with it
-    if '_local_context' in caller_locals:
-        local_context = caller_locals['_local_context']
-        caller_locals.update(local_context)
+    # Collect up to 10 frames
+    current_frame = caller_frame
+    for _ in range(10):
+        if current_frame is None:
+            break
+        frames_to_search.append(current_frame)
+        current_frame = current_frame.f_back
 
-    # Iterate through caller's local variables
-    for name, value in caller_locals.items():
+    # Aggregate locals from all frames, with priority to closer frames
+    aggregated_locals = {}
+    for frame in reversed(frames_to_search):
+        frame_locals = frame.f_locals.copy()
+
+        # Check if _local_context is set and extend with it
+        if '_local_context' in frame_locals:
+            local_context = frame_locals['_local_context']
+            if local_context is not None and isinstance(local_context, dict):
+                aggregated_locals.update(local_context)
+
+        # Also check if kwargs contains _local_context
+        if 'kwargs' in frame_locals and isinstance(frame_locals['kwargs'], dict):
+            if '_local_context' in frame_locals['kwargs']:
+                local_context = frame_locals['kwargs']['_local_context']
+                if local_context is not None and isinstance(local_context, dict):
+                    aggregated_locals.update(local_context)
+
+        # Update with frame locals (closer frames override)
+        aggregated_locals.update(frame_locals)
+
+    # Iterate through aggregated local variables
+    for name, value in aggregated_locals.items():
         # If no filters specified, yield all variables
         if var_type is None and var_name is None:
             yield value
