@@ -134,14 +134,14 @@ class TestFindLocals:
             'context_var': 42,
             'message': 'from context'
         }
-        
+
         def function_with_context(**kwargs):
             _local_context = kwargs.get('_local_context')
             x = 10
             y = 'local'
             # Should find both local vars and context vars
             return list(find_locals(var_type=int))
-        
+
         # Use inject_context wrapper to inject context_data
         f = inject_context(function_with_context, context_data)
         results = f()

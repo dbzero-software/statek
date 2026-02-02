@@ -1,4 +1,5 @@
 from typing import Any, Callable, Tuple, Dict
+import asyncio
 import functools
 import inspect
 from functools import wraps
@@ -21,14 +22,14 @@ def inject_context(func, __local_context):
 
 def tool(f):
     """Marks a function as a tool for LLM agent."""
-    
+
     # Check if the function signature includes **kwargs
     sig = inspect.signature(f)
     has_var_keyword = any(
-        param.kind == inspect.Parameter.VAR_KEYWORD 
+        param.kind == inspect.Parameter.VAR_KEYWORD
         for param in sig.parameters.values()
     )
-    
+
     if not has_var_keyword:
         raise TypeError(
             f"Function '{f.__name__}' must accept **kwargs to be used as a tool. "
@@ -68,7 +69,7 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
     """
     if tool_name in context:
         raise ValueError(f"tool {tool_name} already exists within the context")
-    
+
     # Capture the bound kwargs
     bound_kwargs = kwargs
 
@@ -87,7 +88,7 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
 
 
 @tool
-def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):
+def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
     """Prints the docstring associated with either a tool, class or its member name.
 
     Args:
@@ -131,7 +132,7 @@ def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):
 
 
 @tool
-def get_any(*args: Any, **kwargs) -> Any:
+def get_any(*args: Any, **kwargs) -> Any:  # pylint: disable=unused-argument
     """Waits until evaluation of given values completes and returns the first available result.
     
     Args:
@@ -147,7 +148,7 @@ def get_any(*args: Any, **kwargs) -> Any:
 
 
 @tool
-def get_all(*args: Any, **kwargs) -> Tuple[Any]:
+def get_all(*args: Any, **kwargs) -> Tuple[Any]:  # pylint: disable=unused-argument
     """Waits until evaluation of all given values completes and combines the results.
     
     Args:

@@ -49,7 +49,7 @@ def _get_type_hints(func: Callable) -> dict:
 def _format_parameters(func: Callable, hints: dict) -> str:
     """Format all parameters of a callable."""
     sig = inspect.signature(func)
-    params = [_format_parameter(name, param, hints) 
+    params = [_format_parameter(name, param, hints)
               for name, param in sig.parameters.items()
               if not name.startswith('_')]  # Skip internal parameters
     return ", ".join(params)
