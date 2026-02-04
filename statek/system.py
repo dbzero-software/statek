@@ -7,8 +7,7 @@ from copy import copy
 import nest_asyncio
 from .future import get_any_future, get_all_future
 
-# This library patches asyncio to allow nested event loops
-nest_asyncio.apply()
+
 
 
 def inject_context(func, __local_context):
@@ -23,6 +22,7 @@ def inject_context(func, __local_context):
         return func(*args, **kwargs)
     return wrapped
 
+nest_asyncio_applied = False
 
 def tool(f):
     """Marks a function as a tool for LLM agent."""
@@ -42,9 +42,15 @@ def tool(f):
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+
         # update globals with local context
         result = None
         if inspect.iscoroutinefunction(f):
+            # This library patches asyncio to allow nested event loops
+            global nest_asyncio_applied
+            if not nest_asyncio_applied:
+                nest_asyncio.apply()
+                nest_asyncio_applied = True
             # If f is async, run it using the event loop
             result = asyncio.get_running_loop().run_until_complete(f(*args, **kwargs))
         else:
