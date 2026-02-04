@@ -47,7 +47,7 @@ def tool(f):
         result = None
         if inspect.iscoroutinefunction(f):
             # This library patches asyncio to allow nested event loops
-            global nest_asyncio_applied
+            global nest_asyncio_applied  # pylint:disable=global-statement
             if not nest_asyncio_applied:
                 nest_asyncio.apply()
                 nest_asyncio_applied = True
