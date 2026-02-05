@@ -16,6 +16,24 @@ class Agent:
     _tools: List[Callable]
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
 
+    def __post_init__(self):
+        """
+        Apply prompt configuration from StatekSettings after initialization.
+        
+        If a prompt definition exists for this agent's role, it will override
+        the _system_prompt and _prompt_template values.
+        """
+        from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+        
+        settings = get_statek_settings()
+        prompt_def = settings.get_prompt_def(self.role)
+        
+        if prompt_def is not None:
+            if prompt_def.system:
+                self._system_prompt = prompt_def.system
+            if prompt_def.template:
+                self._prompt_template = prompt_def.template
+
     @property
     def system_prompt(self) -> str:
         """

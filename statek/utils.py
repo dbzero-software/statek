@@ -51,7 +51,7 @@ def _format_parameters(func: Callable, hints: dict) -> str:
     sig = inspect.signature(func)
     params = [_format_parameter(name, param, hints)
               for name, param in sig.parameters.items()
-              if not name.startswith('_')]  # Skip internal parameters
+              if not name.startswith('_') and name != 'kwargs']  # Skip internal parameters and kwargs
     return ", ".join(params)
 
 

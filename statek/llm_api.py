@@ -151,6 +151,12 @@ class OpenRouter_API(LLM_API):
         """
         messages = self._build_messages(prompt, system_prompt, chat_history)
 
+        # Log the user message at INFO level
+        user_messages = [msg for msg in messages if msg['role'] == 'user']
+        if user_messages:
+            last_user_message = user_messages[-1]['content']
+            STATEK_LOGGER.info(f"User message to LLM:\\n{last_user_message}")
+
         # Prepare the request payload
         payload = {
             "model": self.model,
@@ -159,7 +165,7 @@ class OpenRouter_API(LLM_API):
         messages_str = "Sending request to OpenRouter with the following messages:\n"
         for message in messages:
             messages_str += f"Message role: {message['role']}, content: {message['content']}\n"
-        statek_log(messages_str)
+        statek_log(messages_str, level='debug')
         # set any additional parameters from kwargs
         payload.update(self.kwargs)
         # Prepare headers
@@ -169,6 +175,8 @@ class OpenRouter_API(LLM_API):
         }
 
         # Make the async HTTP request
+        import time
+        start_time = time.time()
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 self.api_url,
@@ -183,6 +191,10 @@ class OpenRouter_API(LLM_API):
             # Extract the response text
             # OpenRouter follows OpenAI's response format
             response_text = data["choices"][0]["message"]["content"]
+            
+            # Log response time
+            elapsed_time = time.time() - start_time
+            STATEK_LOGGER.info(f"LLM response time: {elapsed_time:.2f} seconds")
 
             # OpenRouter is stateless, so session_id is None
             return LLM_Response(text=response_text, session_id=None)

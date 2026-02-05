@@ -105,6 +105,8 @@ def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
     output = sep.join(str(arg) for arg in args) + end
     job.py_env.console_append(output)
+    # Log console output at INFO level
+    STATEK_LOGGER.info(f"Console output: {output.rstrip()}")
 
 def custom_exit(job, status=None):
     """Custom exit function that sets exit status."""
@@ -134,11 +136,13 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     custom_print_fn = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
     custom_exit_fn = lambda status=None: custom_exit(job, status)
     
-    # Save original built-in print to restore later
+    # Save original built-ins to restore later
     original_print = builtins.print
+    original_exit = builtins.exit
     
-    # Monkey-patch builtins.print so it works even in pre-defined functions
+    # Monkey-patch builtins so they work even in pre-defined functions
     builtins.print = custom_print_fn
+    builtins.exit = custom_exit_fn
     
     # Inject into local context
     local_context['print'] = custom_print_fn
@@ -153,8 +157,9 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     try:
         yield custom_print_fn, custom_exit_fn
     finally:
-        # Restore original built-in print
+        # Restore original built-ins
         builtins.print = original_print
+        builtins.exit = original_exit
         
         # Remove helpers from context
         for key in ['print', 'exit', '_smart_call', '_wrap_param']:
@@ -187,7 +192,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
         local_state might be updated by the program
     """
     # Global and local contexts needs to be dictionaries in order to be used with exec
-    statek_log(f"Executing code step (instr_num={instr_num}):\n{code_str}")
+    statek_log(f"Executing code step (instr_num={instr_num}):\n{code_str}", level='debug')
     if job.py_env.global_state is None:
         global_context = globals()
     else:
@@ -316,7 +321,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         job.session_id = response.session_id
 
     # Step 12: Add new log item using append_chat_log
-    statek_log(f"LLM Response:\n{response.text}")
+    statek_log(f"LLM Response:\n{response.text}", level='info')
     job.append_chat_log(request, response.text)
 
     # Step 13: Return False
@@ -337,7 +342,7 @@ def unsuspend_jobs():
     # Find all suspended jobs
     suspended_jobs = db0.find(Job, JobStatus.SUSPENDED)
     if len(suspended_jobs) != 0:
-        statek_log(f"Found {len(suspended_jobs)} suspended jobs")
+        statek_log(f"Found {len(suspended_jobs)} suspended jobs", level='debug')
     for job in suspended_jobs:
         # Check if the job has an awaited_result and if its condition is satisfied
         condition_met = job.awaited_result.check_condition()
@@ -387,7 +392,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
         # Step 4: Submit run_job_step for jobs that aren't already pending
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:
-            statek_log("Adding new jobs to pending tasks")
+            statek_log("Adding new jobs to pending tasks", level='debug')
             for job in ready_or_started_jobs:
                 # Create task for this job. Add all tasks to pending_tasks
                 task = asyncio.create_task(job_worker(semaphore, job, provider))
@@ -444,7 +449,7 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
     """
     from statek.executors.job import JobDef
     from statek.pyenv import PyEnv
-    statek_log("Starting agentic loop...")
+    statek_log("Starting agentic loop...", level='debug')
     def start_jobs_func(capacity: int):
         """
         Internal function to create new jobs based on available capacity and pending tasks.
@@ -479,7 +484,7 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
             return
         
         # Create the new jobs
-        statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}")
+        statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='debug')
         for _ in range(jobs_to_create):
             # Create job definition
             job_def = JobDef(
