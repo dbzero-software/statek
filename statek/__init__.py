@@ -1,6 +1,7 @@
 """statek package."""
 
-from .settings import LLM_API_Settings, StatekSettings, PromptDef, update_prompt_config
+from .settings import LLM_API_Settings, StatekSettings
+from .prompt_config import PromptDef, update_prompt_config
 from .llm_api import LLM_API, OpenRouter_API, LLM_Response
 from .system import tool, docs, get_any, get_all
 

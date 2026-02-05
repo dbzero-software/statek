@@ -19,15 +19,22 @@ class Agent:
     def __post_init__(self):
         """
         Apply prompt configuration from StatekSettings after initialization.
-        
+
         If a prompt definition exists for this agent's role, it will override
         the _system_prompt and _prompt_template values.
         """
-        from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
-        
+        # pylint: disable=import-outside-toplevel,cyclic-import
+        from statek.prompt_config import load_prompt_files
+        from statek.settings import get_statek_settings
+
         settings = get_statek_settings()
+
+        # Load prompt defs if they haven't been loaded yet
+        if not settings.prompt_defs and settings.prompt_files_dir:
+            settings.prompt_defs = load_prompt_files(settings.prompt_files_dir)
+
         prompt_def = settings.get_prompt_def(self.role)
-        
+
         if prompt_def is not None:
             if prompt_def.system:
                 self._system_prompt = prompt_def.system

@@ -1,6 +1,6 @@
 """Tests for system module."""
 
-# pylint: disable=too-few-public-methods
+# pylint: disable=too-few-public-methods,duplicate-code
 
 from typing import Tuple
 import pytest

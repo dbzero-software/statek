@@ -3,7 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
-from statek.settings import StatekSettings, get_provider_settings, get_prompt_def, get_statek_settings
+from statek.settings import StatekSettings, get_provider_settings
 
 
 def test_statek_settings_parses_environment_variables():
@@ -96,7 +96,7 @@ def test_get_prompt_def_from_settings_instance():
     # Create a temporary directory with prompt files
     with tempfile.TemporaryDirectory() as tmpdir:
         prompt_dir = Path(tmpdir)
-        
+
         # Create a test prompt file
         test_prompt = prompt_dir / "test_agent.md"
         test_prompt.write_text("""# System
@@ -105,7 +105,7 @@ You are a test agent. You help with testing.
 # Template
 Test question: {question}
 """)
-        
+
         # Create another prompt file
         another_prompt = prompt_dir / "another_agent.md"
         another_prompt.write_text("""# System
@@ -117,10 +117,10 @@ You are another agent.
 Input: {input}
 Output: {output}
 """)
-        
+
         # Initialize settings with the prompt directory
         settings = StatekSettings(prompt_files_dir=str(prompt_dir))
-        
+
         # Test retrieving existing prompt definition
         prompt_def = settings.get_prompt_def("test_agent")
         assert prompt_def is not None
@@ -128,15 +128,14 @@ Output: {output}
         assert "testing" in prompt_def.system.lower()
         assert "Test question:" in prompt_def.template
         assert "{question}" in prompt_def.template
-        
+
         # Test retrieving another prompt definition
         another_def = settings.get_prompt_def("another_agent")
         assert another_def is not None
         assert "another agent" in another_def.system.lower()
         assert "Input:" in another_def.template
         assert "{output}" in another_def.template
-        
+
         # Test retrieving non-existent prompt definition
         missing_def = settings.get_prompt_def("nonexistent")
         assert missing_def is None
-
