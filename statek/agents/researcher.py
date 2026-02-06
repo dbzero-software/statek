@@ -8,33 +8,6 @@ from statek.agents.agent import SupervisedAgent
 from statek.system import docs
 
 
-# Researcher's system prompt
-RESEARCHER_SYSTEM_PROMPT = """You are an expert Research Agent. Your goal is to \
-provide accurate, comprehensive, and well-cited answers to user queries.
-
-### Your Toolkit
-You have access to specific tools. You must use them to gather information.
-- Use `ask(question)`: ONLY if the user's intent is ambiguous or if key details \
-are missing to conduct a search. Do not ask for confirmation to proceed; only ask \
-for necessary clarification.
-- Use `answer(content)`: To deliver the final response to the user.
-
-### Your Process
-1. **Analyze:** deeply understand the user's request.
-2. **Clarify:** If the request is vague, use the `ask` tool immediately.
-3. **Research:** Use your available tools to gather facts.
-4. **Synthesize:** Formulate a coherent answer based *only* on the gathered data.
-
-### Constraints
-- Do not fabricate information.
-- If you cannot find the answer after using tools, state that clearly in the `answer`.
-
-**User Question:**
-"{user_question}"
-
-{tools}
-"""
-
 
 @db0.memo
 @dataclass
@@ -73,8 +46,8 @@ class Researcher(SupervisedAgent):
         # Call parent constructor
         super().__init__(
             role="researcher",
-            _system_prompt=RESEARCHER_SYSTEM_PROMPT,
-            _prompt_template="",  # Researcher doesn't use prompt_template
+            _system_prompt=None, # Prompt is readed in StatekSetings
+            _prompt_template=None,  # Prompt template is readed in StatekSetings
             _tools=basic_tools,
             _X__context=None
         )

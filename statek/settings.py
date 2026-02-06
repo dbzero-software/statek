@@ -7,6 +7,8 @@ from typing import Optional, Dict
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from statek.prompt_config import PromptDef, load_prompt_files
+
 
 class LLM_API_Settings(BaseSettings):
     """Settings for a specific LLM provider (e.g. OpenAI, OpenRouter, Google).
@@ -33,13 +35,18 @@ class StatekSettings(BaseSettings):
     - OPENAI_API_URL
     - OPENAI_API_KEY
     - OPENAI_DEFAULT_MODEL (optional)
+    - STATEK_PROMPT_FILES_DIR (optional, for prompt definition files)
 
     Attributes:
         llm_api_settings: Dictionary of LLM_API_Settings by provider name
         default_llm_api_provider: The default provider to use
+        prompt_files_dir: Location for prompt .md files (uses current dir if not set)
+        prompt_defs: Dictionary of PromptDef parsed from prompt files
     """
     llm_api_settings: Dict[str, LLM_API_Settings] = Field(default_factory=dict)
     default_llm_api_provider: str = "OPENROUTER"
+    prompt_files_dir: Optional[str] = None
+    prompt_defs: Dict[str, PromptDef] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -48,12 +55,22 @@ class StatekSettings(BaseSettings):
 
         Automatically detects provider-prefixed environment variables and
         creates LLM_API_Settings instances for each provider.
+        Also parses prompt definition files from the configured directory.
         """
         super().__init__(**data)
 
         # Parse environment variables to build llm_api_settings dictionary
         if not self.llm_api_settings:
             self.llm_api_settings = self._parse_llm_providers_from_env()
+
+        if self.prompt_files_dir is None:
+            self.prompt_files_dir = os.environ.get('STATEK_PROMPT_FILES_DIR')
+
+        if not self.prompt_defs:
+            self.prompt_defs = (
+                load_prompt_files(self.prompt_files_dir)
+                if self.prompt_files_dir else {}
+            )
 
     @staticmethod
     def _parse_llm_providers_from_env() -> Dict[str, LLM_API_Settings]:
@@ -94,6 +111,19 @@ class StatekSettings(BaseSettings):
 
         return llm_settings
 
+
+
+    def get_prompt_def(self, name: str) -> Optional[PromptDef]:
+        """Get a prompt definition by name.
+
+        Args:
+            name: The prompt name (typically the agent role name)
+
+        Returns:
+            PromptDef if found, None otherwise
+        """
+        return self.prompt_defs.get(name)
+
     def get_provider_settings(self, provider: Optional[str] = None) -> Optional[LLM_API_Settings]:
         """Get settings for a specific provider or the default provider.
 
@@ -121,9 +151,22 @@ def get_statek_settings() -> StatekSettings:
     return StatekSettings()
 
 
+def get_prompt_def(name: str) -> Optional[PromptDef]:
+    """Get a prompt definition by name from the cached settings.
+
+    Args:
+        name: The prompt name (typically the agent role name)
+
+    Returns:
+        PromptDef if found, None otherwise
+    """
+    settings = get_statek_settings()
+    return settings.get_prompt_def(name)
+
+
 def configure_logging(level: str = "WARNING") -> None:
     """Configure logging for Statek only, without affecting other loggers.
-    
+
     Args:
         level: Logging level as string (DEBUG, INFO, WARNING, ERROR, CRITICAL).
                Defaults to WARNING.
@@ -167,7 +210,7 @@ def get_statek_logger() -> logging.Logger:
 
 def statek_log(message: str, level: str = 'info') -> None:
     """Log a message with separator lines using STATEK_LOGGER.
-    
+
     Args:
         message: The message to log
         level: The log level (info, debug, warning, error, critical). Defaults to 'info'.

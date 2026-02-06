@@ -78,15 +78,6 @@ class TestMessageDispatcher:
         assert isinstance(dispatcher, SupervisedAgent)
         assert dispatcher.role == "message_dispatcher"
 
-    def test_message_dispatcher_system_prompt(self, db0_fixture, create_dispatcher):  # pylint: disable=unused-argument,redefined-outer-name
-        """Test that MessageDispatcher has correct system prompt."""
-        dispatcher = create_dispatcher()
-
-        # Verify system prompt contains key elements
-        assert "Message Dispatcher" in dispatcher.system_prompt
-        assert "analyze an incoming user message" in dispatcher.system_prompt
-        assert "conversation thread" in dispatcher.system_prompt
-
     def test_message_dispatcher_context_tools(self, db0_fixture, create_dispatcher):  # pylint: disable=unused-argument,redefined-outer-name
         """Test that MessageDispatcher context contains all required tools."""
         dispatcher = create_dispatcher()

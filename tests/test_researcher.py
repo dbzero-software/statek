@@ -178,16 +178,6 @@ class TestResearcher:
         assert 'ask' in context1
         assert 'answer' in context1
 
-    def test_researcher_system_prompt_contains_user_question_placeholder(
-        self, db0_fixture  # pylint: disable=unused-argument
-    ):
-        """Test that system prompt contains user_question placeholder."""
-        researcher = Researcher(send_message=sync_send_message)
-
-        assert "{user_question}" in researcher._system_prompt  # pylint: disable=protected-access
-        assert "Research Agent" in researcher._system_prompt  # pylint: disable=protected-access
-        assert "ask" in researcher._system_prompt.lower()  # pylint: disable=protected-access
-        assert "answer" in researcher._system_prompt.lower()  # pylint: disable=protected-access
 
     def test_researcher_ask_tool_has_required_parameter_in_docstring(
         self, db0_fixture  # pylint: disable=unused-argument
