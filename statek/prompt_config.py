@@ -97,8 +97,8 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
             # Quietly skip agents without matching prompt definitions
             continue
 
-        # Update agent's system prompt and template
-        if prompt_def.system:
+        # Update agent's system prompt and template only if changed
+        if prompt_def.system and agent._system_prompt != prompt_def.system:  # pylint: disable=protected-access
             agent._system_prompt = prompt_def.system  # pylint: disable=protected-access
-        if prompt_def.template:
+        if prompt_def.template and agent._prompt_template != prompt_def.template:  # pylint: disable=protected-access
             agent._prompt_template = prompt_def.template  # pylint: disable=protected-access
