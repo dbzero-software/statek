@@ -1,7 +1,7 @@
 # pylint: disable=unused-argument
 """Tests for statek.utils module."""
 
-from typing import Iterable, Union, List, Dict, Optional
+from typing import Iterable, Union, List, Dict, Optional, ForwardRef
 from statek.utils import format_callable_decl, prompt_append_console
 from statek.future import temporal, FutureResult
 
@@ -119,6 +119,31 @@ def test_function_with_iterable():
     result = format_callable_decl(process_items)
     assert "items: Iterable[str]" in result or "items: Iterable" in result
     assert "List[str]" in result or "list[str]" in result
+
+
+def test_function_with_forward_ref():
+    """Test formatting a function with ForwardRef type hints."""
+
+    def send_message(msg: ForwardRef('Message')) -> ForwardRef('Response'):
+        pass
+
+    result = format_callable_decl(send_message)
+    assert result == "def send_message(msg: Message) -> Response"
+    # Ensure ForwardRef(...) wrapper is not present
+    assert "ForwardRef" not in result
+
+
+def test_function_with_forward_ref_in_generic():
+    """Test formatting a function with ForwardRef inside generic types."""
+
+    def get_messages(count: int = 10) -> List[ForwardRef('Message')]:
+        pass
+
+    result = format_callable_decl(get_messages)
+    # Should format as list[Message] not list[ForwardRef('Message')]
+    assert "Message" in result
+    assert "ForwardRef" not in result
+    assert "count: int = 10" in result
 
 
 def test_prompt_append_console_basic():
