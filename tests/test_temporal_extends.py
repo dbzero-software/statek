@@ -94,13 +94,15 @@ class TestTemporalExtends:
         """Test that extended functions report the correct return type via format_callable_decl."""
         # Extended function should report the complement's return type (int), not FutureResult
         result = format_callable_decl(extended_simple_func)
-        assert result == "def extended_simple_func(x: int) -> int"
+        assert result.startswith("def extended_simple_func(x: int) -> int")
+        assert "Extended version that takes int instead of SimpleData" in result
 
         # Chained extension should also report the same return type
         result = format_callable_decl(chained_extended_func)
-        assert result == "def chained_extended_func(x: str) -> int"
+        assert result.startswith("def chained_extended_func(x: str) -> int")
+        assert "Chained extension that takes str" in result
 
         # Base function should also report the complement's return type
         # Note: dbzero wraps the class name with "Memo_" prefix
         result = format_callable_decl(base_simple_func)
-        assert result == "def base_simple_func(data: Memo_SimpleData) -> int"
+        assert result.startswith("def base_simple_func(data: Memo_SimpleData) -> int")

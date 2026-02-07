@@ -214,7 +214,8 @@ class TestCreateTool:
 
         result = format_callable_decl(tool_func)
         assert 'my_tool' in result
-        assert result == 'def my_tool()'
+        assert result.startswith('def my_tool()')
+        assert 'My custom tool' in result
 
     def test_create_tool_with_exception(self):
         """Test that exceptions from the callable are properly raised."""
