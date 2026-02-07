@@ -144,11 +144,9 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     builtins.print = custom_print_fn
     builtins.exit = custom_exit_fn
     
-    # Inject into local context
-    local_context['print'] = custom_print_fn
+    # Inject into local context (excluding print/exit since they're in builtins)
     local_context['_smart_call'] = _smart_call
     local_context['_wrap_param'] = _wrap_param
-    local_context['exit'] = custom_exit_fn
     global_context['print'] = custom_print_fn
     global_context['exit'] = custom_exit_fn
     global_context['_smart_call'] = _smart_call
@@ -354,6 +352,9 @@ def unsuspend_jobs():
 async def job_worker(semaphore, job: Job, provider: str = None):
     async with semaphore:
         try:
+            # Log which agent is running this job
+            agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
+            statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}")
             await run_job_step(job, provider)
         except Exception as e:
             # If job fails, set status to DONE
@@ -362,7 +363,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             job.set_status(JobStatus.DONE)
 
 async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
-    start_jobs_func: Callable = None):
+    start_jobs_func: Callable = None, auto_terminate: bool = False):
     """
     Main loop responsible for processing registered jobs pending execution.
     
@@ -373,6 +374,8 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
         max_concurrency: the execution concurrency level
         provider: the LLM API provider (or None for default)
         start_jobs_func: optional callable for starting new jobs
+        auto_terminate: flag indicating if the loop should be terminated once all jobs 
+                       have been completed; this flag is most useful for testing
     """
     # Track pending job tasks to avoid exceeding max_concurrency
     pending_tasks = {}  # Dict[Job, asyncio.Task]
@@ -414,18 +417,33 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
         else:
             # No pending tasks, just sleep
             await asyncio.sleep(0.3)
+        
+        # Step 6: Check auto_terminate condition after processing
+        if auto_terminate:
+            # Give a small grace period for jobs to transition states before checking
+            # Check if there are any active jobs left (not DONE)
+            active_jobs = db0.find(Job, db0.no([JobStatus.DONE]))
+            # Also check if we have any tasks that might still be completing
+            if len(active_jobs) == 0 and len(pending_tasks) == 0:
+                # Double-check after a brief wait to avoid race conditions
+                await asyncio.sleep(0.5)
+                active_jobs = list(db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED, JobStatus.SUSPENDED]))
+                if not active_jobs and not pending_tasks:
+                    statek_log("Auto-terminate: all jobs completed, exiting loop", level='debug')
+                    break
+    return
 
 
 async def run_agentic_loop(agent: 'Agent', warmup_code: str,
                            task_queue_size_func: Callable, max_concurrency: int = 100,
-                           provider: str = None):
+                           provider: str = None, auto_terminate: bool = False):
     """
     Helper function to start listening on arriving new tasks (e.g incoming user messages) 
     and process them with a specific agent such as Coordinator or MessageDispatcher. 
     
     This function can be used as the agentic system's main loop - where the incoming user 
     messages are processed with a specific specialized agent. Internally the function calls 
-    `run_jobs_loop` and runs indefinitely.
+    `run_jobs_loop`.
     
     Args:
         agent: the Agent instance (e.g. Coordinator or MessageDispatcher)
@@ -434,6 +452,8 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
                               (e.g. incoming messages) awaiting processing
         max_concurrency: maximum number of concurrent jobs (default: 100)
         provider: the default LLM provider (or None for default)
+        auto_terminate: flag indicating if the loop should be terminated once all jobs 
+                       have been completed; this flag is most useful for testing
     
     Example warmup code:
         ```
@@ -462,7 +482,6 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
         if capacity <= 0:
             return
         
-        # Get the number of awaiting tasks
         num_awaiting_tasks = task_queue_size_func()
         
         if num_awaiting_tasks <= 0:
@@ -476,17 +495,13 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
         #FIXME: Change when len of filter returns correct value
         ready_jobs_count = len(list(ready_jobs))
         
-        # Calculate how many new jobs we need to create
-        # N = min(capacity, task_queue_size - ready_jobs)
         jobs_to_create = min(capacity, num_awaiting_tasks - ready_jobs_count)
         
         if jobs_to_create <= 0:
             return
         
-        # Create the new jobs
         statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='debug')
         for _ in range(jobs_to_create):
-            # Create job definition
             job_def = JobDef(
                 agent=agent,
                 job_params=None,
@@ -504,7 +519,6 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
                 settings = get_provider_settings(provider)
                 model_to_use = settings.default_model
             
-            # Create the job
             Job(
                 job_def=job_def,
                 model_family=provider or "default",
@@ -513,9 +527,9 @@ async def run_agentic_loop(agent: 'Agent', warmup_code: str,
                 py_env=pyenv
             )
     
-    # Run the jobs loop indefinitely with our custom start_jobs_func
     await run_jobs_loop(
         max_concurrency=max_concurrency,
         provider=provider,
-        start_jobs_func=start_jobs_func
+        start_jobs_func=start_jobs_func,
+        auto_terminate=auto_terminate
     )

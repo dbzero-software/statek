@@ -185,10 +185,7 @@ def configure_logging(level: str = "WARNING") -> None:
         handler.setLevel(numeric_level)
 
         # Create formatter
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
+        formatter = logging.Formatter('%(message)s')
         handler.setFormatter(formatter)
 
         # Add handler to logger

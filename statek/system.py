@@ -22,8 +22,6 @@ def inject_context(func, __local_context):
         return func(*args, **kwargs)
     return wrapped
 
-nest_asyncio_applied = False
-
 def tool(f):
     """Marks a function as a tool for LLM agent."""
 
@@ -47,10 +45,7 @@ def tool(f):
         result = None
         if inspect.iscoroutinefunction(f):
             # This library patches asyncio to allow nested event loops
-            global nest_asyncio_applied  # pylint:disable=global-statement
-            if not nest_asyncio_applied:
-                nest_asyncio.apply()
-                nest_asyncio_applied = True
+            nest_asyncio.apply()
             # If f is async, run it using the event loop
             result = asyncio.get_running_loop().run_until_complete(f(*args, **kwargs))
         else:

@@ -1,7 +1,7 @@
 """Utility functions for statek package."""
 
 import inspect
-from typing import Callable, List, get_type_hints, get_origin, get_args, Union
+from typing import Callable, List, get_type_hints, get_origin, get_args, Union, ForwardRef
 
 
 def format_callable_decl(func: Callable) -> str:
@@ -9,7 +9,7 @@ def format_callable_decl(func: Callable) -> str:
     Format a callable's declaration to be presented to LLMs.
 
     Reproduces the original Python syntax used in the callable's declaration,
-    without accessing the source code.
+    without accessing the source code. Includes the function's docstring if available.
 
     For temporal functions (decorated with @temporal), reports the return type
     of the complement function instead of the original return type.
@@ -19,7 +19,7 @@ def format_callable_decl(func: Callable) -> str:
 
     Returns:
         The Python declaration string including callable name, argument names,
-        argument types, default values, and return type(s).
+        argument types, default values, return type(s), and docstring.
 
     Examples:
         >>> def send_message(message: str) -> str: pass
@@ -35,7 +35,14 @@ def format_callable_decl(func: Callable) -> str:
     params_str = _format_parameters(func, hints)
     return_annotation = _format_return_annotation(func, hints)
 
-    return f"def {func_name}({params_str}){return_annotation}"
+    decl = f"def {func_name}({params_str}){return_annotation}"
+
+    # Add docstring if available
+    docstring = inspect.getdoc(func)
+    if docstring:
+        decl += f"\n{docstring}"
+
+    return decl
 
 
 def _get_type_hints(func: Callable) -> dict:
@@ -52,8 +59,8 @@ def _format_parameters(func: Callable, hints: dict) -> str:
     params = [
         _format_parameter(name, param, hints)
         for name, param in sig.parameters.items()
-        if not name.startswith('_') and name != 'kwargs'
-    ]  # Skip internal parameters and kwargs
+        if not name.startswith('_') and param.kind != inspect.Parameter.VAR_KEYWORD
+    ]  # Skip internal parameters and **kwargs
     return ", ".join(params)
 
 
@@ -129,7 +136,7 @@ def _extract_complement_return_type(func: Callable) -> str:
     return None
 
 
-def _format_type(type_hint) -> str:
+def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statements
     """
     Format a type hint into a readable string.
 
@@ -139,6 +146,10 @@ def _format_type(type_hint) -> str:
     Returns:
         A string representation of the type hint
     """
+    # Handle ForwardRef objects
+    if isinstance(type_hint, ForwardRef):
+        return type_hint.__forward_arg__
+
     # Handle None type
     if isinstance(type_hint, type(None)):
         return "None"
@@ -161,17 +172,14 @@ def _format_type(type_hint) -> str:
             return f"{origin_name}[{formatted_args}]"
         return getattr(origin, "__name__", str(origin))
 
-    # Handle basic types
+    # Handle basic types with __name__
     if hasattr(type_hint, "__name__"):
         return type_hint.__name__
 
-    # Fallback to string representation
+    # Fallback: clean up string representation
     type_str = str(type_hint)
-
-    # Clean up common type string representations
     if type_str.startswith("typing."):
         type_str = type_str.replace("typing.", "")
-
     return type_str
 
 
