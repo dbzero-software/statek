@@ -51,4 +51,4 @@ You can add comments to show your reasoning. Don't store types in variables.
 ---
 
 # Template
-User Request: {user_request}
+

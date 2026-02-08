@@ -61,7 +61,8 @@ class Job:
         py_env: PyEnv = None,
         chat_log: List[ChatLogItem] = None,
         awaited_result: Optional[FutureResult] = None,
-        next_instr_num: Optional[int] = None
+        next_instr_num: Optional[int] = None,
+        logs_path: Optional[str] = None
     ):
         self.job_def = job_def
         if self.job_def.agent is not None:
@@ -83,6 +84,65 @@ class Job:
         self.awaited_result = awaited_result
         # Continuation instruction number
         self.next_instr_num = next_instr_num
+        # Optional path for logging job execution
+        self.logs_path = logs_path
+        
+        # Log system prompt and warmup code on job creation if logging is enabled
+        if self.logs_path and self.job_def.agent is not None:
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            system_prompt = self.job_def.agent.system_prompt
+            self._log_to_file(f"{system_prompt}\n\n")
+            logger.info("%s", system_prompt)
+            logger.info("")
+            # Log warmup code if present
+            if self.job_def.warmup_code:
+                self._log_to_file(f"{self.job_def.warmup_code}\n\n")
+                logger.info("%s", self.job_def.warmup_code)
+                logger.info("")
+
+    def _log_to_file(self, content: str):
+        """
+        Write content to the log file if logging is enabled.
+        
+        Args:
+            content: The content to write to the log file
+        """
+        if not self.logs_path:
+            return
+            
+        import os
+        
+        # Get agent name and job uuid
+        agent_name = self.job_def.agent.role if self.job_def.agent else "unknown"
+        job_uuid = db0.uuid(db0.materialized(self))
+        log_filename = f"{agent_name}_{job_uuid}.log"
+        log_filepath = os.path.join(self.logs_path, log_filename)
+        
+        # Ensure directory exists
+        os.makedirs(self.logs_path, exist_ok=True)
+        
+        # Append to log file
+        with open(log_filepath, 'a', encoding='utf-8') as f:
+            f.write(content)
+
+    def console_append(self, output: str):
+        """
+        Append output to the console and optionally log it.
+        
+        Args:
+            output: The output string to append
+        """
+        self.py_env.console_append(output)
+        
+        # Log console output if logging is enabled
+        if self.logs_path:
+            # Format each line with >
+            self._log_to_file(f"> {output}\n\n")
+            # Also log to console at INFO level
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            logger.info("> %s", output.rstrip())
 
     @property
     def status(self) -> JobStatus:
@@ -240,6 +300,15 @@ class Job:
             llm_resp=llm_resp
         )
         self.chat_log.append(chat_item)
+        
+        # Log the LLM response if logging is enabled
+        if self.logs_path:
+            self._log_to_file(f"{llm_resp}\n\n")
+            # Also log to console at INFO level
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            logger.info("%s", llm_resp)
+            logger.info("")
 
     @property
     def last_response(self) -> str | None:

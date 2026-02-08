@@ -152,11 +152,11 @@ class OpenRouter_API(LLM_API):
         """
         messages = self._build_messages(prompt, system_prompt, chat_history)
 
-        # Log the user message at INFO level
+        # Log the user message at DEBUG level (actual message logged in utils.py)
         user_messages = [msg for msg in messages if msg['role'] == 'user']
         if user_messages:
             last_user_message = user_messages[-1]['content']
-            STATEK_LOGGER.info("User message to LLM:\n%s", last_user_message)
+            STATEK_LOGGER.debug("User message to LLM:\n%s", last_user_message)
 
         # Prepare the request payload
         payload = {
@@ -192,9 +192,9 @@ class OpenRouter_API(LLM_API):
             # OpenRouter follows OpenAI's response format
             response_text = data["choices"][0]["message"]["content"]
 
-            # Log response time
+            # Log response time at DEBUG level
             elapsed_time = time.time() - start_time
-            STATEK_LOGGER.info("LLM response time: %.2f seconds", elapsed_time)
+            STATEK_LOGGER.debug("LLM response time: %.2f seconds", elapsed_time)
 
             # OpenRouter is stateless, so session_id is None
             return LLM_Response(text=response_text, session_id=None)
