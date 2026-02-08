@@ -192,9 +192,9 @@ class OpenRouter_API(LLM_API):
             # OpenRouter follows OpenAI's response format
             response_text = data["choices"][0]["message"]["content"]
 
-            # Log response time
+            # Log response time at DEBUG level
             elapsed_time = time.time() - start_time
-            STATEK_LOGGER.info("LLM response time: %.2f seconds", elapsed_time)
+            STATEK_LOGGER.debug("LLM response time: %.2f seconds", elapsed_time)
 
             # OpenRouter is stateless, so session_id is None
             return LLM_Response(text=response_text, session_id=None)

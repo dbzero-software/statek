@@ -105,8 +105,8 @@ def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
     output = sep.join(str(arg) for arg in args) + end
     job.console_append(output)
-    # Log console output at INFO level
-    STATEK_LOGGER.info(f"Console output: {output.rstrip()}")
+    # Log console output at DEBUG level
+    STATEK_LOGGER.debug("Console output: %s", output.rstrip())
 
 def custom_exit(job, status=None):
     """Custom exit function that sets exit status."""
@@ -303,6 +303,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
             job.set_status(JobStatus.DONE)
+            # Log exit status to console at INFO
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            logger.info("exit: %s", job.py_env.exit_status)
             return True
 
         # Step 8: Update status WARMING_UP -> STARTED
@@ -325,7 +329,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         job.session_id = response.session_id
 
     # Step 12: Add new log item using append_chat_log
-    statek_log(f"LLM Response:\n{response.text}", level='info')
+    statek_log(f"LLM Response:\n{response.text}", level='debug')
     job.append_chat_log(request, response.text)
 
     # Step 13: Return False
@@ -360,7 +364,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
         try:
             # Log which agent is running this job
             agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
-            statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}")
+            statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}", level='debug')
             await run_job_step(job, provider)
             # Log exit status if job completed successfully
             if job.status == JobStatus.DONE and job.py_env.exit_status is not None:
@@ -370,7 +374,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             # If job fails, write full stack trace to console and set status to DONE
             import traceback
             error_msg = f"Job {db0.uuid(job)} failed with error: {e}\n{traceback.format_exc()}"
-            print(error_msg)
+            statek_log(error_msg, level='debug')
             job.console_append(error_msg)
             job.set_status(JobStatus.DONE)
 

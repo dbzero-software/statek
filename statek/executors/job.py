@@ -89,10 +89,17 @@ class Job:
         
         # Log system prompt and warmup code on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
-            self._log_to_file(f"{self.job_def.agent.system_prompt}\n\n")
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            system_prompt = self.job_def.agent.system_prompt
+            self._log_to_file(f"{system_prompt}\n\n")
+            logger.info("%s", system_prompt)
+            logger.info("")
             # Log warmup code if present
             if self.job_def.warmup_code:
                 self._log_to_file(f"{self.job_def.warmup_code}\n\n")
+                logger.info("%s", self.job_def.warmup_code)
+                logger.info("")
 
     def _log_to_file(self, content: str):
         """
@@ -132,6 +139,10 @@ class Job:
         if self.logs_path:
             # Format each line with >
             self._log_to_file(f"> {output}\n\n")
+            # Also log to console at INFO level
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            logger.info("> %s", output.rstrip())
 
     @property
     def status(self) -> JobStatus:
@@ -293,6 +304,11 @@ class Job:
         # Log the LLM response if logging is enabled
         if self.logs_path:
             self._log_to_file(f"{llm_resp}\n\n")
+            # Also log to console at INFO level
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            logger.info("%s", llm_resp)
+            logger.info("")
 
     @property
     def last_response(self) -> str | None:
