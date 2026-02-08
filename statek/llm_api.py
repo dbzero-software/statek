@@ -152,11 +152,11 @@ class OpenRouter_API(LLM_API):
         """
         messages = self._build_messages(prompt, system_prompt, chat_history)
 
-        # Log the user message at INFO level
+        # Log the user message at DEBUG level (actual message logged in utils.py)
         user_messages = [msg for msg in messages if msg['role'] == 'user']
         if user_messages:
             last_user_message = user_messages[-1]['content']
-            STATEK_LOGGER.info("User message to LLM:\n%s", last_user_message)
+            STATEK_LOGGER.debug("User message to LLM:\n%s", last_user_message)
 
         # Prepare the request payload
         payload = {
