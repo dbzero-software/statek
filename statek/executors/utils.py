@@ -216,9 +216,33 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     continue
                     
                 try:
+                    # Check if this is a standalone expression (like REPL behavior)
+                    is_expression = isinstance(node, ast.Expr)
+                    
                     wrapper = ast.Module(body=[node], type_ignores=[])
                     code_obj = compile(wrapper, filename="<string>", mode="exec")
-                    exec(code_obj, global_context, local_context)
+                    
+                    # If it's an expression, capture and print the result
+                    if is_expression:
+                        # Evaluate the expression and print the result if it's not None
+                        result = eval(compile(ast.Expression(body=node.value), filename="<string>", mode="eval"), 
+                                     global_context, local_context)
+                        if result is not None:
+                            job.console_append(repr(result) + '\n')
+                    else:
+                        exec(code_obj, global_context, local_context)
+                    
+                    # Move functions from local_context to global_context so they can see each other
+                    # (functions capture global_context as __globals__)
+                    import types
+                    functions_to_move = {
+                        key: value for key, value in local_context.items()
+                        if isinstance(value, types.FunctionType)
+                    }
+                    global_context.update(functions_to_move)
+                    for key in functions_to_move:
+                        del local_context[key]
+                    
                     # Check for exit signal
                     if job.py_env.exit_status is not None:
                         break
