@@ -5,9 +5,8 @@ import inspect
 from functools import wraps
 from copy import copy
 import nest_asyncio
+import dbzero as db0
 from .future import get_any_future, get_all_future
-
-
 
 
 def inject_context(func, __local_context):
@@ -21,6 +20,55 @@ def inject_context(func, __local_context):
 
         return func(*args, **kwargs)
     return wrapped
+
+
+_SKIP_KINDS = {inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL}
+_POSITIONAL_KINDS = {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+
+
+def _convert_enum_args(f, args, kwargs):
+    """Convert string arguments to db0 enum values where the parameter is typed as a db0 enum."""
+    try:
+        hints = f.__annotations__
+        sig = inspect.signature(f)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+    except Exception:  # pylint: disable=broad-except
+        return args, kwargs
+
+    if not hints:
+        return args, kwargs
+
+    converted = dict(bound.arguments)
+    changed = False
+
+    for name, value in bound.arguments.items():
+        param = sig.parameters[name]
+        annotation = hints.get(name)
+        if name.startswith("_") or param.kind in _SKIP_KINDS or annotation is None:
+            continue
+        if isinstance(value, str) and db0.is_enum(annotation):
+            converted[name] = annotation[value]
+            changed = True
+
+    if not changed:
+        return args, kwargs
+
+    # Rebuild args and kwargs from converted arguments
+    new_args = []
+    new_kwargs = {}
+    for name, param in sig.parameters.items():
+        if param.kind in _POSITIONAL_KINDS and name in converted:
+            new_args.append(converted[name])
+        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+            new_args.extend(converted.get(name, ()))
+        elif param.kind == inspect.Parameter.KEYWORD_ONLY and name in converted:
+            new_kwargs[name] = converted[name]
+        elif param.kind == inspect.Parameter.VAR_KEYWORD:
+            new_kwargs.update(converted.get(name, {}))
+
+    return tuple(new_args), new_kwargs
+
 
 def tool(f):
     """Marks a function as a tool for LLM agent."""
@@ -40,6 +88,7 @@ def tool(f):
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        args, kwargs = _convert_enum_args(f, args, kwargs)
 
         # update globals with local context
         result = None

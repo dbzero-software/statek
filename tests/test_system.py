@@ -4,6 +4,7 @@
 
 from typing import Tuple
 import pytest
+import dbzero as db0
 from statek.system import docs, tool, create_tool
 from statek.future import get_unpack_size
 from statek.utils import format_callable_decl
@@ -296,3 +297,51 @@ class TestGetUnpackSize:
             return (1, "hello")
 
         assert get_unpack_size(returns_builtin_tuple) == 2
+
+
+class TestToolEnumConversion:
+    """Test cases for automatic str → db0.enum conversion in @tool decorator."""
+
+    def test_string_converted_to_enum(self, db0_fixture):
+        """String arg is converted to the corresponding enum value."""
+        SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
+
+        @tool
+        def alert(level: SeverityLevel, **kwargs):
+            return level
+
+        result = alert("INFO")
+        assert result is SeverityLevel.INFO
+
+    def test_enum_value_passes_through(self, db0_fixture):
+        """Direct enum value is not modified."""
+        SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
+
+        @tool
+        def alert(level: SeverityLevel, **kwargs):
+            return level
+
+        result = alert(SeverityLevel.INFO)
+        assert result is SeverityLevel.INFO
+
+    def test_keyword_arg_conversion(self, db0_fixture):
+        """Keyword arguments are also converted."""
+        SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
+
+        @tool
+        def alert(level: SeverityLevel, **kwargs):
+            return level
+
+        result = alert(level="ERROR")
+        assert result is SeverityLevel.ERROR
+
+    def test_invalid_enum_string_raises(self, db0_fixture):
+        """An invalid enum string raises an exception."""
+        SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
+
+        @tool
+        def alert(level: SeverityLevel, **kwargs):
+            return level
+
+        with pytest.raises(Exception):
+            alert("INVALID")
