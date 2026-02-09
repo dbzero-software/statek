@@ -4,7 +4,7 @@ import inspect
 import traceback
 import asyncio
 import builtins
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence, Union
 from contextlib import contextmanager
 import dbzero as db0
 
@@ -347,9 +347,16 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             logger.info("exit: %s", job.py_env.exit_status)
             return True
 
-        # Step 8: Update status WARMING_UP -> STARTED
+        # Step 8: Handle warmup block progression or transition to STARTED
         if job.status == JobStatus.WARMING_UP:
-            job.set_status(JobStatus.STARTED)
+            if job.has_more_warmup_blocks():
+                # Advance to next warmup block, stay in WARMING_UP
+                job.advance_warmup_block()
+                # Return False to continue execution loop (process next block)
+                return False
+            else:
+                # All warmup blocks completed, transition to STARTED
+                job.set_status(JobStatus.STARTED)
 
     # Step 9: Get LLM API provider
     if provider is None:
@@ -488,21 +495,23 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     return
 
 
-async def run_agentic_loop(agent: 'Agent', warmup_code: str,
+async def run_agentic_loop(agent: 'Agent',
+                           warmup_code: Union[str, Sequence[str]],
                            task_queue_size_func: Callable, max_concurrency: int = 100,
                            provider: str = None, auto_terminate: bool = False,
                            logs_path: Optional[str] = None):
     """
-    Helper function to start listening on arriving new tasks (e.g incoming user messages) 
-    and process them with a specific agent such as Coordinator or MessageDispatcher. 
-    
-    This function can be used as the agentic system's main loop - where the incoming user 
-    messages are processed with a specific specialized agent. Internally the function calls 
+    Helper function to start listening on arriving new tasks (e.g incoming user messages)
+    and process them with a specific agent such as Coordinator or MessageDispatcher.
+
+    This function can be used as the agentic system's main loop - where the incoming user
+    messages are processed with a specific specialized agent. Internally the function calls
     `run_jobs_loop` and runs indefinitely (unless auto_terminate is True).
-    
+
     Args:
         agent: the Agent instance (e.g. Coordinator or MessageDispatcher)
-        warmup_code: the agent's warmup code (e.g. "user, message = fetch_next_message()")
+        warmup_code: the agent's warmup code - single block or sequence of blocks
+                    (e.g. "user, message = fetch_next_message()")
         task_queue_size_func: a function for calculating the number of queued tasks 
                               (e.g. incoming messages) awaiting processing
         max_concurrency: maximum number of concurrent jobs (default: 100)

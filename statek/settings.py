@@ -18,11 +18,13 @@ class LLM_API_Settings(BaseSettings):
         api_key: The API key for authentication
         default_model: Optional default chat model name (e.g. gpt-4, gpt-3.5-turbo)
         response_format_file: Optional path to a JSON file with custom response_format schema
+        use_prompt_caching: Whether to enable prompt caching (Claude-specific)
     """
     api_url: str
     api_key: str
     default_model: Optional[str] = None
     response_format_file: Optional[str] = None
+    use_prompt_caching: bool = False
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -108,6 +110,11 @@ class StatekSettings(BaseSettings):
                 if provider not in providers:
                     providers[provider] = {}
                 providers[provider]['default_model'] = value
+            elif '_USE_PROMPT_CACHING' in key:
+                provider = key.replace('_USE_PROMPT_CACHING', '')
+                if provider not in providers:
+                    providers[provider] = {}
+                providers[provider]['use_prompt_caching'] = value.lower() in ('true', '1', 'yes')
 
         # Create LLM_API_Settings instances for each provider
         llm_settings = {}

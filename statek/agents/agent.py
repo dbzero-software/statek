@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Callable, Dict, Optional
+from typing import List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import format_callable_decl
 from statek.executors.job import JobDef
@@ -91,7 +91,7 @@ class SupervisedAgent(Agent):
     def create_job_def(
         self,
         tools: Optional[List[Callable]] = None,
-        warmup_code: str = None,
+        warmup_code: Optional[Union[str, Sequence[str]]] = None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -100,7 +100,7 @@ class SupervisedAgent(Agent):
 
         Args:
             tools: agent's tools additional tools (currently not used)
-            warmup_code: optional initialization code
+            warmup_code: optional initialization code (single block or sequence of blocks)
             kwargs: job specific parameters for prompt formatting (i.e. job_params)
 
         Returns:

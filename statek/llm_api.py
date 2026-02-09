@@ -50,6 +50,18 @@ class LLM_API(ABC):
         """
 
     @staticmethod
+    def _load_response_format(settings: LLM_API_Settings) -> Optional[dict]:
+        """Load response_format from the JSON file specified in settings.
+
+        Returns:
+            The response_format dict, or None if response_format_file is not set.
+        """
+        if not settings.response_format_file:
+            return None
+        with open(settings.response_format_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    @staticmethod
     @lru_cache
     def get(provider_name: str = None, model: str = None, **kwargs):  # pylint: disable=unused-argument
         """
@@ -60,6 +72,11 @@ class LLM_API(ABC):
             if not settings:
                 raise ValueError("No settings found for OpenRouter provider.")
             return OpenRouter_API(settings=settings, model=model)
+        if provider_name.upper() in ('CLAUDE', 'ANTHROPIC'):
+            settings = get_provider_settings('CLAUDE')
+            if not settings:
+                raise ValueError("No settings found for Claude provider.")
+            return Claude_API(settings=settings, model=model, **kwargs)
         raise ValueError(f"Unsupported LLM API provider: {provider_name}")
 
 
@@ -82,7 +99,7 @@ class OpenRouter_API(LLM_API):
         """
         self.settings = settings
         self.model = model or settings.default_model
-        self.response_format = self._load_response_format(settings)
+        self.response_format = LLM_API._load_response_format(settings)
         # additional kwargs that will be passed to request if needed
         self.kwargs = kwargs
         if not self.model:
@@ -93,18 +110,6 @@ class OpenRouter_API(LLM_API):
 
         self.api_url = settings.api_url
         self.api_key = settings.api_key
-
-    @staticmethod
-    def _load_response_format(settings: LLM_API_Settings) -> Optional[dict]:
-        """Load response_format from the JSON file specified in settings.
-
-        Returns:
-            The response_format dict, or None if response_format_file is not set.
-        """
-        if not settings.response_format_file:
-            return None
-        with open(settings.response_format_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
 
     def _build_messages(
         self,
@@ -215,4 +220,190 @@ class OpenRouter_API(LLM_API):
             STATEK_LOGGER.debug("LLM response time: %.2f seconds", elapsed_time)
 
             # OpenRouter is stateless, so session_id is None
+            return LLM_Response(text=response_text, session_id=None)
+
+
+class Claude_API(LLM_API):
+    """Claude API implementation of LLM_API.
+
+    This class provides a concrete implementation for Anthropic's Claude service,
+    using the Anthropic Python SDK with prompt caching for multi-turn conversations.
+    """
+
+    def __init__(self, settings: LLM_API_Settings, model: Optional[str] = None,
+                 use_prompt_caching: Optional[bool] = None, **kwargs):
+        """Initialize Claude API client.
+
+        Args:
+            settings: LLM_API_Settings containing API URL and key
+            model: Specific model to use. If None, uses default_model from settings
+            use_prompt_caching: Whether to enable prompt caching for system prompts
+                               and conversation history (reduces cost and latency).
+                               If None, uses value from settings (env var CLAUDE_USE_PROMPT_CACHING).
+
+        Raises:
+            ValueError: If no model is specified and no default is available
+        """
+        self.settings = settings
+        self.model = model or settings.default_model
+        self.response_format = LLM_API._load_response_format(settings)
+        self.use_prompt_caching = (
+            use_prompt_caching if use_prompt_caching is not None
+            else settings.use_prompt_caching
+        )
+        self.kwargs = kwargs
+        if not self.model:
+            raise ValueError(
+                "No model specified and no default model available in settings. "
+                "Please provide a model name or configure default_model in settings."
+            )
+        self.api_key = settings.api_key
+
+    def _build_messages(
+        self,
+        prompt: str,
+        chat_history: Optional[Iterable[str]] = None
+    ) -> List[Dict]:
+        """Build the messages list for the Claude API request.
+
+        Args:
+            prompt: The current user prompt
+            chat_history: Optional chat history
+
+        Returns:
+            List of message dictionaries with 'role' and 'content' fields
+        """
+        messages = []
+
+        # Add chat history if provided
+        if chat_history:
+            history_list = list(chat_history)
+            for i, message in enumerate(history_list):
+                # Alternate between user and assistant roles
+                role = "user" if i % 2 == 0 else "assistant"
+                msg = {"role": role, "content": message}
+
+                # Add cache_control to the last history message if caching is enabled
+                if self.use_prompt_caching and i == len(history_list) - 1:
+                    msg["content"] = [
+                        {
+                            "type": "text",
+                            "text": message,
+                            "cache_control": {"type": "ephemeral"}
+                        }
+                    ]
+
+                messages.append(msg)
+
+        # Add current prompt
+        messages.append({"role": "user", "content": prompt})
+
+        return messages
+
+    def _build_system_prompt(self, system_prompt: str) -> List[Dict]:
+        """Build the system prompt with optional cache control.
+
+        Args:
+            system_prompt: The system prompt text
+
+        Returns:
+            System prompt as a list of content blocks (for caching support)
+        """
+        if self.use_prompt_caching:
+            return [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        return system_prompt
+
+    async def process_request(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        chat_history: Optional[Iterable[str]] = None,
+        session_id: Optional[str] = None
+    ) -> LLM_Response:
+        """Process a request to the Claude API using the Messages API.
+
+        Args:
+            prompt: The prompt to be sent to LLM
+            system_prompt: Optional system prompt
+            chat_history: Optional conversation history
+            session_id: Not used (Claude Messages API is stateless)
+
+        Returns:
+            LLM_Response with the generated text and None for session_id
+
+        Raises:
+            httpx.HTTPError: If the API request fails
+            KeyError: If the response format is unexpected
+        """
+        messages = self._build_messages(prompt, chat_history)
+
+        # Log the user message at DEBUG level
+        user_messages = [msg for msg in messages if msg['role'] == 'user']
+        if user_messages:
+            last_user_message = user_messages[-1]['content']
+            STATEK_LOGGER.debug("User message to LLM:\n%s", last_user_message)
+
+        # Prepare the request payload
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.kwargs.get("max_tokens", 4096)
+        }
+
+        # Add system prompt if provided (Claude uses a separate 'system' field)
+        if system_prompt:
+            payload["system"] = self._build_system_prompt(system_prompt)
+
+        messages_str = "Sending request to Claude with the following messages:\n"
+        for message in messages:
+            messages_str += f"Message role: {message['role']}, content: {message['content']}\n"
+        statek_log(messages_str, level='debug')
+
+        # Prepare headers for Claude API
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
+
+        # Add beta header for prompt caching
+        if self.use_prompt_caching:
+            headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+
+        # Make the async HTTP request
+        start_time = time.time()
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                json=payload,
+                headers=headers
+            )
+            response.raise_for_status()
+
+            # Parse the response
+            data = response.json()
+
+            # Extract the response text from Claude's response format
+            # Claude returns content as an array of content blocks
+            content_blocks = data.get("content", [])
+            response_text = ""
+            for block in content_blocks:
+                if block.get("type") == "text":
+                    response_text += block.get("text", "")
+
+            # When response_format is used, extract python_code from JSON
+            if self.response_format:
+                response_text = json.loads(response_text)["python_code"]
+
+            # Log response time at DEBUG level
+            elapsed_time = time.time() - start_time
+            STATEK_LOGGER.debug("LLM response time: %.2f seconds", elapsed_time)
+
+            # Claude Messages API is stateless, so session_id is None
             return LLM_Response(text=response_text, session_id=None)
