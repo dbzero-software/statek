@@ -200,6 +200,13 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
     else:
         local_context = {key: value for key, value in job.py_env.local_state.items()}
 
+    # Track initial functions in local_context to avoid moving pre-existing ones
+    import types
+    initial_local_functions = {
+        key for key, value in local_context.items()
+        if isinstance(value, types.FunctionType)
+    }
+
     # Use context manager to setup and cleanup execution environment
     try:
         with _setup_execution_context(job, global_context, local_context):
@@ -232,12 +239,12 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     else:
                         exec(code_obj, global_context, local_context)
                     
-                    # Move functions from local_context to global_context so they can see each other
+                    # Move only newly created functions to global_context so they can see each other
                     # (functions capture global_context as __globals__)
-                    import types
+                    # Don't move functions that existed before this exec_step
                     functions_to_move = {
                         key: value for key, value in local_context.items()
-                        if isinstance(value, types.FunctionType)
+                        if isinstance(value, types.FunctionType) and key not in initial_local_functions
                     }
                     global_context.update(functions_to_move)
                     for key in functions_to_move:
