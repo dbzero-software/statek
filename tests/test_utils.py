@@ -2,6 +2,7 @@
 """Tests for statek.utils module."""
 
 from typing import Iterable, Union, List, Dict, Optional, ForwardRef
+import dbzero as db0
 from statek.utils import format_callable_decl, prompt_append_console
 from statek.future import temporal, FutureResult
 
@@ -250,3 +251,36 @@ def test_format_callable_decl_multiple_temporal_function():
     result = format_callable_decl(temporal_func)
     # Should show the complement function's return type
     assert result == "def temporal_func(x: int) -> str"
+
+
+def test_format_callable_decl_enum_param_shown_as_str(db0_fixture):
+    """Test that a db0 enum parameter type is reported as str."""
+    SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
+
+    def alert(severity: SeverityLevel):
+        pass
+
+    result = format_callable_decl(alert)
+    assert result == "def alert(severity: str)"
+
+
+def test_format_callable_decl_enum_mixed_with_regular_types(db0_fixture):
+    """Test mixed enum and regular types — only enum is converted."""
+    Status = db0.enum("Status", ["ACTIVE", "INACTIVE"])
+
+    def update(name: str, status: Status, count: int = 0):
+        pass
+
+    result = format_callable_decl(update)
+    assert result == "def update(name: str, status: str, count: int = 0)"
+
+
+def test_format_callable_decl_enum_does_not_affect_return_type(db0_fixture):
+    """Test that a db0 enum return type is also reported as str."""
+    Priority = db0.enum("Priority", ["LOW", "HIGH"])
+
+    def get_priority(task: str) -> Priority:
+        pass
+
+    result = format_callable_decl(get_priority)
+    assert result == "def get_priority(task: str) -> str"

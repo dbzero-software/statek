@@ -2,6 +2,7 @@
 
 import inspect
 from typing import Callable, List, get_type_hints, get_origin, get_args, Union, ForwardRef
+import dbzero as db0
 
 
 def format_callable_decl(func: Callable) -> str:
@@ -146,6 +147,10 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
     Returns:
         A string representation of the type hint
     """
+    # Handle db0 enum types — report as str for LLM consumption
+    if db0.is_enum(type_hint):
+        return "str"
+
     # Handle ForwardRef objects
     if isinstance(type_hint, ForwardRef):
         return type_hint.__forward_arg__
