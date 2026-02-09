@@ -181,11 +181,19 @@ class Job:
         """
         if not self.chat_log:
             # First prompt: use job_def.prompt and append entire console from position 0
-            return prompt_append_console(
+            prompt = prompt_append_console(
                 self.py_env.console,
                 self.job_def.prompt(),
                 from_pos=0
             )
+            if self.logs_path:
+                # Format each line with >
+                self._log_to_file(f"{prompt}\n\n")
+                # Also log to console at INFO level
+                from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+                logger = get_statek_logger()
+                logger.info("%s", prompt.rstrip())
+            return prompt
         else:
             # Not first prompt: format console from last chat element's console position
             last_chat_item = self.chat_log[-1]
@@ -193,6 +201,9 @@ class Job:
                 self.py_env.console,
                 from_pos=last_chat_item.console_pos
             )
+                # Log console output if logging is enabled
+
+        return prompt
 
     def get_chat_history(self) -> Iterable[str]:
         """

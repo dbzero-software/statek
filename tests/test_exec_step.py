@@ -54,12 +54,12 @@ def compute(a, b, c):
 # Helper functions for creating FutureResults
 def create_future(value, complement, condition):
     """Create a FutureResult with specified value and complement functions.
-    
+
     Args:
         value: The value to store in the MemoObject deps
         complement: The complement function to fetch the result
         condition: The condition function to check readiness
-        
+
     Returns:
         FutureResult configured with the provided parameters
     """
@@ -725,6 +725,32 @@ w = 4'''
         assert retrieved_result['kwargs'] == {'key': 4}
 
     @pytest.mark.asyncio
+    async def test_exec_step_nested_function_calls(self, job_factory):
+        """Test that multiple functions can be defined and call each other."""
+        simple_job = self.create_job(job_factory)
+
+        # Define helper functions in one code block
+        code_define = '''
+def helper_a(x):
+    return x * 2
+
+def helper_b(x):
+    return x + 10
+
+def main_function(x):
+    temp = helper_a(x)
+    return helper_b(temp)
+
+result = main_function(5)
+print(f"Result: {result}")
+'''
+        result = await exec_step(code_define, simple_job)
+        assert result is True
+        assert simple_job.py_env.local_state.get('result') == 20  # (5 * 2) + 10
+        assert "Result: 20" in simple_job.py_env.console[0]
+
+
+    @pytest.mark.asyncio
     async def test_exec_step_with_agent_context(self, db0_fixture):  # pylint: disable=unused-argument
         """Test that agent's private context is merged into global execution context."""
         from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel
@@ -766,3 +792,59 @@ value = agent_var
         # Verify that agent's context was accessible
         assert job.py_env.local_state.get('result') == "agent_context_value"
         assert job.py_env.local_state.get('value') == 42
+
+    @pytest.mark.asyncio
+    async def test_exec_step_expression_output(self, job_factory):
+        """Test that standalone expressions print their result like in REPL."""
+        simple_job = self.create_job(job_factory)
+
+        # Test simple expression
+        code = """a = 5
+a"""
+        await exec_step(code, simple_job)
+
+        # Verify the expression result was printed
+        assert simple_job.py_env.console is not None
+        assert len(simple_job.py_env.console) == 1
+        assert "5" in simple_job.py_env.console[0]
+
+    @pytest.mark.asyncio
+    async def test_exec_step_expression_none_not_printed(self, job_factory):
+        """Test that expressions evaluating to None are not printed."""
+        simple_job = self.create_job(job_factory)
+
+        code = """result = None
+result"""
+        await exec_step(code, simple_job)
+
+        # Verify None was not printed (console should be None or empty)
+        assert simple_job.py_env.console is None or len(simple_job.py_env.console) == 0
+
+    @pytest.mark.asyncio
+    async def test_exec_step_expression_string(self, job_factory):
+        """Test that string expressions are printed with repr."""
+        simple_job = self.create_job(job_factory)
+
+        code = """text = "hello"
+text"""
+        await exec_step(code, simple_job)
+
+        # Verify the string was printed with quotes (repr)
+        assert simple_job.py_env.console is not None
+        assert len(simple_job.py_env.console) == 1
+        assert "'hello'" in simple_job.py_env.console[0]
+
+    @pytest.mark.asyncio
+    async def test_exec_step_expression_complex(self, job_factory):
+        """Test that complex expressions are evaluated and printed."""
+        simple_job = self.create_job(job_factory)
+
+        code = """x = 10
+y = 20
+x + y"""
+        await exec_step(code, simple_job)
+
+        # Verify the expression result was printed
+        assert simple_job.py_env.console is not None
+        assert len(simple_job.py_env.console) == 1
+        assert "30" in simple_job.py_env.console[0]

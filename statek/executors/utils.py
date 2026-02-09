@@ -200,6 +200,13 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
     else:
         local_context = {key: value for key, value in job.py_env.local_state.items()}
 
+    # Track initial functions in local_context to avoid moving pre-existing ones
+    import types
+    initial_local_functions = {
+        key for key, value in local_context.items()
+        if isinstance(value, types.FunctionType)
+    }
+
     # Use context manager to setup and cleanup execution environment
     try:
         with _setup_execution_context(job, global_context, local_context):
@@ -216,9 +223,33 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     continue
                     
                 try:
+                    # Check if this is a standalone expression (like REPL behavior)
+                    is_expression = isinstance(node, ast.Expr)
+                    
                     wrapper = ast.Module(body=[node], type_ignores=[])
                     code_obj = compile(wrapper, filename="<string>", mode="exec")
-                    exec(code_obj, global_context, local_context)
+                    
+                    # If it's an expression, capture and print the result
+                    if is_expression:
+                        # Evaluate the expression and print the result if it's not None
+                        result = eval(compile(ast.Expression(body=node.value), filename="<string>", mode="eval"), 
+                                     global_context, local_context)
+                        if result is not None:
+                            job.console_append(repr(result) + '\n')
+                    else:
+                        exec(code_obj, global_context, local_context)
+                    
+                    # Move only newly created functions to global_context so they can see each other
+                    # (functions capture global_context as __globals__)
+                    # Don't move functions that existed before this exec_step
+                    functions_to_move = {
+                        key: value for key, value in local_context.items()
+                        if isinstance(value, types.FunctionType) and key not in initial_local_functions
+                    }
+                    global_context.update(functions_to_move)
+                    for key in functions_to_move:
+                        del local_context[key]
+                    
                     # Check for exit signal
                     if job.py_env.exit_status is not None:
                         break
