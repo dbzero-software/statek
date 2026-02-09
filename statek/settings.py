@@ -17,10 +17,12 @@ class LLM_API_Settings(BaseSettings):
         api_url: The base URL for the LLM API
         api_key: The API key for authentication
         default_model: Optional default chat model name (e.g. gpt-4, gpt-3.5-turbo)
+        response_format_file: Optional path to a JSON file with custom response_format schema
     """
     api_url: str
     api_key: str
     default_model: Optional[str] = None
+    response_format_file: Optional[str] = None
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -96,6 +98,11 @@ class StatekSettings(BaseSettings):
                 if provider not in providers:
                     providers[provider] = {}
                 providers[provider]['api_key'] = value
+            elif '_RESPONSE_FORMAT_FILE' in key:
+                provider = key.replace('_RESPONSE_FORMAT_FILE', '')
+                if provider not in providers:
+                    providers[provider] = {}
+                providers[provider]['response_format_file'] = value
             elif '_DEFAULT_MODEL' in key:
                 provider = key.replace('_DEFAULT_MODEL', '')
                 if provider not in providers:

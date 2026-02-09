@@ -848,3 +848,56 @@ x + y"""
         assert simple_job.py_env.console is not None
         assert len(simple_job.py_env.console) == 1
         assert "30" in simple_job.py_env.console[0]
+
+    @pytest.mark.asyncio
+    async def test_exec_step_local_vars_in_comprehension(self, job_factory):
+        """Test that local variables are accessible in list comprehensions and generator expressions."""
+        simple_job = self.create_job(job_factory)
+
+        # Test list comprehension accessing local variables
+        code = """keywords = ['a', 'b', 'c']
+cur_norm = 'abc'
+result = [kw for kw in keywords if kw in cur_norm]"""
+        await exec_step(code, simple_job)
+
+        # Verify the comprehension executed successfully
+        assert simple_job.py_env.local_state.get('result') == ['a', 'b', 'c']
+
+    @pytest.mark.asyncio
+    async def test_exec_step_local_vars_in_generator(self, job_factory):
+        """Test that local variables are accessible in generator expressions."""
+        simple_job = self.create_job(job_factory)
+
+        # Test generator expression with any() accessing local variables
+        code = """keywords = ['x', 'y', 'z']
+cur_norm = 'abc'
+has_match = any(kw in cur_norm for kw in keywords if kw)"""
+        await exec_step(code, simple_job)
+
+        # Verify the generator expression executed successfully
+        assert simple_job.py_env.local_state.get('has_match') is False
+
+        # Test with matching keywords
+        code2 = """keywords = ['a', 'b', 'c']
+cur_norm = 'abc'
+has_match = any(kw in cur_norm for kw in keywords if kw)"""
+        await exec_step(code2, simple_job)
+
+        assert simple_job.py_env.local_state.get('has_match') is True
+
+    @pytest.mark.asyncio
+    async def test_exec_step_nested_comprehension_with_locals(self, job_factory):
+        """Test nested comprehensions accessing multiple local variables."""
+        simple_job = self.create_job(job_factory)
+
+        code = """text_a = 'hello world'
+text_b = 'world peace'
+keywords = ['world', 'peace', 'love']
+matches = [(kw, text_a, text_b) for kw in keywords if kw in text_a or kw in text_b]"""
+        await exec_step(code, simple_job)
+
+        # Verify nested comprehension executed successfully
+        matches = simple_job.py_env.local_state.get('matches')
+        assert len(matches) == 2
+        assert matches[0][0] == 'world'
+        assert matches[1][0] == 'peace'

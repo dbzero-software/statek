@@ -229,6 +229,11 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     wrapper = ast.Module(body=[node], type_ignores=[])
                     code_obj = compile(wrapper, filename="<string>", mode="exec")
                     
+                    # Sync local variables to global context before execution
+                    # This ensures nested scopes (comprehensions, generators) can access local vars
+                    # since they only see global_context, not local_context
+                    global_context.update(local_context)
+                    
                     # If it's an expression, capture and print the result
                     if is_expression:
                         # Evaluate the expression and print the result if it's not None
@@ -239,16 +244,18 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     else:
                         exec(code_obj, global_context, local_context)
                     
-                    # Move only newly created functions to global_context so they can see each other
-                    # (functions capture global_context as __globals__)
-                    # Don't move functions that existed before this exec_step
-                    functions_to_move = {
-                        key: value for key, value in local_context.items()
-                        if isinstance(value, types.FunctionType) and key not in initial_local_functions
+                    # Sync back after execution: copy any new/updated items from local to global
+                    global_context.update(local_context)
+                    
+                    # Move newly created functions to global context permanently
+                    # Functions capture global_context as __globals__, so they need to be there
+                    # to see each other. Only move functions defined in this exec_step.
+                    newly_defined_functions = {
+                        name: func for name, func in local_context.items()
+                        if isinstance(func, types.FunctionType) and name not in initial_local_functions
                     }
-                    global_context.update(functions_to_move)
-                    for key in functions_to_move:
-                        del local_context[key]
+                    for function_name in newly_defined_functions:
+                        del local_context[function_name]
                     
                     # Check for exit signal
                     if job.py_env.exit_status is not None:

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections import namedtuple
 from functools import lru_cache
 from typing import Optional, Iterable, List, Dict
+import json
 import time
 import httpx
 
@@ -81,6 +82,7 @@ class OpenRouter_API(LLM_API):
         """
         self.settings = settings
         self.model = model or settings.default_model
+        self.response_format = self._load_response_format(settings)
         # additional kwargs that will be passed to request if needed
         self.kwargs = kwargs
         if not self.model:
@@ -92,7 +94,17 @@ class OpenRouter_API(LLM_API):
         self.api_url = settings.api_url
         self.api_key = settings.api_key
 
+    @staticmethod
+    def _load_response_format(settings: LLM_API_Settings) -> Optional[dict]:
+        """Load response_format from the JSON file specified in settings.
 
+        Returns:
+            The response_format dict, or None if response_format_file is not set.
+        """
+        if not settings.response_format_file:
+            return None
+        with open(settings.response_format_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
 
     def _build_messages(
         self,
@@ -163,6 +175,8 @@ class OpenRouter_API(LLM_API):
             "model": self.model,
             "messages": messages
         }
+        if self.response_format:
+            payload["response_format"] = self.response_format
         messages_str = "Sending request to OpenRouter with the following messages:\n"
         for message in messages:
             messages_str += f"Message role: {message['role']}, content: {message['content']}\n"
@@ -191,6 +205,10 @@ class OpenRouter_API(LLM_API):
             # Extract the response text
             # OpenRouter follows OpenAI's response format
             response_text = data["choices"][0]["message"]["content"]
+
+            # When response_format is used, extract python_code from JSON
+            if self.response_format:
+                response_text = json.loads(response_text)["python_code"]
 
             # Log response time at DEBUG level
             elapsed_time = time.time() - start_time
