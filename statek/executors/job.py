@@ -233,12 +233,7 @@ class Job:
                 from_pos=0
             )
             if self.logs_path:
-                # Format each line with >
                 self._log_to_file(f"{prompt}\n\n")
-                # Also log to console at INFO level
-                from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
-                logger = get_statek_logger()
-                logger.info("%s", prompt.rstrip())
             return prompt
         else:
             # Not first prompt: format console from last chat element's console position

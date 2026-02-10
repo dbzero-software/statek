@@ -71,7 +71,7 @@ class Coordinator(SupervisedAgent):
             docstring = """Find available specialized agents.
             
             Returns:
-                String describing available agents and their roles
+                Dictionary mapping agent role names to Agent objects
             """
             create_tool(
                 tool_name='find_agents',
@@ -82,23 +82,11 @@ class Coordinator(SupervisedAgent):
 
         return self._X__context
 
-    def _find_agents_impl(self) -> str:
+    def _find_agents_impl(self) -> dict:
         """
         Implementation of find_agents functionality.
 
         Returns:
-            String describing available agents and their roles
+            Dictionary mapping agent role names to Agent objects
         """
-        if not self.task_agents:
-            return "No specialized agents are currently available."
-
-        result = "Available specialized agents:\n"
-        for role, agent in self.task_agents.items():
-            # Extract key information from agent's system prompt
-            if hasattr(agent, '_system_prompt'):
-                prompt_preview = agent._system_prompt[:200]  # pylint: disable=protected-access
-            else:
-                prompt_preview = "No description available"
-            result += f"\n- Role: {role}\n  Description: {prompt_preview}...\n"
-
-        return result
+        return self.task_agents

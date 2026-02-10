@@ -112,6 +112,12 @@ def _parse_func_docstring(func: Callable) -> FuncDocString:
     # Validate that all function arguments are documented
     _validate_args_documented(func, args)
 
+    # For temporal functions, override returns with complement's return type
+    if getattr(func, "__is_temporal__", False):
+        complement_ret = _extract_complement_return(func)
+        if complement_ret is not None:
+            returns = complement_ret
+
     return FuncDocString(
         source=func,
         name=func.__name__,
@@ -349,6 +355,9 @@ def _format_func_py_syntax(docstring: FuncDocString, sig_str: str, brief: bool) 
             for raise_doc in docstring.raises:
                 doc_lines.append(f"    {raise_doc.type}: {raise_doc.desc}")
 
+        if docstring.returns:
+            doc_lines.append(f"Returns: {docstring.returns.desc}")
+
         if docstring.example:
             doc_lines.append("Example:")
             for example_line in docstring.example.split('\n'):
@@ -489,6 +498,39 @@ def _format_signature(func: Callable, name: str, include_types: bool) -> str:
         return f"{name}({params_str}) -> {return_str}"
 
     return f"{name}({params_str})"
+
+
+def _extract_complement_return(func: Callable) -> Optional[RetDocString]:
+    """Extract the return docstring from a temporal function's complement.
+
+    Builds a RetDocString using the complement's return type and its docstring.
+
+    Args:
+        func: A temporal function
+
+    Returns:
+        RetDocString: with complement's return type and description, or None
+    """
+    complement_func = getattr(func, "__temporal_complement__", None)
+    if complement_func is None:
+        return None
+
+    # Get the complement return type
+    ret_type = _extract_complement_return_type(func)
+    if ret_type is None:
+        return None
+
+    # Get the complement's docstring for the return description
+    complement_doc = inspect.getdoc(complement_func)
+    desc = None
+    if complement_doc:
+        _, _, sections = _parse_docstring_sections(complement_doc)
+        if "Returns" in sections:
+            parsed_ret = _parse_return_section(sections["Returns"])
+            if parsed_ret:
+                desc = parsed_ret.desc
+
+    return RetDocString(ret_type, desc or ret_type)
 
 
 def _get_effective_return_type(func: Callable, hints: dict) -> str:

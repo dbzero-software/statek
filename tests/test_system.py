@@ -156,8 +156,13 @@ class TestDocs:
         assert "kwargs" not in captured.out
 
     def test_docs_with_temporal_function(self, capsys):
-        """Test docs with a temporal function shows complement return type."""
+        """Test docs with a temporal function shows complement return type and description."""
         def get_result(fut: FutureResult) -> str:  # pylint: disable=unused-argument
+            """Retrieve the completed result.
+
+            Returns:
+                str: The final computed value.
+            """
             return "result"
 
         def check_condition(fut: FutureResult) -> bool:  # pylint: disable=unused-argument
@@ -171,7 +176,7 @@ class TestDocs:
                 x (int): The input value.
 
             Returns:
-                str: The result string.
+                FutureResult: A future result representing the pending task.
             """
             return FutureResult(deps=None, state_num=0)
 
@@ -182,6 +187,9 @@ class TestDocs:
         assert "-> str" in captured.out
         # Should not show FutureResult in signature
         assert "FutureResult" not in captured.out.split('\n')[0]
+        # Returns description should come from complement, not the temporal function
+        assert "The final computed value" in captured.out
+        assert "A future result representing the pending task" not in captured.out
         # Should include the docstring content
         assert "A temporal function" in captured.out
         # Should not show kwargs in signature

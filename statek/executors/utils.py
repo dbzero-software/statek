@@ -104,7 +104,7 @@ class _ResilientTransformer(ast.NodeTransformer):
 def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
     output = sep.join(str(arg) for arg in args) + end
-    job.console_append(output)
+    job.console_append(output.rstrip('\n'))
     # Log console output at DEBUG level
     STATEK_LOGGER.debug("Console output: %s", output.rstrip())
 
@@ -240,7 +240,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                         result = eval(compile(ast.Expression(body=node.value), filename="<string>", mode="eval"), 
                                      global_context, local_context)
                         if result is not None:
-                            job.console_append(repr(result) + '\n')
+                            job.console_append(repr(result))
                     else:
                         exec(code_obj, global_context, local_context)
                     
@@ -330,13 +330,25 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 job.awaited_result = None
                 job.next_instr_num = None
         except FutureError as e:
-            # Step 5a: Handle FutureError - suspend job
+            # Step 6: Handle FutureError - suspend job
             job.awaited_result = e.future_result
             job.next_instr_num = e.instr_num
             # Change status STARTED -> SUSPENDED (no change for WARMING_UP)
             if job.status == JobStatus.STARTED:
                 job.set_status(JobStatus.SUSPENDED)
             return False
+        except Exception as e:
+            # Step 7: Handle all other exceptions
+            # Print error message and top 3 execution frames to agent's console
+            import traceback
+            tb = traceback.extract_tb(e.__traceback__)
+            # Get top 3 frames from the execution stack
+            top_frames = tb[:3] if len(tb) >= 3 else tb
+            formatted_frames = ''.join(traceback.format_list(top_frames))
+            error_msg = f"{type(e).__name__}: {e}\n{formatted_frames}"
+            job.console_append(error_msg)
+            # Set exit_status as "ERROR"
+            job.py_env.exit_status = "ERROR"
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
