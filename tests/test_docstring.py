@@ -8,10 +8,6 @@ from statek.docstring import (
     format_docstring,
     FuncDocString,
     ClassDocString,
-    ArgDocString,
-    RetDocString,
-    RaiseDocString,
-    AttrDocString,
     DocstringParseError
 )
 
@@ -44,7 +40,7 @@ def calculate_hypotenuse(a: float, b: float) -> float:
     return math.sqrt(a**2 + b**2)
 
 
-class ParticleSimulator:
+class ParticleSimulator:  # pylint: disable=too-few-public-methods
     """A simulator for tracking 2D particle kinetics.
 
     This class manages a collection of particle objects and calculates their
@@ -82,11 +78,11 @@ def func_missing_arg_doc(a: int, b: int) -> int:
     return a + b
 
 
-def func_no_docstring(x: int) -> int:
+def func_no_docstring(x: int) -> int:  # pylint: disable=unused-argument
     pass
 
 
-class ClassNoDocstring:
+class ClassNoDocstring:  # pylint: disable=too-few-public-methods
     pass
 
 
@@ -335,7 +331,9 @@ class TestFormatDocstring:
 
     def test_format_func_full_py_syntax(self):
         """Test full format with Python syntax."""
-        result = format_docstring(parse_docstring(calculate_hypotenuse), brief=False, py_syntax=True)
+        result = format_docstring(
+            parse_docstring(calculate_hypotenuse), brief=False, py_syntax=True
+        )
 
         assert "def calculate_hypotenuse(a: float, b: float) -> float:" in result
         assert "Pythagorean theorem" in result

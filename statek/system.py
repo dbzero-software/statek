@@ -7,6 +7,7 @@ from copy import copy
 import nest_asyncio
 import dbzero as db0
 from .future import get_any_future, get_all_future
+from .docstring import parse_docstring, format_docstring
 
 
 def inject_context(func, __local_context):
@@ -47,7 +48,7 @@ def _convert_enum_args(f, args, kwargs):
         annotation = hints.get(name)
         if name.startswith("_") or param.kind in _SKIP_KINDS or annotation is None:
             continue
-        if isinstance(value, str) and db0.is_enum(annotation):
+        if isinstance(value, str) and db0.is_enum(annotation):  # pylint: disable=no-member
             converted[name] = annotation[value]
             changed = True
 
@@ -172,17 +173,10 @@ def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):  # 
     else:
         target = tool_or_class
 
-    # Get the docstring
-    docstring = inspect.getdoc(target)
-
-    if docstring:
-        print(docstring)
-    else:
-        if method_name:
-            print(f"No docstring found for {tool_or_class.__name__}.{method_name}")
-        else:
-            name = getattr(tool_or_class, '__name__', str(tool_or_class))
-            print(f"No docstring found for {name}")
+    # Use format_docstring for all tools (including temporal)
+    parsed = parse_docstring(target)
+    formatted = format_docstring(parsed, brief=False, py_syntax=True)
+    print(formatted)
 
 
 @tool

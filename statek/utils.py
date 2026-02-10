@@ -162,7 +162,7 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
         A string representation of the type hint
     """
     # Handle db0 enum types — report as str for LLM consumption
-    if db0.is_enum(type_hint):
+    if db0.is_enum(type_hint):  # pylint: disable=no-member
         return "str"
 
     # Handle ForwardRef objects

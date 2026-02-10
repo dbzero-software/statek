@@ -77,7 +77,7 @@ class StatekSettings(BaseSettings):
             )
 
     @staticmethod
-    def _parse_llm_providers_from_env() -> Dict[str, LLM_API_Settings]:
+    def _parse_llm_providers_from_env() -> Dict[str, LLM_API_Settings]:  # pylint: disable=too-many-branches
         """Parse environment variables to extract LLM provider settings.
 
         Looks for environment variables with the pattern:

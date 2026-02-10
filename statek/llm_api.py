@@ -239,7 +239,8 @@ class Claude_API(LLM_API):
             model: Specific model to use. If None, uses default_model from settings
             use_prompt_caching: Whether to enable prompt caching for system prompts
                                and conversation history (reduces cost and latency).
-                               If None, uses value from settings (env var CLAUDE_USE_PROMPT_CACHING).
+                               If None, uses value from settings
+                               (env var CLAUDE_USE_PROMPT_CACHING).
 
         Raises:
             ValueError: If no model is specified and no default is available
@@ -319,7 +320,7 @@ class Claude_API(LLM_API):
             ]
         return system_prompt
 
-    async def process_request(
+    async def process_request(  # pylint: disable=too-many-locals
         self,
         prompt: str,
         system_prompt: Optional[str] = None,

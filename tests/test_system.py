@@ -6,7 +6,8 @@ from typing import Tuple
 import pytest
 import dbzero as db0
 from statek.system import docs, tool, create_tool
-from statek.future import get_unpack_size
+from statek.future import get_unpack_size, temporal, FutureResult
+from statek.docstring import DocstringParseError
 from statek.utils import format_callable_decl
 
 class TestDocs:
@@ -56,34 +57,34 @@ class TestDocs:
         assert "This is a complex function." in captured.out
         assert "It has multiple lines in its docstring." in captured.out
 
-    def test_docs_with_no_docstring(self, capsys):
-        """Test docs with a function that has no docstring."""
+    def test_docs_with_no_docstring(self):
+        """Test docs with a function that has no docstring raises error."""
         def no_doc_func():
             pass
 
-        docs(no_doc_func)
-        captured = capsys.readouterr()
-        assert "No docstring found for no_doc_func" in captured.out
+        with pytest.raises(DocstringParseError) as exc_info:
+            docs(no_doc_func)
+        assert "no docstring" in str(exc_info.value)
 
-    def test_docs_with_class_no_docstring(self, capsys):
-        """Test docs with a class that has no docstring."""
+    def test_docs_with_class_no_docstring(self):
+        """Test docs with a class that has no docstring raises error."""
         class NoDocClass:
             pass
 
-        docs(NoDocClass)
-        captured = capsys.readouterr()
-        assert "No docstring found for NoDocClass" in captured.out
+        with pytest.raises(DocstringParseError) as exc_info:
+            docs(NoDocClass)
+        assert "no docstring" in str(exc_info.value)
 
-    def test_docs_with_method_no_docstring(self, capsys):
-        """Test docs with a method that has no docstring."""
+    def test_docs_with_method_no_docstring(self):
+        """Test docs with a method that has no docstring raises error."""
         class SampleClass:
             """Sample class."""
             def no_doc_method(self):
                 pass
 
-        docs(SampleClass, "no_doc_method")
-        captured = capsys.readouterr()
-        assert "No docstring found for SampleClass.no_doc_method" in captured.out
+        with pytest.raises(DocstringParseError) as exc_info:
+            docs(SampleClass, "no_doc_method")
+        assert "no docstring" in str(exc_info.value)
 
     def test_docs_with_non_existent_method(self, capsys):
         """Test docs with a method that doesn't exist."""
@@ -130,22 +131,61 @@ class TestDocs:
         captured = capsys.readouterr()
         assert "This is a class method." in captured.out
 
-    def test_docs_with_builtin_function(self, capsys):
-        """Test docs with a built-in function."""
-        docs(len)
-        captured = capsys.readouterr()
-        # Built-in functions have docstrings
-        assert "len" in captured.out or "Return the number" in captured.out
+    def test_docs_with_builtin_function(self):
+        """Test docs with a built-in function raises error (no parseable docstring)."""
+        with pytest.raises(DocstringParseError):
+            docs(len)
 
     def test_docs_with_tool_function(self, capsys):
         """Test docs with a function decorated by @tool."""
         @tool
-        def decorated_func(**kwargs):  # pylint: disable=unused-argument
-            """This function is decorated."""
+        def decorated_func(x: int, **kwargs):  # pylint: disable=unused-argument
+            """This function is decorated.
+
+            Args:
+                x (int): An input value.
+
+            Returns:
+                None: No return value.
+            """
 
         docs(decorated_func)
         captured = capsys.readouterr()
         assert "This function is decorated." in captured.out
+        # kwargs should not appear in output
+        assert "kwargs" not in captured.out
+
+    def test_docs_with_temporal_function(self, capsys):
+        """Test docs with a temporal function shows complement return type."""
+        def get_result(fut: FutureResult) -> str:  # pylint: disable=unused-argument
+            return "result"
+
+        def check_condition(fut: FutureResult) -> bool:  # pylint: disable=unused-argument
+            return True
+
+        @temporal(complement=get_result, condition=check_condition)
+        def my_temporal_func(x: int, **kwargs) -> FutureResult:  # pylint: disable=unused-argument
+            """A temporal function that does something.
+
+            Args:
+                x (int): The input value.
+
+            Returns:
+                str: The result string.
+            """
+            return FutureResult(deps=None, state_num=0)
+
+        docs(my_temporal_func)
+        captured = capsys.readouterr()
+
+        # Should show complement's return type (str), not FutureResult
+        assert "-> str" in captured.out
+        # Should not show FutureResult in signature
+        assert "FutureResult" not in captured.out.split('\n')[0]
+        # Should include the docstring content
+        assert "A temporal function" in captured.out
+        # Should not show kwargs in signature
+        assert "kwargs" not in captured.out
 
 
 class TestCreateTool:
@@ -302,45 +342,45 @@ class TestGetUnpackSize:
 class TestToolEnumConversion:
     """Test cases for automatic str → db0.enum conversion in @tool decorator."""
 
-    def test_string_converted_to_enum(self, db0_fixture):
+    def test_string_converted_to_enum(self, db0_fixture):  # pylint: disable=unused-argument
         """String arg is converted to the corresponding enum value."""
         SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
 
         @tool
-        def alert(level: SeverityLevel, **kwargs):
+        def alert(level: SeverityLevel, **kwargs):  # pylint: disable=unused-argument
             return level
 
         result = alert("INFO")
         assert result is SeverityLevel.INFO
 
-    def test_enum_value_passes_through(self, db0_fixture):
+    def test_enum_value_passes_through(self, db0_fixture):  # pylint: disable=unused-argument
         """Direct enum value is not modified."""
         SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
 
         @tool
-        def alert(level: SeverityLevel, **kwargs):
+        def alert(level: SeverityLevel, **kwargs):  # pylint: disable=unused-argument
             return level
 
         result = alert(SeverityLevel.INFO)
         assert result is SeverityLevel.INFO
 
-    def test_keyword_arg_conversion(self, db0_fixture):
+    def test_keyword_arg_conversion(self, db0_fixture):  # pylint: disable=unused-argument
         """Keyword arguments are also converted."""
         SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
 
         @tool
-        def alert(level: SeverityLevel, **kwargs):
+        def alert(level: SeverityLevel, **kwargs):  # pylint: disable=unused-argument
             return level
 
         result = alert(level="ERROR")
         assert result is SeverityLevel.ERROR
 
-    def test_invalid_enum_string_raises(self, db0_fixture):
+    def test_invalid_enum_string_raises(self, db0_fixture):  # pylint: disable=unused-argument
         """An invalid enum string raises an exception."""
         SeverityLevel = db0.enum("SeverityLevel", ["INFO", "WARNING", "ERROR"])
 
         @tool
-        def alert(level: SeverityLevel, **kwargs):
+        def alert(level: SeverityLevel, **kwargs):  # pylint: disable=unused-argument
             return level
 
         with pytest.raises(Exception):

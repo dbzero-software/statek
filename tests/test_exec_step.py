@@ -851,7 +851,7 @@ x + y"""
 
     @pytest.mark.asyncio
     async def test_exec_step_local_vars_in_comprehension(self, job_factory):
-        """Test that local variables are accessible in list comprehensions and generator expressions."""
+        """Test that local variables are accessible in list comprehensions."""
         simple_job = self.create_job(job_factory)
 
         # Test list comprehension accessing local variables

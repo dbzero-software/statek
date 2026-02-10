@@ -1,10 +1,12 @@
 """Tests for warmup_code multiple blocks feature."""
+# pylint: disable=no-member
+
+from dataclasses import dataclass
 
 import pytest
-from dataclasses import dataclass
 import dbzero as db0
 
-from statek.executors.job import Job, JobDef, JobStatus, parse_warmup_code
+from statek.executors.job import Job, JobStatus, parse_warmup_code
 from statek.executors.utils import run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError

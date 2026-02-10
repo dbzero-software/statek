@@ -1,7 +1,6 @@
 """Tests for Agent class."""
 
 from statek.agents.agent import Agent
-from statek.utils import format_callable_decl
 from tests.conftest import clock, docs, exit_tool
 
 
@@ -20,11 +19,9 @@ class TestAgent:
             _tools=tools
         )
 
-        assert format_callable_decl(clock) in agent.system_prompt
+        assert "clock()" in agent.system_prompt
+        assert "Get the current time." in agent.system_prompt
         assert "Available tools:\n" in agent.system_prompt
-        # Verify single tool has newline and > prefix
-        expected_tools = "\n>" + format_callable_decl(clock)
-        assert f"Available tools:{expected_tools}" == agent.system_prompt
 
     def test_system_prompt_formatting_multiple_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with multiple tools."""
@@ -38,12 +35,10 @@ class TestAgent:
             _tools=tools
         )
 
-        for tool in tools:
-            assert format_callable_decl(tool) in agent.system_prompt
+        assert "clock()" in agent.system_prompt
+        assert "docs(class_name, method_name" in agent.system_prompt
+        assert "exit_tool(reason)" in agent.system_prompt
         assert "You have access to these tools:" in agent.system_prompt
-        # Verify tools are separated by \n> (with leading empty element creating \n> prefix)
-        expected_tools = "\n>".join(format_callable_decl(tool) for tool in tools)
-        assert f"You have access to these tools:\n>{expected_tools}" == agent.system_prompt
 
     def test_system_prompt_formatting_no_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with empty tools list."""
@@ -58,5 +53,36 @@ class TestAgent:
         )
 
         assert "Available tools:" in agent.system_prompt
-        # Verify empty tools list results in empty string (join of single empty element)
         assert agent.system_prompt == "Available tools: "
+
+    def test_system_prompt_with_block_comment(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test system_prompt with block comment placeholder."""
+        system_prompt = "# --- TOOLS ---\n# {tools}"
+        tools = [clock]
+
+        agent = Agent(
+            role="test",
+            _system_prompt=system_prompt,
+            _prompt_template="Test",
+            _tools=tools
+        )
+
+        # Each line should be prefixed with #
+        assert "# clock()" in agent.system_prompt
+        assert "#     Get the current time." in agent.system_prompt
+
+    def test_system_prompt_detailed_tools(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test system_prompt with detailed_tools placeholder."""
+        system_prompt = "Tools:\n{detailed_tools}"
+        tools = [clock]
+
+        agent = Agent(
+            role="test",
+            _system_prompt=system_prompt,
+            _prompt_template="Test",
+            _tools=tools
+        )
+
+        # detailed_tools uses py_syntax=True
+        assert "def clock()" in agent.system_prompt
+        assert '"""Get the current time.' in agent.system_prompt
