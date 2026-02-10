@@ -17,10 +17,14 @@ class LLM_API_Settings(BaseSettings):
         api_url: The base URL for the LLM API
         api_key: The API key for authentication
         default_model: Optional default chat model name (e.g. gpt-4, gpt-3.5-turbo)
+        response_format_file: Optional path to a JSON file with custom response_format schema
+        use_prompt_caching: Whether to enable prompt caching (Claude-specific)
     """
     api_url: str
     api_key: str
     default_model: Optional[str] = None
+    response_format_file: Optional[str] = None
+    use_prompt_caching: bool = False
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -73,7 +77,7 @@ class StatekSettings(BaseSettings):
             )
 
     @staticmethod
-    def _parse_llm_providers_from_env() -> Dict[str, LLM_API_Settings]:
+    def _parse_llm_providers_from_env() -> Dict[str, LLM_API_Settings]:  # pylint: disable=too-many-branches
         """Parse environment variables to extract LLM provider settings.
 
         Looks for environment variables with the pattern:
@@ -96,11 +100,21 @@ class StatekSettings(BaseSettings):
                 if provider not in providers:
                     providers[provider] = {}
                 providers[provider]['api_key'] = value
+            elif '_RESPONSE_FORMAT_FILE' in key:
+                provider = key.replace('_RESPONSE_FORMAT_FILE', '')
+                if provider not in providers:
+                    providers[provider] = {}
+                providers[provider]['response_format_file'] = value
             elif '_DEFAULT_MODEL' in key:
                 provider = key.replace('_DEFAULT_MODEL', '')
                 if provider not in providers:
                     providers[provider] = {}
                 providers[provider]['default_model'] = value
+            elif '_USE_PROMPT_CACHING' in key:
+                provider = key.replace('_USE_PROMPT_CACHING', '')
+                if provider not in providers:
+                    providers[provider] = {}
+                providers[provider]['use_prompt_caching'] = value.lower() in ('true', '1', 'yes')
 
         # Create LLM_API_Settings instances for each provider
         llm_settings = {}

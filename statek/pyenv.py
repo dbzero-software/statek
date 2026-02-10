@@ -18,6 +18,8 @@ class PyEnv:
     console: List[str] = None
     # The next instruction ID for continuation
     next_instr_id: int = None
+    # The warmup block number for continuation (for multi-block warmup_code)
+    warmup_block_num: int = None
     # Exit status (or None if exit not called yet)
     exit_status: str = None
 

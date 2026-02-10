@@ -1,5 +1,5 @@
 # pylint: disable=no-member
-from typing import Tuple, Dict, Optional, Type, Iterable, Any
+from typing import Tuple, Dict, Optional, Type, Iterable, Any, Sequence, Union
 import ast
 import inspect
 import dbzero as db0
@@ -135,13 +135,15 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
 
 @temporal(complement = get_task_result, condition=is_job_completed)
 @tool
-def delegate_task(agent: SupervisedAgent, warmup_code: Optional[str] = None,
+def delegate_task(agent: SupervisedAgent,
+    warmup_code: Optional[Union[str, Sequence[str]]] = None,
     **kwargs) -> TaskFutureResult:
     """Create a new job delegated to given agent.
-    
-    Args: 
+
+    Args:
         agent: The `Agent` to delegate task to
-        warmup_code: Optional Python code to be executed prior to task start
+        warmup_code: Optional Python code (single block or sequence of blocks)
+                    to be executed prior to task start
         kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
 
@@ -152,7 +154,12 @@ def delegate_task(agent: SupervisedAgent, warmup_code: Optional[str] = None,
         # Go to caller frame (skip decorators)
         caller_frame = inspect.currentframe().f_back.f_back.f_back
         caller_locals = caller_frame.f_locals
-        copy_locals(warmup_code, env.local_state, caller_locals)
+        # Copy locals from all warmup blocks
+        if isinstance(warmup_code, str):
+            copy_locals(warmup_code, env.local_state, caller_locals)
+        else:
+            for block in warmup_code:
+                copy_locals(block, env.local_state, caller_locals)
 
     job = Job(
         job_def=job_def,

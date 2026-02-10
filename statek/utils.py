@@ -2,6 +2,21 @@
 
 import inspect
 from typing import Callable, List, get_type_hints, get_origin, get_args, Union, ForwardRef
+import dbzero as db0
+
+
+def block_comment(text: str) -> str:
+    """Put input string in a Python block comment.
+
+    Args:
+        text: The input string/code to comment out
+
+    Returns:
+        str: The commented-out block with each line prefixed by '# '
+    """
+    lines = text.split('\n')
+    commented_lines = ['# ' + line for line in lines]
+    return '\n'.join(commented_lines)
 
 
 def format_callable_decl(func: Callable) -> str:
@@ -146,6 +161,10 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
     Returns:
         A string representation of the type hint
     """
+    # Handle db0 enum types — report as str for LLM consumption
+    if db0.is_enum(type_hint):  # pylint: disable=no-member
+        return "str"
+
     # Handle ForwardRef objects
     if isinstance(type_hint, ForwardRef):
         return type_hint.__forward_arg__

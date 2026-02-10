@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import List, Optional, Iterable, Dict, Any
+import re
+from typing import List, Optional, Iterable, Dict, Any, Sequence, Union
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
@@ -19,6 +20,41 @@ class JobStatus:
     pass
 
 
+def parse_warmup_code(warmup_code: Optional[Union[str, Sequence[str]]]) -> Optional[Union[str, List[str]]]:
+    """Parse warmup_code, splitting on separator lines if present.
+
+    If warmup_code is a string containing lines with 10+ dashes,
+    it will be split into multiple blocks.
+
+    Args:
+        warmup_code: Single string, sequence of strings, or None
+
+    Returns:
+        None if input is None
+        Single string if no separators found
+        List of strings if separators found or input was already a sequence
+    """
+    if warmup_code is None:
+        return None
+
+    if not isinstance(warmup_code, str):
+        # Already a sequence, return as list
+        return list(warmup_code)
+
+    # Split on lines containing 10 or more dashes (with optional whitespace)
+    blocks = re.split(r'\n\s*-{10,}\s*\n', warmup_code)
+
+    # Strip each block and filter empty ones
+    blocks = [block.strip() for block in blocks if block.strip()]
+
+    if len(blocks) == 0:
+        return None
+    elif len(blocks) == 1:
+        return blocks[0]
+    else:
+        return blocks
+
+
 @memo
 @dataclass
 class JobDef:
@@ -29,8 +65,8 @@ class JobDef:
     agent: "Agent"
     # Job params to be fed into the agent's prompt template
     job_params: Optional[Dict[str, Any]] = None
-    # Optional warmup code (executed) before the first prompt
-    warmup_code: Optional[str] = None
+    # Optional warmup code (single block or sequence of blocks) executed before the first prompt
+    warmup_code: Optional[Union[str, Sequence[str]]] = None
 
     def prompt(self) -> str:
         """
@@ -62,6 +98,7 @@ class Job:
         chat_log: List[ChatLogItem] = None,
         awaited_result: Optional[FutureResult] = None,
         next_instr_num: Optional[int] = None,
+        warmup_block_num: Optional[int] = None,
         logs_path: Optional[str] = None
     ):
         self.job_def = job_def
@@ -84,6 +121,8 @@ class Job:
         self.awaited_result = awaited_result
         # Continuation instruction number
         self.next_instr_num = next_instr_num
+        # Continuation warmup block number (for multi-block warmup_code)
+        self.warmup_block_num = warmup_block_num
         # Optional path for logging job execution
         self.logs_path = logs_path
         
@@ -97,8 +136,15 @@ class Job:
             logger.info("")
             # Log warmup code if present
             if self.job_def.warmup_code:
-                self._log_to_file(f"{self.job_def.warmup_code}\n\n")
-                logger.info("%s", self.job_def.warmup_code)
+                warmup = self.job_def.warmup_code
+                if isinstance(warmup, str):
+                    self._log_to_file(f"{warmup}\n\n")
+                    logger.info("%s", warmup)
+                else:
+                    # Log all warmup blocks
+                    for i, block in enumerate(warmup):
+                        self._log_to_file(f"[Warmup Block {i}]\n{block}\n\n")
+                        logger.info("[Warmup Block %d]\n%s", i, block)
                 logger.info("")
 
     def _log_to_file(self, content: str):
@@ -331,17 +377,64 @@ class Job:
             return None
         return self.chat_log[-1].llm_resp
 
+    def _get_warmup_block_count(self) -> int:
+        """
+        Returns the total number of warmup blocks.
+
+        Returns:
+            0 if no warmup_code, 1 if single string, len(warmup_code) if sequence
+        """
+        warmup = self.job_def.warmup_code
+        if warmup is None:
+            return 0
+        if isinstance(warmup, str):
+            return 1
+        return len(warmup)
+
+    def has_more_warmup_blocks(self) -> bool:
+        """
+        Check if there are more warmup blocks to execute.
+
+        Returns:
+            True if there are more warmup blocks pending, False otherwise
+        """
+        block_count = self._get_warmup_block_count()
+        if block_count == 0:
+            return False
+        current_block = self.warmup_block_num if self.warmup_block_num is not None else 0
+        return current_block < block_count - 1
+
+    def advance_warmup_block(self):
+        """
+        Advance to the next warmup block.
+        Sets warmup_block_num to the next block index.
+        """
+        if self.warmup_block_num is None:
+            self.warmup_block_num = 1
+        else:
+            self.warmup_block_num += 1
+
     def get_next_code_block(self) -> str | None:
         """
         Retrieves the Python code block pending execution (or execution continuation).
 
         Returns:
             - None if status is DONE
-            - job_def.warmup_code if status is READY
+            - Current warmup block if status is READY or WARMING_UP (based on warmup_block_num)
             - last_response in all other cases
         """
         if self.status == JobStatus.DONE:
             return None
         if self.status == JobStatus.READY or self.status == JobStatus.WARMING_UP:
-            return self.job_def.warmup_code
+            warmup = self.job_def.warmup_code
+            if warmup is None:
+                return None
+            if isinstance(warmup, str):
+                return warmup
+            # warmup is a sequence of blocks
+            block_num = self.warmup_block_num if self.warmup_block_num is not None else 0
+            if block_num < len(warmup):
+                return warmup[block_num]
+            # All blocks completed
+            return None
         return self.last_response

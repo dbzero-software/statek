@@ -199,17 +199,36 @@ def create_chat_log_item(console_pos, llm_resp):
 
 # Mock tool functions for testing
 def clock():
-    """clock mock."""
+    """Get the current time.
+
+    Returns:
+        str: The current timestamp.
+    """
     return None
 
 
 def docs(class_name: type, method_name: str = None) -> str:  # pylint: disable=unused-argument
-    """docs mock."""
+    """Print documentation for a class or method.
+
+    Args:
+        class_name (type): The class to document.
+        method_name (str): Optional method name.
+
+    Returns:
+        str: The documentation string.
+    """
     return ""
 
 
 def exit_tool(reason: str) -> None:  # pylint: disable=unused-argument
-    """exit mock."""
+    """Exit the current session.
+
+    Args:
+        reason (str): The reason for exiting.
+
+    Returns:
+        None: No return value.
+    """
     return None
 
 

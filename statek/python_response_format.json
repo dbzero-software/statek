@@ -1,0 +1,18 @@
+{
+    "type": "json_schema",
+    "json_schema": {
+        "name": "python_generator",
+        "strict": true,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "python_code": {
+                    "type": "string",
+                    "description": "The pure Python code to be executed."
+                }
+            },
+            "required": ["python_code"],
+            "additionalProperties": false
+        }
+    }
+}

@@ -39,6 +39,9 @@ where = ["."]
 include = ["statek*"]
 exclude = ["tests*", "experiments*"]
 
+[tool.setuptools.package-data]
+statek = ["*.json"]
+
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
