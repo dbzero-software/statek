@@ -180,6 +180,46 @@ def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):  # 
 
 
 @tool
+def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
+    """Prints brief documentation for a function, type, class or object instance.
+
+    Args:
+        what: A function, type, class or object instance to get documentation for.
+        method_name: Optional method name if what is a class/type.
+
+    Returns:
+        None. Prints the brief documentation directly to console.
+
+    Examples:
+        brief(add)  # Get brief docs for the 'add' function
+        brief(user)  # Get brief docs for an object's class
+        brief(User, "send_message")  # Get brief docs for User.send_message
+    """
+    # Handle object instances - get their class
+    target_type = what
+    if not isinstance(what, type) and not callable(what):
+        target_type = type(what)
+
+    # If method_name is provided, get the method from the class/type
+    if method_name is not None:
+        if not isinstance(target_type, type):
+            print(f"Error: {target_type} is not a class")
+            return
+
+        if not hasattr(target_type, method_name):
+            print(f"Error: {target_type.__name__} has no method '{method_name}'")
+            return
+
+        target = getattr(target_type, method_name)
+    else:
+        target = target_type
+
+    parsed = parse_docstring(target)
+    formatted = format_docstring(parsed, brief=True, py_syntax=False)
+    print(formatted)
+
+
+@tool
 def get_any(*args: Any, **kwargs) -> Any:  # pylint: disable=unused-argument
     """Waits until evaluation of given values completes and returns the first available result.
     

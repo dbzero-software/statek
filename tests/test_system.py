@@ -5,7 +5,7 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import docs, tool, create_tool
+from statek.system import docs, brief, tool, create_tool
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.docstring import DocstringParseError
 from statek.utils import format_callable_decl
@@ -194,6 +194,71 @@ class TestDocs:
         assert "A temporal function" in captured.out
         # Should not show kwargs in signature
         assert "kwargs" not in captured.out
+
+
+class TestBrief:
+    """Test cases for brief function."""
+
+    def test_brief_with_function(self, capsys):
+        """Test brief with a function."""
+        @tool
+        def sample_func(x: int, **kwargs):  # pylint: disable=unused-argument
+            """A sample function.
+
+            Args:
+                x (int): Input value.
+
+            Returns:
+                int: Output value.
+            """
+
+        brief(sample_func)
+        captured = capsys.readouterr()
+
+        # Brief format: no 'def', no types in signature
+        assert "sample_func(x)" in captured.out
+        assert "A sample function." in captured.out
+        assert "Returns: Output value." in captured.out
+        assert "def " not in captured.out
+
+    def test_brief_with_object_instance(self, capsys):
+        """Test brief with an object instance gets its class docs."""
+        class SampleClass:
+            """A sample class for testing.
+
+            Attributes:
+                value (int): The stored value.
+            """
+
+        obj = SampleClass()
+        brief(obj)
+        captured = capsys.readouterr()
+
+        assert "SampleClass" in captured.out
+        assert "A sample class for testing." in captured.out
+
+    def test_brief_with_class_method(self, capsys):
+        """Test brief with a class and method name."""
+        class Calculator:
+            """A calculator class."""
+            def add(self, a: int, b: int) -> int:
+                """Add two numbers.
+
+                Args:
+                    a (int): First number.
+                    b (int): Second number.
+
+                Returns:
+                    int: The sum.
+                """
+                return a + b
+
+        brief(Calculator, "add")
+        captured = capsys.readouterr()
+
+        assert "add(a, b)" in captured.out
+        assert "Add two numbers." in captured.out
+        assert "def " not in captured.out
 
 
 class TestCreateTool:
