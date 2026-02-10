@@ -70,9 +70,9 @@ class TestParseWarmupCode:
     def test_parse_string_with_separator(self):
         """Test parsing string with 10+ dash separator returns list."""
         code = """x = 1
-----------
+# ----------
 y = 2
-----------
+# ----------
 z = 3"""
         result = parse_warmup_code(code)
         assert isinstance(result, list)
@@ -84,7 +84,7 @@ z = 3"""
     def test_parse_string_with_long_separator(self):
         """Test parsing with more than 10 dashes works."""
         code = """block1
---------------------
+# --------------------
 block2"""
         result = parse_warmup_code(code)
         assert isinstance(result, list)
@@ -93,7 +93,7 @@ block2"""
     def test_parse_string_short_separator_not_split(self):
         """Test that fewer than 10 dashes doesn't split."""
         code = """x = 1
----------
+# ---------
 y = 2"""
         result = parse_warmup_code(code)
         # 9 dashes should not split
@@ -110,7 +110,7 @@ y = 2"""
     def test_parse_strips_whitespace(self):
         """Test that blocks are stripped of whitespace."""
         code = """  x = 1
-------------
+# ------------
   y = 2  """
         result = parse_warmup_code(code)
         assert result[0] == "x = 1"
