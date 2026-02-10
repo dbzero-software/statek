@@ -4,7 +4,7 @@ import inspect
 import re
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Any
+from typing import Callable, List, Optional, Any, get_type_hints, Union
 
 
 # Docstring parsing structures
@@ -293,3 +293,253 @@ def _validate_args_documented(func: Callable, documented_args: Optional[List[Arg
         raise DocstringParseError(
             f"Function '{func.__name__}' has undocumented arguments: {', '.join(sorted(undocumented))}"
         )
+
+
+def format_docstring(docstring: FuncDocString | ClassDocString,
+                     brief: bool = False, py_syntax: bool = True) -> str:
+    """Format a parsed docstring into a string representation.
+
+    Args:
+        docstring: The structured docstring object
+        brief: Flag enabling brief-only formatting
+        py_syntax: Flag requesting output using Python syntax
+
+    Returns:
+        str: The formatted string representation
+    """
+    if isinstance(docstring, ClassDocString):
+        return _format_class_docstring(docstring, brief, py_syntax)
+    else:
+        return _format_func_docstring(docstring, brief, py_syntax)
+
+
+def _format_func_docstring(docstring: FuncDocString, brief: bool, py_syntax: bool) -> str:
+    """Format a function docstring."""
+    # Get signature from source function
+    sig_str = _format_signature(docstring.source, docstring.name, py_syntax)
+
+    if py_syntax:
+        return _format_func_py_syntax(docstring, sig_str, brief)
+    else:
+        return _format_func_plain(docstring, sig_str, brief)
+
+
+def _format_func_plain(docstring: FuncDocString, sig_str: str, brief: bool) -> str:
+    """Format function docstring in plain text format."""
+    lines = [sig_str]
+    lines.append(f"    {docstring.brief_desc}")
+
+    if docstring.returns:
+        lines.append(f"    Returns: {docstring.returns.desc}")
+
+    return '\n'.join(lines)
+
+
+def _format_func_py_syntax(docstring: FuncDocString, sig_str: str, brief: bool) -> str:
+    """Format function docstring in Python syntax."""
+    lines = [f"def {sig_str}:"]
+
+    # Build docstring content
+    doc_lines = []
+
+    if brief:
+        # Brief mode: just brief_desc and returns
+        doc_lines.append(docstring.brief_desc)
+        if docstring.returns:
+            doc_lines.append(f"Returns: {docstring.returns.desc}")
+    else:
+        # Full mode: full_desc, Args, Raises, Example
+        if docstring.full_desc:
+            doc_lines.append(docstring.full_desc)
+
+        if docstring.args:
+            doc_lines.append("Args:")
+            for arg in docstring.args:
+                type_str = f" ({arg.type})" if arg.type else ""
+                doc_lines.append(f"    {arg.name}{type_str}: {arg.desc}")
+
+        if docstring.raises:
+            doc_lines.append("Raises:")
+            for raise_doc in docstring.raises:
+                doc_lines.append(f"    {raise_doc.type}: {raise_doc.desc}")
+
+        if docstring.example:
+            doc_lines.append("Example:")
+            for example_line in docstring.example.split('\n'):
+                doc_lines.append(f"    {example_line}")
+
+    # Format as Python docstring with 4-space indentation
+    lines.append('    """' + doc_lines[0])
+    if len(doc_lines) > 1:
+        for doc_line in doc_lines[1:]:
+            lines.append(f"    {doc_line}")
+        lines.append('    """')
+    else:
+        lines[-1] += '"""'
+
+    return '\n'.join(lines)
+
+
+def _format_class_docstring(docstring: ClassDocString, brief: bool, py_syntax: bool) -> str:
+    """Format a class docstring."""
+    if py_syntax:
+        return _format_class_py_syntax(docstring, brief)
+    else:
+        return _format_class_plain(docstring, brief)
+
+
+def _format_class_plain(docstring: ClassDocString, brief: bool) -> str:
+    """Format class docstring in plain text format."""
+    lines = [docstring.name]
+    lines.append(f"    {docstring.brief_desc}")
+
+    return '\n'.join(lines)
+
+
+def _format_class_py_syntax(docstring: ClassDocString, brief: bool) -> str:
+    """Format class docstring in Python syntax."""
+    lines = [f"class {docstring.name}:"]
+
+    # Build docstring content
+    doc_lines = []
+
+    if brief:
+        doc_lines.append(docstring.brief_desc)
+    else:
+        # Full description
+        if docstring.full_desc:
+            doc_lines.append(docstring.full_desc)
+
+        # Attributes section
+        if docstring.attrs:
+            doc_lines.append("")
+            doc_lines.append("Attributes:")
+            for attr in docstring.attrs:
+                type_str = f" ({attr.type})" if attr.type else ""
+                doc_lines.append(f"    {attr.name}{type_str}: {attr.desc}")
+
+    # Format as Python docstring
+    lines.append('    """' + doc_lines[0])
+    if len(doc_lines) > 1:
+        for doc_line in doc_lines[1:]:
+            lines.append(f"    {doc_line}")
+        lines.append('    """')
+    else:
+        lines[-1] += '"""'
+
+    # In detailed mode, add member functions
+    if not brief:
+        member_funcs = _get_member_functions(docstring.source)
+        for func in member_funcs:
+            try:
+                func_doc = parse_docstring(func)
+                func_formatted = _format_func_docstring(func_doc, brief=True, py_syntax=True)
+                # Indent the function definition
+                indented_lines = ['    ' + line for line in func_formatted.split('\n')]
+                lines.extend(indented_lines)
+            except DocstringParseError:
+                # Skip functions without proper docstrings
+                pass
+
+    return '\n'.join(lines)
+
+
+def _get_member_functions(cls: type) -> List[Callable]:
+    """Get all non-system member functions of a class."""
+    members = []
+    for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
+        if not name.startswith('_'):
+            members.append(method)
+    return members
+
+
+def _format_signature(func: Callable, name: str, include_types: bool) -> str:
+    """Format a function signature.
+
+    Args:
+        func: The source function
+        name: The function name
+        include_types: Whether to include type annotations
+
+    Returns:
+        Formatted signature string
+    """
+    sig = inspect.signature(func)
+
+    # Get type hints if needed
+    hints = {}
+    if include_types:
+        try:
+            hints = get_type_hints(func)
+        except Exception:  # pylint: disable=broad-exception-caught
+            hints = getattr(func, "__annotations__", {})
+
+    params = []
+    for param_name, param in sig.parameters.items():
+        if param_name in ('self', 'cls'):
+            continue
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            continue
+
+        if include_types and param_name in hints:
+            type_str = _format_type_hint(hints[param_name])
+            param_str = f"{param_name}: {type_str}"
+        else:
+            param_str = param_name
+
+        if param.default is not inspect.Parameter.empty:
+            if include_types:
+                param_str += f" = {_format_default(param.default)}"
+            else:
+                param_str += f"={_format_default(param.default)}"
+
+        params.append(param_str)
+
+    params_str = ", ".join(params)
+
+    # Add return type if present
+    if include_types and "return" in hints:
+        return_str = _format_type_hint(hints["return"])
+        return f"{name}({params_str}) -> {return_str}"
+
+    return f"{name}({params_str})"
+
+
+def _format_type_hint(type_hint) -> str:
+    """Format a type hint into a readable string."""
+    from typing import get_origin, get_args
+
+    origin = get_origin(type_hint)
+    args = get_args(type_hint)
+
+    # Handle Union types
+    if origin is Union:
+        formatted_args = [_format_type_hint(arg) for arg in args]
+        return " | ".join(formatted_args)
+
+    # Handle generic types
+    if origin is not None:
+        if args:
+            formatted_args = ", ".join(_format_type_hint(arg) for arg in args)
+            origin_name = getattr(origin, "__name__", str(origin))
+            return f"{origin_name}[{formatted_args}]"
+        return getattr(origin, "__name__", str(origin))
+
+    # Handle basic types
+    if hasattr(type_hint, "__name__"):
+        return type_hint.__name__
+
+    # Fallback
+    type_str = str(type_hint)
+    if type_str.startswith("typing."):
+        type_str = type_str.replace("typing.", "")
+    return type_str
+
+
+def _format_default(default) -> str:
+    """Format a default value."""
+    if default is None:
+        return "None"
+    if isinstance(default, str):
+        return f'"{default}"'
+    return repr(default)

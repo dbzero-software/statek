@@ -5,6 +5,7 @@ import pytest
 
 from statek.docstring import (
     parse_docstring,
+    format_docstring,
     FuncDocString,
     ClassDocString,
     ArgDocString,
@@ -311,3 +312,90 @@ class TestParseDocstringEdgeCases:
         """Test parsing a lambda (no docstring) raises error."""
         with pytest.raises(DocstringParseError):
             parse_docstring(lambda x: x)
+
+
+class TestFormatDocstring:
+    """Test cases for format_docstring function."""
+
+    def test_format_func_brief_no_py_syntax(self):
+        """Test brief format without Python syntax."""
+        result = format_docstring(parse_docstring(simple_func), brief=True, py_syntax=False)
+
+        assert "simple_func(x)" in result
+        assert "A simple function." in result
+        assert "def " not in result
+
+    def test_format_func_brief_py_syntax(self):
+        """Test brief format with Python syntax."""
+        result = format_docstring(parse_docstring(simple_func), brief=True, py_syntax=True)
+
+        assert "def simple_func(x: int) -> int:" in result
+        assert '"""A simple function.' in result
+        assert "Returns: Output value." in result
+
+    def test_format_func_full_py_syntax(self):
+        """Test full format with Python syntax."""
+        result = format_docstring(parse_docstring(calculate_hypotenuse), brief=False, py_syntax=True)
+
+        assert "def calculate_hypotenuse(a: float, b: float) -> float:" in result
+        assert "Pythagorean theorem" in result
+        assert "Args:" in result
+        assert "a (float):" in result
+        assert "b (float):" in result
+        assert "Raises:" in result
+        assert "ValueError:" in result
+        assert "Example:" in result
+        assert ">>> calculate_hypotenuse(3.0, 4.0)" in result
+
+    def test_format_func_brief_with_returns(self):
+        """Test brief format includes return description."""
+        result = format_docstring(parse_docstring(simple_func), brief=True, py_syntax=False)
+
+        assert "Returns: Output value." in result
+
+    def test_format_class_brief_py_syntax(self):
+        """Test brief class format with Python syntax."""
+        result = format_docstring(parse_docstring(ParticleSimulator), brief=True, py_syntax=True)
+
+        assert "class ParticleSimulator:" in result
+        assert "2D particle kinetics" in result
+        # Brief mode should not include attributes
+        assert "Attributes:" not in result
+
+    def test_format_class_full_py_syntax(self):
+        """Test full class format with Python syntax."""
+        result = format_docstring(parse_docstring(ParticleSimulator), brief=False, py_syntax=True)
+
+        assert "class ParticleSimulator:" in result
+        assert "Attributes:" in result
+        assert "particles (list[dict]):" in result
+        assert "gravity (float):" in result
+        assert "friction (float):" in result
+
+    def test_format_class_plain(self):
+        """Test class format in plain text."""
+        result = format_docstring(parse_docstring(ParticleSimulator), brief=True, py_syntax=False)
+
+        assert "ParticleSimulator" in result
+        assert "2D particle kinetics" in result
+        assert "class " not in result
+
+    def test_format_func_uses_4_spaces_indent(self):
+        """Test that py_syntax output uses 4-space indentation."""
+        result = format_docstring(parse_docstring(simple_func), brief=True, py_syntax=True)
+
+        # Check for 4-space indentation, no tabs
+        assert '\t' not in result
+        lines = result.split('\n')
+        for line in lines[1:]:  # Skip first line (def)
+            if line.strip():
+                assert line.startswith('    '), f"Line should use 4-space indent: {line}"
+
+    def test_format_method_docstring(self):
+        """Test formatting a class method docstring."""
+        result = format_docstring(parse_docstring(Calculator.add), brief=True, py_syntax=True)
+
+        assert "def add(a: int, b: int) -> int:" in result
+        assert "Add two numbers" in result
+        # self should not appear in signature
+        assert "self" not in result

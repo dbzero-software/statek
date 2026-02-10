@@ -3,7 +3,7 @@
 
 from typing import Iterable, Union, List, Dict, Optional, ForwardRef
 import dbzero as db0
-from statek.utils import format_callable_decl, prompt_append_console
+from statek.utils import format_callable_decl, prompt_append_console, block_comment
 from statek.future import temporal, FutureResult
 
 
@@ -284,3 +284,31 @@ def test_format_callable_decl_enum_does_not_affect_return_type(db0_fixture):
 
     result = format_callable_decl(get_priority)
     assert result == "def get_priority(task: str) -> str"
+
+
+def test_block_comment_single_line():
+    """Test block_comment with a single line."""
+    result = block_comment("print('hello')")
+    assert result == "# print('hello')"
+
+
+def test_block_comment_multiple_lines():
+    """Test block_comment with multiple lines."""
+    code = "x = 1\ny = 2\nprint(x + y)"
+    result = block_comment(code)
+    expected = "# x = 1\n# y = 2\n# print(x + y)"
+    assert result == expected
+
+
+def test_block_comment_empty_string():
+    """Test block_comment with an empty string."""
+    result = block_comment("")
+    assert result == "# "
+
+
+def test_block_comment_with_empty_lines():
+    """Test block_comment preserves empty lines with comment prefix."""
+    code = "line1\n\nline3"
+    result = block_comment(code)
+    expected = "# line1\n# \n# line3"
+    assert result == expected
