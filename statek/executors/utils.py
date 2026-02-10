@@ -14,7 +14,7 @@ from statek.future import FutureResult
 
 from statek.exceptions import FutureError
 from statek.future import FutureResult
-from statek.executors.job import Job, JobStatus
+from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
 from statek.llm_api import LLM_API
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log
 from statek.system import inject_context
@@ -533,8 +533,9 @@ async def run_agentic_loop(agent: 'Agent',
             return len(db0.find(Message, MessageStatus.PENDING))
         ```
     """
-    from statek.executors.job import JobDef
     from statek.pyenv import PyEnv
+    # Parse warmup_code once before the loop
+    parsed_warmup_code = parse_warmup_code(warmup_code)
     statek_log("Starting agentic loop...", level='debug')
     def start_jobs_func(capacity: int):
         """
@@ -571,7 +572,7 @@ async def run_agentic_loop(agent: 'Agent',
             job_def = JobDef(
                 agent=agent,
                 job_params=None,
-                warmup_code=warmup_code
+                warmup_code=parsed_warmup_code
             )
             
             # Create PyEnv with agent's context if available

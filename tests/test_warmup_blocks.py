@@ -4,7 +4,7 @@ import pytest
 from dataclasses import dataclass
 import dbzero as db0
 
-from statek.executors.job import Job, JobDef, JobStatus
+from statek.executors.job import Job, JobDef, JobStatus, parse_warmup_code
 from statek.executors.utils import run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
@@ -50,6 +50,69 @@ def create_future_ready(value=42):
         condition=_check_condition_true
     )
     return future
+
+
+class TestParseWarmupCode:
+    """Test cases for parse_warmup_code function."""
+
+    def test_parse_none(self):
+        """Test parsing None returns None."""
+        assert parse_warmup_code(None) is None
+
+    def test_parse_single_string_no_separator(self):
+        """Test parsing single string without separator returns string."""
+        code = "x = 1\nprint(x)"
+        result = parse_warmup_code(code)
+        assert result == code
+
+    def test_parse_string_with_separator(self):
+        """Test parsing string with 10+ dash separator returns list."""
+        code = """x = 1
+----------
+y = 2
+----------
+z = 3"""
+        result = parse_warmup_code(code)
+        assert isinstance(result, list)
+        assert len(result) == 3
+        assert result[0] == "x = 1"
+        assert result[1] == "y = 2"
+        assert result[2] == "z = 3"
+
+    def test_parse_string_with_long_separator(self):
+        """Test parsing with more than 10 dashes works."""
+        code = """block1
+--------------------
+block2"""
+        result = parse_warmup_code(code)
+        assert isinstance(result, list)
+        assert len(result) == 2
+
+    def test_parse_string_short_separator_not_split(self):
+        """Test that fewer than 10 dashes doesn't split."""
+        code = """x = 1
+---------
+y = 2"""
+        result = parse_warmup_code(code)
+        # 9 dashes should not split
+        assert isinstance(result, str)
+        assert "x = 1" in result
+        assert "y = 2" in result
+
+    def test_parse_sequence_returns_list(self):
+        """Test parsing sequence returns list."""
+        code = ["block1", "block2", "block3"]
+        result = parse_warmup_code(code)
+        assert result == ["block1", "block2", "block3"]
+
+    def test_parse_strips_whitespace(self):
+        """Test that blocks are stripped of whitespace."""
+        code = """  x = 1
+------------
+  y = 2  """
+        result = parse_warmup_code(code)
+        assert result[0] == "x = 1"
+        assert result[1] == "y = 2"
 
 
 class TestRunJobStepMultipleBlocks:

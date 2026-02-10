@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 from typing import List, Optional, Iterable, Dict, Any, Sequence, Union
 import dbzero as db0
 from dbzero import memo, enum
@@ -17,6 +18,41 @@ DONE: execution has been completed (with either success or failure)
 @enum(values=["READY", "WARMING_UP", "STARTED", "SUSPENDED", "DONE"])
 class JobStatus:
     pass
+
+
+def parse_warmup_code(warmup_code: Optional[Union[str, Sequence[str]]]) -> Optional[Union[str, List[str]]]:
+    """Parse warmup_code, splitting on separator lines if present.
+
+    If warmup_code is a string containing lines with 10+ dashes,
+    it will be split into multiple blocks.
+
+    Args:
+        warmup_code: Single string, sequence of strings, or None
+
+    Returns:
+        None if input is None
+        Single string if no separators found
+        List of strings if separators found or input was already a sequence
+    """
+    if warmup_code is None:
+        return None
+
+    if not isinstance(warmup_code, str):
+        # Already a sequence, return as list
+        return list(warmup_code)
+
+    # Split on lines containing 10 or more dashes (with optional whitespace)
+    blocks = re.split(r'\n\s*-{10,}\s*\n', warmup_code)
+
+    # Strip each block and filter empty ones
+    blocks = [block.strip() for block in blocks if block.strip()]
+
+    if len(blocks) == 0:
+        return None
+    elif len(blocks) == 1:
+        return blocks[0]
+    else:
+        return blocks
 
 
 @memo

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import format_callable_decl
-from statek.executors.job import JobDef
+from statek.executors.job import JobDef, parse_warmup_code
 
 @db0.memo
 @dataclass
@@ -112,5 +112,5 @@ class SupervisedAgent(Agent):
         return JobDef(
             agent=self,
             job_params=job_params,
-            warmup_code=warmup_code
+            warmup_code=parse_warmup_code(warmup_code)
         )
