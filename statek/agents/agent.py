@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+import re
 from typing import List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
-from statek.utils import format_callable_decl
+from statek.utils import block_comment
+from statek.docstring import parse_docstring, format_docstring
 from statek.executors.job import JobDef, parse_warmup_code
 
 @db0.memo
@@ -46,13 +48,40 @@ class Agent:
         """
         Format system_prompt with tool descriptions.
 
-        Places all available tool descriptions in the placeholder using
-        newlines and > character to start each line.
+        Supports placeholders: {tools}, {brief_tools}, {detailed_tools}
+        - tools/brief_tools: formatted with brief=True, py_syntax=False
+        - detailed_tools: formatted with brief=False, py_syntax=True
+
+        If the placeholder line starts with '#', the result is embedded in a block comment.
         """
         if self._system_prompt is None:
             return ""
-        tools_str = "\n".join(">" + format_callable_decl(tool) for tool in self._tools)
-        return self._system_prompt.format(tools=tools_str)
+
+        result = self._system_prompt
+        placeholders = [
+            ('tools', True, False),
+            ('brief_tools', True, False),
+            ('detailed_tools', False, True),
+        ]
+
+        for name, brief, py_syntax in placeholders:
+            pattern = re.compile(rf'^(\s*#\s*)\{{{name}\}}', re.MULTILINE)
+            if pattern.search(result):
+                tools_str = self._format_tools(brief, py_syntax)
+                result = pattern.sub(block_comment(tools_str), result)
+            elif f'{{{name}}}' in result:
+                tools_str = self._format_tools(brief, py_syntax)
+                result = result.replace(f'{{{name}}}', tools_str)
+
+        return result
+
+    def _format_tools(self, brief: bool, py_syntax: bool) -> str:
+        """Format all tools with the specified settings."""
+        formatted = []
+        for tool in self._tools:
+            parsed = parse_docstring(tool)
+            formatted.append(format_docstring(parsed, brief=brief, py_syntax=py_syntax))
+        return '\n\n'.join(formatted)
 
     @property
     def context(self) -> Optional[Dict]:

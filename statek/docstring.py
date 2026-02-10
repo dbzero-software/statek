@@ -15,7 +15,7 @@ RaiseDocString = namedtuple("RaiseDocString", ["type", "desc"])
 
 
 @dataclass
-class FuncDocString:
+class FuncDocString:  # pylint: disable=too-many-instance-attributes
     """Function or a method docstring."""
     source: Any
     name: str
@@ -55,12 +55,11 @@ def parse_docstring(type_or_func: Any) -> FuncDocString | ClassDocString:
     """
     if isinstance(type_or_func, type):
         return _parse_class_docstring(type_or_func)
-    elif callable(type_or_func):
+    if callable(type_or_func):
         return _parse_func_docstring(type_or_func)
-    else:
-        raise DocstringParseError(
-            f"Expected a class or callable, got {type(type_or_func).__name__}"
-        )
+    raise DocstringParseError(
+        f"Expected a class or callable, got {type(type_or_func).__name__}"
+    )
 
 
 def _parse_class_docstring(cls: type) -> ClassDocString:
@@ -125,7 +124,7 @@ def _parse_func_docstring(func: Callable) -> FuncDocString:
     )
 
 
-def _parse_docstring_sections(docstring: str) -> tuple[str, str, dict]:
+def _parse_docstring_sections(docstring: str) -> tuple[str, str, dict]:  # pylint: disable=too-many-locals
     """Parse docstring into brief description, full description, and sections.
 
     Returns:
@@ -265,33 +264,22 @@ def _parse_return_section(section_content: str) -> Optional[RetDocString]:
     return RetDocString(None, ' '.join(line.strip() for line in lines))
 
 
+_SKIP_PARAM_KINDS = {inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL}
+
+
 def _validate_args_documented(func: Callable, documented_args: Optional[List[ArgDocString]]):
-    """Validate that all function arguments are documented.
-
-    Args:
-        func: The function to validate
-        documented_args: List of documented arguments
-
-    Raises:
-        DocstringParseError: If any argument is not documented
-    """
+    """Validate that all function arguments are documented."""
     sig = inspect.signature(func)
-    func_params = set(sig.parameters.keys())
-
-    # Remove 'self' and 'cls' as they don't need documentation
-    func_params.discard('self')
-    func_params.discard('cls')
-
-    # Get documented argument names
-    documented_names = set()
-    if documented_args:
-        documented_names = {arg.name for arg in documented_args}
-
-    # Find undocumented arguments
+    func_params = {
+        name for name, p in sig.parameters.items()
+        if name not in ('self', 'cls') and p.kind not in _SKIP_PARAM_KINDS
+    }
+    documented_names = {arg.name for arg in documented_args} if documented_args else set()
     undocumented = func_params - documented_names
     if undocumented:
         raise DocstringParseError(
-            f"Function '{func.__name__}' has undocumented arguments: {', '.join(sorted(undocumented))}"
+            f"Function '{func.__name__}' has undocumented arguments: "
+            f"{', '.join(sorted(undocumented))}"
         )
 
 
@@ -309,8 +297,7 @@ def format_docstring(docstring: FuncDocString | ClassDocString,
     """
     if isinstance(docstring, ClassDocString):
         return _format_class_docstring(docstring, brief, py_syntax)
-    else:
-        return _format_func_docstring(docstring, brief, py_syntax)
+    return _format_func_docstring(docstring, brief, py_syntax)
 
 
 def _format_func_docstring(docstring: FuncDocString, brief: bool, py_syntax: bool) -> str:
@@ -320,11 +307,10 @@ def _format_func_docstring(docstring: FuncDocString, brief: bool, py_syntax: boo
 
     if py_syntax:
         return _format_func_py_syntax(docstring, sig_str, brief)
-    else:
-        return _format_func_plain(docstring, sig_str, brief)
+    return _format_func_plain(docstring, sig_str, brief)
 
 
-def _format_func_plain(docstring: FuncDocString, sig_str: str, brief: bool) -> str:
+def _format_func_plain(docstring: FuncDocString, sig_str: str, brief: bool) -> str:  # pylint: disable=unused-argument
     """Format function docstring in plain text format."""
     lines = [sig_str]
     lines.append(f"    {docstring.brief_desc}")
@@ -335,7 +321,7 @@ def _format_func_plain(docstring: FuncDocString, sig_str: str, brief: bool) -> s
     return '\n'.join(lines)
 
 
-def _format_func_py_syntax(docstring: FuncDocString, sig_str: str, brief: bool) -> str:
+def _format_func_py_syntax(docstring: FuncDocString, sig_str: str, brief: bool) -> str:  # pylint: disable=too-many-branches
     """Format function docstring in Python syntax."""
     lines = [f"def {sig_str}:"]
 
@@ -384,11 +370,10 @@ def _format_class_docstring(docstring: ClassDocString, brief: bool, py_syntax: b
     """Format a class docstring."""
     if py_syntax:
         return _format_class_py_syntax(docstring, brief)
-    else:
-        return _format_class_plain(docstring, brief)
+    return _format_class_plain(docstring, brief)
 
 
-def _format_class_plain(docstring: ClassDocString, brief: bool) -> str:
+def _format_class_plain(docstring: ClassDocString, brief: bool) -> str:  # pylint: disable=unused-argument
     """Format class docstring in plain text format."""
     lines = [docstring.name]
     lines.append(f"    {docstring.brief_desc}")
@@ -499,15 +484,74 @@ def _format_signature(func: Callable, name: str, include_types: bool) -> str:
 
     # Add return type if present
     if include_types and "return" in hints:
-        return_str = _format_type_hint(hints["return"])
+        # For temporal functions, use the complement function's return type
+        return_str = _get_effective_return_type(func, hints)
         return f"{name}({params_str}) -> {return_str}"
 
     return f"{name}({params_str})"
 
 
+def _get_effective_return_type(func: Callable, hints: dict) -> str:
+    """Get the effective return type for a function.
+
+    For temporal functions, returns the complement function's return type.
+    For regular functions, returns the annotated return type.
+
+    Args:
+        func: The function to get return type for
+        hints: The type hints dictionary
+
+    Returns:
+        Formatted return type string
+    """
+    # Check if this is a temporal function
+    if getattr(func, "__is_temporal__", False):
+        complement_type = _extract_complement_return_type(func)
+        if complement_type:
+            return complement_type
+
+    # Default: use the function's own return type
+    return _format_type_hint(hints["return"])
+
+
+def _extract_complement_return_type(func: Callable) -> Optional[str]:
+    """Extract return type from a temporal function's complement function.
+
+    Args:
+        func: A temporal function
+
+    Returns:
+        Formatted return type string from complement, or None if not found
+    """
+    # Get complement from the __temporal_complement__ attribute
+    if hasattr(func, "__temporal_complement__"):
+        complement_func = func.__temporal_complement__
+        try:
+            complement_hints = get_type_hints(complement_func)
+            if "return" in complement_hints:
+                return _format_type_hint(complement_hints["return"])
+        except (AttributeError, ValueError, TypeError):
+            pass
+
+    # Fallback to closure extraction for older temporal functions
+    if hasattr(func, "__closure__") and func.__closure__:
+        for cell in func.__closure__:
+            try:
+                complement_func = cell.cell_contents
+                if not callable(complement_func):
+                    continue
+                complement_hints = get_type_hints(complement_func)
+                if "return" in complement_hints:
+                    return _format_type_hint(complement_hints["return"])
+            except (AttributeError, ValueError, TypeError):
+                continue
+
+    return None
+
+
 def _format_type_hint(type_hint) -> str:
     """Format a type hint into a readable string."""
-    from typing import get_origin, get_args
+    from typing import get_origin, get_args  # pylint: disable=import-outside-toplevel
 
     origin = get_origin(type_hint)
     args = get_args(type_hint)
