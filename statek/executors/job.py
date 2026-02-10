@@ -23,8 +23,8 @@ class JobStatus:
 def parse_warmup_code(warmup_code: Optional[Union[str, Sequence[str]]]) -> Optional[Union[str, List[str]]]:
     """Parse warmup_code, splitting on separator lines if present.
 
-    If warmup_code is a string containing lines with 10+ dashes,
-    it will be split into multiple blocks.
+    If warmup_code is a string containing comment lines with 10+ dashes
+    (e.g. # ----------), it will be split into multiple blocks.
 
     Args:
         warmup_code: Single string, sequence of strings, or None
@@ -41,8 +41,8 @@ def parse_warmup_code(warmup_code: Optional[Union[str, Sequence[str]]]) -> Optio
         # Already a sequence, return as list
         return list(warmup_code)
 
-    # Split on lines containing 10 or more dashes (with optional whitespace)
-    blocks = re.split(r'\n\s*-{10,}\s*\n', warmup_code)
+    # Split on comment lines containing 10 or more dashes (e.g. # ----------)
+    blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
 
     # Strip each block and filter empty ones
     blocks = [block.strip() for block in blocks if block.strip()]
@@ -233,12 +233,7 @@ class Job:
                 from_pos=0
             )
             if self.logs_path:
-                # Format each line with >
                 self._log_to_file(f"{prompt}\n\n")
-                # Also log to console at INFO level
-                from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
-                logger = get_statek_logger()
-                logger.info("%s", prompt.rstrip())
             return prompt
         else:
             # Not first prompt: format console from last chat element's console position
