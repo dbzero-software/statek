@@ -105,8 +105,6 @@ def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
     output = sep.join(str(arg) for arg in args) + end
     job.console_append(output.rstrip('\n'))
-    # Log console output at DEBUG level
-    STATEK_LOGGER.debug("Console output: %s", output.rstrip())
 
 def custom_exit(job, status=None):
     """Custom exit function that sets exit status."""
@@ -320,6 +318,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         elif job.status == JobStatus.SUSPENDED:
             job.set_status(JobStatus.STARTED)
 
+        # Log warmup block to file before execution
+        if job.status == JobStatus.WARMING_UP and job.logs_path:
+            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
+            logger = get_statek_logger()
+            job._log_to_file(f"{code}\n\n")  # pylint: disable=protected-access
+            logger.info("%s", code)
+
         # Step 5: Execute the code using exec_step
         # Pass next_instr_num if resuming from SUSPENDED
         try:
@@ -340,6 +345,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         except Exception as e:
             # Step 7: Handle all other exceptions
             # Print error message and top 3 execution frames to agent's console
+            # Leave exit_status as None so the LLM can see the error and recover
             import traceback
             tb = traceback.extract_tb(e.__traceback__)
             # Get top 3 frames from the execution stack
@@ -347,8 +353,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             formatted_frames = ''.join(traceback.format_list(top_frames))
             error_msg = f"{type(e).__name__}: {e}\n{formatted_frames}"
             job.console_append(error_msg)
-            # Set exit_status as "ERROR"
-            job.py_env.exit_status = "ERROR"
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
@@ -462,9 +466,9 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
             available_capacity = max_concurrency - len(pending_tasks)
             start_jobs_func(available_capacity)
         
-        # Step 3: Find jobs with status READY or STARTED, excluding jobs already pending
+        # Step 3: Find jobs with status READY, WARMING_UP or STARTED, excluding jobs already pending
         ready_or_started_jobs = db0.filter(lambda found_job: found_job not in pending_tasks,
-                                            db0.find(Job, [JobStatus.READY, JobStatus.STARTED]))
+                                            db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED]))
         # Step 4: Submit run_job_step for jobs that aren't already pending
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:

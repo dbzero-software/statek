@@ -143,35 +143,40 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
 
 
 @tool
-def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
-    """Prints the docstring associated with either a tool, class or its member name.
+def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
+    """Prints the docstring associated with a tool, class, object instance or method.
 
     Args:
-        tool_or_class: A function, tool, or class to get documentation for.
-        method_name: Optional method name if tool_or_class is a class. If provided,
-                    returns documentation for the specific method of the class.
+        what: A function, type, class or object instance to get documentation for.
+        method_name: Optional method name if what is a class/type.
 
     Returns:
         None. Prints the documentation directly to console.
 
     Examples:
         docs(add)  # Get documentation for the 'add' function
+        docs(user)  # Get documentation for an object's class
         docs(User, "send_message")  # Get documentation for User.send_message method
     """
-    # If method_name is provided, get the method from the class
+    # Handle object instances - get their class
+    target_type = what
+    if not isinstance(what, type) and not callable(what):
+        target_type = type(what)
+
+    # If method_name is provided, get the method from the class/type
     if method_name is not None:
-        if not isinstance(tool_or_class, type):
-            print(f"Error: {tool_or_class} is not a class")
+        if not isinstance(target_type, type):
+            print(f"Error: {target_type} is not a class")
             return
 
         # Get the method from the class
-        if not hasattr(tool_or_class, method_name):
-            print(f"Error: {tool_or_class.__name__} has no method '{method_name}'")
+        if not hasattr(target_type, method_name):
+            print(f"Error: {target_type.__name__} has no method '{method_name}'")
             return
 
-        target = getattr(tool_or_class, method_name)
+        target = getattr(target_type, method_name)
     else:
-        target = tool_or_class
+        target = target_type
 
     # Use format_docstring for all tools (including temporal)
     parsed = parse_docstring(target)
@@ -181,7 +186,7 @@ def docs(tool_or_class: type | Callable, method_name: str = None, **kwargs):  # 
 
 @tool
 def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
-    """Prints brief documentation for a function, type, class or object instance.
+    """Prints brief documentation for a tool, class, object instance or method.
 
     Args:
         what: A function, type, class or object instance to get documentation for.
@@ -191,9 +196,9 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
         None. Prints the brief documentation directly to console.
 
     Examples:
-        brief(add)  # Get brief docs for the 'add' function
-        brief(user)  # Get brief docs for an object's class
-        brief(User, "send_message")  # Get brief docs for User.send_message
+        brief(add)  # Get brief documentation for the 'add' function
+        brief(user)  # Get brief documentation for an object's class
+        brief(User, "send_message")  # Get brief documentation for User.send_message
     """
     # Handle object instances - get their class
     target_type = what

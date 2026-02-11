@@ -178,35 +178,37 @@ def get_prompt_def(name: str) -> Optional[PromptDef]:
     return settings.get_prompt_def(name)
 
 
-def configure_logging(level: str = "WARNING") -> None:
-    """Configure logging for Statek only, without affecting other loggers.
+def set_log_level(log_level: str = "WARNING") -> None:
+    """Set the log level for STATEK routines.
+
+    Enables or disables logs from run_agentic_loop and other STATEK routines.
 
     Args:
-        level: Logging level as string (DEBUG, INFO, WARNING, ERROR, CRITICAL).
-               Defaults to WARNING.
+        log_level: One of NOTSET, DEBUG, INFO, WARNING, ERROR or CRITICAL.
+                   Defaults to WARNING.
     """
-    # Convert string level to logging constant
-    numeric_level = getattr(logging, level.upper(), logging.WARNING)
+    numeric_level = getattr(logging, log_level.upper(), logging.WARNING)
 
-    # Get statek logger
     logger = logging.getLogger('statek')
     logger.setLevel(numeric_level)
 
     # Only add handler if logger doesn't already have one
     if not logger.handlers:
-        # Create console handler with formatting
         handler = logging.StreamHandler()
         handler.setLevel(numeric_level)
-
-        # Create formatter
         formatter = logging.Formatter('%(message)s')
         handler.setFormatter(formatter)
-
-        # Add handler to logger
         logger.addHandler(handler)
+    else:
+        # Update existing handler level
+        for handler in logger.handlers:
+            handler.setLevel(numeric_level)
 
-    # Prevent propagation to root logger to keep it separate
     logger.propagate = False
+
+
+# Set default log level to WARNING
+set_log_level("WARNING")
 
 
 @lru_cache()
