@@ -125,42 +125,39 @@ class Job:
         self.warmup_block_num = warmup_block_num
         # Optional path for logging job execution
         self.logs_path = logs_path
+        # Counter for consecutive execution errors
+        self.error_count = 0
         
         # Log system prompt and prompt template on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
-            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
-            logger = get_statek_logger()
-            system_prompt = self.job_def.agent.system_prompt
-            self._log_to_file(f"{system_prompt}\n\n")
-            logger.info("%s", system_prompt)
-            prompt_template = self.job_def.prompt()
-            self._log_to_file(f"{prompt_template}\n\n")
-            logger.info("%s", prompt_template)
+            self._log(self.job_def.agent.system_prompt)
+            self._log(self.job_def.prompt())
 
-    def _log_to_file(self, content: str):
+    def _log(self, content: str):
         """
-        Write content to the log file if logging is enabled.
+        Write content to the log file and to the console logger.
         
         Args:
-            content: The content to write to the log file
+            content: The content to log
         """
         if not self.logs_path:
             return
-            
+
+        from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
         import os
-        
-        # Get agent name and job uuid
+
+        # Write to log file
         agent_name = self.job_def.agent.role if self.job_def.agent else "unknown"
         job_uuid = db0.uuid(db0.materialized(self))
         log_filename = f"{agent_name}_{job_uuid}.log"
         log_filepath = os.path.join(self.logs_path, log_filename)
-        
-        # Ensure directory exists
         os.makedirs(self.logs_path, exist_ok=True)
-        
-        # Append to log file
         with open(log_filepath, 'a', encoding='utf-8') as f:
-            f.write(content)
+            f.write(f"{content}\n\n")
+
+        # Write to console logger
+        logger = get_statek_logger()
+        logger.info("%s", content)
 
     def console_append(self, output: str):
         """
@@ -170,15 +167,7 @@ class Job:
             output: The output string to append
         """
         self.py_env.console_append(output)
-        
-        # Log console output if logging is enabled
-        if self.logs_path:
-            # Format each line with >
-            self._log_to_file(f"> {output}\n\n")
-            # Also log to console at DEBUG level
-            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
-            logger = get_statek_logger()
-            logger.info("> %s", output.rstrip())
+        self._log(f"> {output.rstrip()}")
 
     @property
     def status(self) -> JobStatus:
@@ -222,8 +211,6 @@ class Job:
                 self.job_def.prompt(),
                 from_pos=0
             )
-            if self.logs_path:
-                self._log_to_file(f"{prompt}\n\n")
             return prompt
         else:
             # Not first prompt: format console from last chat element's console position
@@ -343,12 +330,8 @@ class Job:
         )
         self.chat_log.append(chat_item)
         
-        # Log the LLM response if logging is enabled
-        if self.logs_path:
-            self._log_to_file(f"{llm_resp}\n\n")
-            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
-            logger = get_statek_logger()
-            logger.info("%s", llm_resp)
+        # Log the LLM response
+        self._log(llm_resp)
 
     @property
     def last_response(self) -> str | None:
