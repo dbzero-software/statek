@@ -126,26 +126,16 @@ class Job:
         # Optional path for logging job execution
         self.logs_path = logs_path
         
-        # Log system prompt and warmup code on job creation if logging is enabled
+        # Log system prompt and prompt template on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
             from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
             logger = get_statek_logger()
             system_prompt = self.job_def.agent.system_prompt
             self._log_to_file(f"{system_prompt}\n\n")
             logger.info("%s", system_prompt)
-            logger.info("")
-            # Log warmup code if present
-            if self.job_def.warmup_code:
-                warmup = self.job_def.warmup_code
-                if isinstance(warmup, str):
-                    self._log_to_file(f"{warmup}\n\n")
-                    logger.info("%s", warmup)
-                else:
-                    # Log all warmup blocks
-                    for i, block in enumerate(warmup):
-                        self._log_to_file(f"[Warmup Block {i}]\n{block}\n\n")
-                        logger.info("[Warmup Block %d]\n%s", i, block)
-                logger.info("")
+            prompt_template = self.job_def.prompt()
+            self._log_to_file(f"{prompt_template}\n\n")
+            logger.info("%s", prompt_template)
 
     def _log_to_file(self, content: str):
         """
@@ -185,7 +175,7 @@ class Job:
         if self.logs_path:
             # Format each line with >
             self._log_to_file(f"> {output}\n\n")
-            # Also log to console at INFO level
+            # Also log to console at DEBUG level
             from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
             logger = get_statek_logger()
             logger.info("> %s", output.rstrip())
@@ -356,11 +346,9 @@ class Job:
         # Log the LLM response if logging is enabled
         if self.logs_path:
             self._log_to_file(f"{llm_resp}\n\n")
-            # Also log to console at INFO level
             from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
             logger = get_statek_logger()
             logger.info("%s", llm_resp)
-            logger.info("")
 
     @property
     def last_response(self) -> str | None:

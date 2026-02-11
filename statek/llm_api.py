@@ -5,7 +5,6 @@ from collections import namedtuple
 from functools import lru_cache
 from typing import Optional, Iterable, List, Dict
 import json
-import time
 import httpx
 
 from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger, statek_log
@@ -169,12 +168,6 @@ class OpenRouter_API(LLM_API):
         """
         messages = self._build_messages(prompt, system_prompt, chat_history)
 
-        # Log the user message at DEBUG level (actual message logged in utils.py)
-        user_messages = [msg for msg in messages if msg['role'] == 'user']
-        if user_messages:
-            last_user_message = user_messages[-1]['content']
-            STATEK_LOGGER.debug("User message to LLM:\n%s", last_user_message)
-
         # Prepare the request payload
         payload = {
             "model": self.model,
@@ -195,7 +188,6 @@ class OpenRouter_API(LLM_API):
         }
 
         # Make the async HTTP request
-        start_time = time.time()
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 self.api_url,
@@ -214,10 +206,6 @@ class OpenRouter_API(LLM_API):
             # When response_format is used, extract python_code from JSON
             if self.response_format:
                 response_text = json.loads(response_text)["python_code"]
-
-            # Log response time at DEBUG level
-            elapsed_time = time.time() - start_time
-            STATEK_LOGGER.debug("LLM response time: %.2f seconds", elapsed_time)
 
             # OpenRouter is stateless, so session_id is None
             return LLM_Response(text=response_text, session_id=None)
@@ -344,12 +332,6 @@ class Claude_API(LLM_API):
         """
         messages = self._build_messages(prompt, chat_history)
 
-        # Log the user message at DEBUG level
-        user_messages = [msg for msg in messages if msg['role'] == 'user']
-        if user_messages:
-            last_user_message = user_messages[-1]['content']
-            STATEK_LOGGER.debug("User message to LLM:\n%s", last_user_message)
-
         # Prepare the request payload
         payload = {
             "model": self.model,
@@ -378,7 +360,6 @@ class Claude_API(LLM_API):
             headers["anthropic-beta"] = "prompt-caching-2024-07-31"
 
         # Make the async HTTP request
-        start_time = time.time()
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
@@ -401,10 +382,6 @@ class Claude_API(LLM_API):
             # When response_format is used, extract python_code from JSON
             if self.response_format:
                 response_text = json.loads(response_text)["python_code"]
-
-            # Log response time at DEBUG level
-            elapsed_time = time.time() - start_time
-            STATEK_LOGGER.debug("LLM response time: %.2f seconds", elapsed_time)
 
             # Claude Messages API is stateless, so session_id is None
             return LLM_Response(text=response_text, session_id=None)
