@@ -318,12 +318,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         elif job.status == JobStatus.SUSPENDED:
             job.set_status(JobStatus.STARTED)
 
-        # Log warmup block to file before execution
-        if job.status == JobStatus.WARMING_UP and job.logs_path:
-            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
-            logger = get_statek_logger()
-            job._log_to_file(f"{code}\n\n")  # pylint: disable=protected-access
-            logger.info("%s", code)
+        # Log warmup block before execution
+        if job.status == JobStatus.WARMING_UP:
+            job._log(code)  # pylint: disable=protected-access
 
         # Step 5: Execute the code using exec_step
         # Pass next_instr_num if resuming from SUSPENDED
@@ -357,10 +354,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
             job.set_status(JobStatus.DONE)
-            # Log exit status to console at INFO
-            from statek.settings import get_statek_logger  # pylint: disable=import-outside-toplevel
-            logger = get_statek_logger()
-            logger.info("exit: %s", job.py_env.exit_status)
+            job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
             return True
 
         # Step 8: Handle warmup block progression or transition to STARTED
