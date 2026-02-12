@@ -3,7 +3,7 @@
 
 from typing import Iterable, Union, List, Dict, Optional, ForwardRef
 import dbzero as db0
-from statek.utils import format_callable_decl, prompt_append_console, block_comment
+from statek.utils import format_callable_decl, prompt_append_console, block_comment, strip_markup
 from statek.future import temporal, FutureResult
 
 
@@ -311,4 +311,67 @@ def test_block_comment_with_empty_lines():
     code = "line1\n\nline3"
     result = block_comment(code)
     expected = "# line1\n# \n# line3"
+    assert result == expected
+
+
+def test_strip_markup_code_block_with_surrounding_text():
+    """Test strip_markup extracts code and comments surrounding text."""
+    input_text = 'Let me think about the first instruction.\n```python\nprint("Hello")\n```'
+    result = strip_markup(input_text)
+    expected = '# Let me think about the first instruction.\nprint("Hello")'
+    assert result == expected
+
+
+def test_strip_markup_no_fences():
+    """Test strip_markup returns input unchanged when no code fences present."""
+    code = 'x = 1\nprint(x)'
+    assert strip_markup(code) == code
+
+
+def test_strip_markup_code_only():
+    """Test strip_markup with a code block and no surrounding text."""
+    input_text = '```python\nprint("Hello")\n```'
+    result = strip_markup(input_text)
+    assert result == 'print("Hello")'
+
+
+def test_strip_markup_multiple_code_blocks():
+    """Test strip_markup with multiple code blocks separated by text."""
+    input_text = (
+        'First, let me define a variable:\n'
+        '```python\nx = 42\n```\n'
+        'Now let me print it:\n'
+        '```python\nprint(x)\n```'
+    )
+    result = strip_markup(input_text)
+    expected = (
+        '# First, let me define a variable:\n'
+        'x = 42\n'
+        '# Now let me print it:\n'
+        'print(x)'
+    )
+    assert result == expected
+
+
+def test_strip_markup_code_block_without_language():
+    """Test strip_markup handles code fences without a language specifier."""
+    input_text = 'Here is the code:\n```\nprint("hello")\n```'
+    result = strip_markup(input_text)
+    expected = '# Here is the code:\nprint("hello")'
+    assert result == expected
+
+
+def test_strip_markup_multiline_text_becomes_block_comment():
+    """Test that multi-line text outside code blocks is fully commented."""
+    input_text = (
+        'I will solve this step by step.\n'
+        'First, create a variable.\n'
+        '```python\nx = 1\n```'
+    )
+    result = strip_markup(input_text)
+    expected = (
+        '# I will solve this step by step.\n'
+        '# First, create a variable.\n'
+        'x = 1'
+    )
     assert result == expected

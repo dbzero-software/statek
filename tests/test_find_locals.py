@@ -1,5 +1,5 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable
-from statek.task import find_locals
+from statek.utils import find_locals
 from statek.system import inject_context
 
 

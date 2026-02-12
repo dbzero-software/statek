@@ -8,6 +8,7 @@ import nest_asyncio
 import dbzero as db0
 from .future import get_any_future, get_all_future
 from .docstring import parse_docstring, format_docstring
+from .utils import find_locals
 
 
 def inject_context(func, __local_context):
@@ -25,6 +26,64 @@ def inject_context(func, __local_context):
 
 _SKIP_KINDS = {inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL}
 _POSITIONAL_KINDS = {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+
+
+def _rebuild_args(sig, converted):
+    """Rebuild args and kwargs tuples from a converted bound-arguments dict."""
+    new_args = []
+    new_kwargs = {}
+    for name, param in sig.parameters.items():
+        if param.kind in _POSITIONAL_KINDS and name in converted:
+            new_args.append(converted[name])
+        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+            new_args.extend(converted.get(name, ()))
+        elif param.kind == inspect.Parameter.KEYWORD_ONLY and name in converted:
+            new_kwargs[name] = converted[name]
+        elif param.kind == inspect.Parameter.VAR_KEYWORD:
+            new_kwargs.update(converted.get(name, {}))
+    return tuple(new_args), new_kwargs
+
+
+def _bind_by_name(f, args, kwargs):
+    """Bind string arguments to local context variables on type mismatch.
+
+    When a tool receives a string argument but the parameter expects a non-string
+    type, looks up the string value as a variable name via find_locals and
+    substitutes with the variable's value if found.
+    """
+
+    try:
+        hints = f.__annotations__
+        sig = inspect.signature(f)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+    except Exception:  # pylint: disable=broad-except
+        return args, kwargs
+
+    if not hints:
+        return args, kwargs
+
+    converted = dict(bound.arguments)
+    changed = False
+
+    for name, value in bound.arguments.items():
+        param = sig.parameters[name]
+        annotation = hints.get(name)
+        if name.startswith("_") or param.kind in _SKIP_KINDS or annotation is None:
+            continue
+        if (isinstance(value, str)
+                and isinstance(annotation, type)
+                and not issubclass(str, annotation)
+                and not db0.is_enum(annotation)):  # pylint: disable=no-member
+            matches = list(find_locals(var_name=value))
+            if matches:
+                converted[name] = matches[0]
+                changed = True
+
+    if not changed:
+        return args, kwargs
+
+    return _rebuild_args(sig, converted)
 
 
 def _convert_enum_args(f, args, kwargs):
@@ -55,20 +114,7 @@ def _convert_enum_args(f, args, kwargs):
     if not changed:
         return args, kwargs
 
-    # Rebuild args and kwargs from converted arguments
-    new_args = []
-    new_kwargs = {}
-    for name, param in sig.parameters.items():
-        if param.kind in _POSITIONAL_KINDS and name in converted:
-            new_args.append(converted[name])
-        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
-            new_args.extend(converted.get(name, ()))
-        elif param.kind == inspect.Parameter.KEYWORD_ONLY and name in converted:
-            new_kwargs[name] = converted[name]
-        elif param.kind == inspect.Parameter.VAR_KEYWORD:
-            new_kwargs.update(converted.get(name, {}))
-
-    return tuple(new_args), new_kwargs
+    return _rebuild_args(sig, converted)
 
 
 def tool(f):
@@ -90,6 +136,7 @@ def tool(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         args, kwargs = _convert_enum_args(f, args, kwargs)
+        args, kwargs = _bind_by_name(f, args, kwargs)
 
         # update globals with local context
         result = None
