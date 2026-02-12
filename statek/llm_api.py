@@ -110,7 +110,7 @@ class OpenRouter_API(LLM_API):
         self.api_url = settings.api_url
         self.api_key = settings.api_key
 
-    def _build_messages(
+    def build_messages(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
@@ -166,7 +166,7 @@ class OpenRouter_API(LLM_API):
             httpx.HTTPError: If the API request fails
             KeyError: If the response format is unexpected
         """
-        messages = self._build_messages(prompt, system_prompt, chat_history)
+        messages = self.build_messages(prompt, system_prompt, chat_history)
 
         # Prepare the request payload
         payload = {
@@ -175,10 +175,6 @@ class OpenRouter_API(LLM_API):
         }
         if self.response_format:
             payload["response_format"] = self.response_format
-        messages_str = "Sending request to OpenRouter with the following messages:\n"
-        for message in messages:
-            messages_str += f"Message role: {message['role']}, content: {message['content']}\n"
-        statek_log(messages_str, level='debug')
         # set any additional parameters from kwargs
         payload.update(self.kwargs)
         # Prepare headers
@@ -248,7 +244,7 @@ class Claude_API(LLM_API):
             )
         self.api_key = settings.api_key
 
-    def _build_messages(
+    def build_messages(
         self,
         prompt: str,
         chat_history: Optional[Iterable[str]] = None
@@ -330,7 +326,7 @@ class Claude_API(LLM_API):
             httpx.HTTPError: If the API request fails
             KeyError: If the response format is unexpected
         """
-        messages = self._build_messages(prompt, chat_history)
+        messages = self.build_messages(prompt, chat_history)
 
         # Prepare the request payload
         payload = {
@@ -342,11 +338,6 @@ class Claude_API(LLM_API):
         # Add system prompt if provided (Claude uses a separate 'system' field)
         if system_prompt:
             payload["system"] = self._build_system_prompt(system_prompt)
-
-        messages_str = "Sending request to Claude with the following messages:\n"
-        for message in messages:
-            messages_str += f"Message role: {message['role']}, content: {message['content']}\n"
-        statek_log(messages_str, level='debug')
 
         # Prepare headers for Claude API
         headers = {
