@@ -18,6 +18,7 @@ from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
 from statek.llm_api import LLM_API
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log
 from statek.system import inject_context
+from statek.utils import strip_markup
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -385,7 +386,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 12: Add new log item using append_chat_log
     statek_log(f"LLM Response:\n{response.text}", level='debug')
-    job.append_chat_log(request, response.text)
+    job.append_chat_log(request, strip_markup(response.text))
 
     # Step 13: Return False
     return False

@@ -5,7 +5,7 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import docs, brief, tool, create_tool
+from statek.system import docs, brief, tool, create_tool, inject_context
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.docstring import DocstringParseError
 from statek.utils import format_callable_decl
@@ -458,3 +458,93 @@ class TestToolEnumConversion:
 
         with pytest.raises(Exception):
             alert("INVALID")
+
+
+class TestToolBindByName:
+    """Test cases for binding string arguments to local context variables."""
+
+    def test_string_bound_to_context_variable(self):
+        """String arg is resolved to local context variable on type mismatch."""
+        class User:
+            def __init__(self, name):
+                self.name = name
+
+        @tool
+        def send_to(recipient: User, message: str, **kwargs):  # pylint: disable=unused-argument
+            return recipient
+
+        user = User("Alice")
+        wrapped = inject_context(send_to, {"user": user})
+
+        result = wrapped("user", "hello")
+        assert result is user
+
+    def test_string_not_bound_when_type_is_str(self):
+        """String arg is NOT resolved when parameter type IS str."""
+        @tool
+        def greet(name: str, **kwargs):  # pylint: disable=unused-argument
+            return name
+
+        wrapped = inject_context(greet, {"name": "something else"})
+
+        result = wrapped("name")
+        assert result == "name"
+
+    def test_string_not_bound_when_variable_not_in_context(self):
+        """String arg is NOT resolved when variable not found in context."""
+        class User:
+            pass
+
+        @tool
+        def send_to(recipient: User, **kwargs):  # pylint: disable=unused-argument
+            return recipient
+
+        wrapped = inject_context(send_to, {"admin": User()})
+
+        result = wrapped("user")
+        assert result == "user"
+
+    def test_keyword_arg_bound_to_context_variable(self):
+        """Keyword string arg is resolved to context variable."""
+        class User:
+            def __init__(self, name):
+                self.name = name
+
+        @tool
+        def send_to(recipient: User, message: str, **kwargs):  # pylint: disable=unused-argument
+            return recipient
+
+        user = User("Alice")
+        wrapped = inject_context(send_to, {"user": user})
+
+        result = wrapped(recipient="user", message="hello")
+        assert result is user
+
+    def test_mixed_binding_and_regular_args(self):
+        """Only mismatched args are bound, str args stay as-is."""
+        class User:
+            def __init__(self, name):
+                self.name = name
+
+        @tool
+        def send_to(recipient: User, message: str, **kwargs):  # pylint: disable=unused-argument
+            return (recipient, message)
+
+        user = User("Alice")
+        wrapped = inject_context(send_to, {"user": user})
+
+        result = wrapped("user", "hello")
+        assert result[0] is user
+        assert result[1] == "hello"
+
+    def test_no_context_no_binding(self):
+        """Without _local_context, no binding occurs."""
+        class User:
+            pass
+
+        @tool
+        def send_to(recipient: User, **kwargs):  # pylint: disable=unused-argument
+            return recipient
+
+        result = send_to("user")
+        assert result == "user"
