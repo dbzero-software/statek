@@ -51,6 +51,7 @@ class StatekSettings(BaseSettings):
     default_llm_api_provider: str = "OPENROUTER"
     prompt_files_dir: Optional[str] = None
     prompt_defs: Dict[str, PromptDef] = Field(default_factory=dict)
+    logs_path: Optional[str] = None
 
     model_config = SettingsConfigDict(extra='ignore')
 

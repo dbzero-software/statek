@@ -351,6 +351,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             formatted_frames = ''.join(traceback.format_list(top_frames))
             error_msg = f"{type(e).__name__}: {e}\n{formatted_frames}"
             job.console_append(error_msg)
+            # set status to error
+            #job.py_env.exit_status = f"Error: {type(e).__name__}: {e}"
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
@@ -377,6 +379,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 10: Get next request parameters
     request = job.get_next_request()
 
+    # Log full messages being sent to LLM
+    messages = llm_api.build_messages(**{k: v for k, v in request.items() if k != 'session_id'})
+    messages_str = "LLM Request messages:\n"
+    for msg in messages:
+        messages_str += f"[{msg['role']}]: {msg['content']}\n"
+    job._debug_log(messages_str)  # pylint: disable=protected-access
+
     # Step 11: Run the request with LLM API - await response
     response = await llm_api.process_request(**request)
 
@@ -385,7 +394,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         job.session_id = response.session_id
 
     # Step 12: Add new log item using append_chat_log
-    statek_log(f"LLM Response:\n{response.text}", level='debug')
+    job._debug_log(f"LLM Response:\n{response.text}")  # pylint: disable=protected-access
     job.append_chat_log(request, strip_markup(response.text))
 
     # Step 13: Return False
@@ -509,8 +518,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
 async def run_agentic_loop(agent: 'Agent',
                            warmup_code: Union[str, Sequence[str]],
                            task_queue_size_func: Callable, max_concurrency: int = 100,
-                           provider: str = None, auto_terminate: bool = False,
-                           logs_path: Optional[str] = None):
+                           provider: str = None, auto_terminate: bool = False):
     """
     Helper function to start listening on arriving new tasks (e.g incoming user messages)
     and process them with a specific agent such as Coordinator or MessageDispatcher.
@@ -529,8 +537,6 @@ async def run_agentic_loop(agent: 'Agent',
         provider: the default LLM provider (or None for default)
         auto_terminate: flag indicating if the loop should be terminated once all jobs 
                        have been completed; this flag is most useful for testing
-        logs_path: optional directory path for logging job execution (system prompt,
-                    prompts, LLM responses, and console output)
     
     Example warmup code:
         ```
@@ -602,8 +608,7 @@ async def run_agentic_loop(agent: 'Agent',
                 model_family=provider or "default",
                 model=model_to_use,
                 job_status=JobStatus.READY,
-                py_env=pyenv,
-                logs_path=logs_path
+                py_env=pyenv
             )
     
     await run_jobs_loop(

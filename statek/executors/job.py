@@ -98,8 +98,7 @@ class Job:
         chat_log: List[ChatLogItem] = None,
         awaited_result: Optional[FutureResult] = None,
         next_instr_num: Optional[int] = None,
-        warmup_block_num: Optional[int] = None,
-        logs_path: Optional[str] = None
+        warmup_block_num: Optional[int] = None
     ):
         self.job_def = job_def
         if self.job_def.agent is not None:
@@ -123,15 +122,17 @@ class Job:
         self.next_instr_num = next_instr_num
         # Continuation warmup block number (for multi-block warmup_code)
         self.warmup_block_num = warmup_block_num
-        # Optional path for logging job execution
-        self.logs_path = logs_path
-        # Counter for consecutive execution errors
-        self.error_count = 0
         
         # Log system prompt and prompt template on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
             self._log(self.job_def.agent.system_prompt)
             self._log(self.job_def.prompt())
+
+    @property
+    def logs_path(self) -> Optional[str]:
+        """Get the logs path from StatekSettings."""
+        from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+        return get_statek_settings().logs_path
 
     def _log(self, content: str):
         """
@@ -158,6 +159,29 @@ class Job:
         # Write to console logger
         logger = get_statek_logger()
         logger.info("%s", content)
+
+    def _debug_log(self, content: str):
+        """
+        Write content to the debug log file.
+
+        Writes to a separate file named <agent_name>_<uuid>-debug.log
+        for detailed LLM request/response logging.
+
+        Args:
+            content: The content to log
+        """
+        if not self.logs_path:
+            return
+
+        import os  # pylint: disable=import-outside-toplevel
+
+        agent_name = self.job_def.agent.role if self.job_def.agent else "unknown"
+        job_uuid = db0.uuid(db0.materialized(self))
+        log_filename = f"{agent_name}_{job_uuid}-debug.log"
+        log_filepath = os.path.join(self.logs_path, log_filename)
+        os.makedirs(self.logs_path, exist_ok=True)
+        with open(log_filepath, 'a', encoding='utf-8') as f:
+            f.write(f"{content}\n\n")
 
     def console_append(self, output: str):
         """
