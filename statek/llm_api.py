@@ -7,7 +7,7 @@ from typing import Optional, Iterable, List, Dict
 import json
 import httpx
 
-from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger, statek_log
+from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
 
 STATEK_LOGGER = get_statek_logger()
 
