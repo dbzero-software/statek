@@ -330,12 +330,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Step 5: Execute the code using exec_step
         # Pass next_instr_num if resuming from SUSPENDED
         try:
-            instr_num = job.next_instr_num if resuming_from_suspended else None
-            not_exited = await exec_step(code, job, instr_num)
+            not_exited = await exec_step(code, job, job.next_instr_num )
             # Clear continuation state after successful execution
-            if resuming_from_suspended:
-                job.awaited_result = None
-                job.next_instr_num = None
+            job.awaited_result = None
+            job.next_instr_num = None
         except FutureError as e:
             # Step 6: Handle FutureError - suspend job
             job.awaited_result = e.future_result
