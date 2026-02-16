@@ -1,5 +1,5 @@
 """Tests for run_job_step resumption after FutureError."""
-# pylint: disable=no-member
+# pylint: disable=no-member,R0903
 
 from dataclasses import dataclass
 
