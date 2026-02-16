@@ -8,7 +8,7 @@ from typing import Callable, Optional, Sequence, Union
 from contextlib import contextmanager
 import dbzero as db0
 
-from statek.exceptions import FutureError
+from statek.exceptions import FutureError, LLM_HarnessError
 from statek.future import FutureResult
 
 
@@ -16,6 +16,7 @@ from statek.exceptions import FutureError
 from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
 from statek.llm_api import LLM_API
+from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log
 from statek.system import inject_context
 from statek.utils import strip_markup
@@ -267,10 +268,9 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     # Re-raise the decorated exception
                     raise
                 except Exception as e:
-                    # Write full stack trace to console and re-raise
-                    import traceback
-                    error_msg = traceback.format_exc()
-                    job.console_append(error_msg)
+                    # Write error message to console and re-raise
+                    error_msg = f"{type(e).__name__}: {e}"
+                    job.console_append(error_msg, error_message=error_msg)
                     raise
     finally:
         # Always save the local state, even if exception is raised
@@ -299,6 +299,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     example:
         see: experiments/ai/run_job_step.ipynb
     """
+    # Step 0: Check harness constraints before step
+    harness = get_llm_harness()
+    harness.check_before_step(job)
+
     # Step 1: If job status is DONE, exit with True
     if job.status == JobStatus.DONE:
         return True
@@ -344,15 +348,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Step 7: Handle all other exceptions
             # Print error message and top 3 execution frames to agent's console
             # Leave exit_status as None so the LLM can see the error and recover
-            import traceback
-            tb = traceback.extract_tb(e.__traceback__)
-            # Get top 3 frames from the execution stack
-            top_frames = tb[:3] if len(tb) >= 3 else tb
-            formatted_frames = ''.join(traceback.format_list(top_frames))
-            error_msg = f"{type(e).__name__}: {e}\n{formatted_frames}"
-            job.console_append(error_msg)
-            # set status to error
-            #job.py_env.exit_status = f"Error: {type(e).__name__}: {e}"
+            error_msg = f"{type(e).__name__}: {e}"
+            job.console_append(error_msg, error_message=error_msg)
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
@@ -389,6 +386,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 11: Run the request with LLM API - await response
     response = await llm_api.process_request(**request)
 
+    # Refresh byte stats from LLM API response
+    job.total_bytes_sent = response.stats.total_bytes_sent
+    job.total_bytes_received = response.stats.total_bytes_received
+    job.context_bytes = job.total_bytes_sent + job.total_bytes_received
+    if response.stats.cost is not None:
+        job.total_cost += response.stats.cost
+
     # Update session_id if returned by the LLM API
     if response.session_id:
         job.session_id = response.session_id
@@ -397,7 +401,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     job._debug_log(f"LLM Response:\n{response.text}")  # pylint: disable=protected-access
     job.append_chat_log(request, strip_markup(response.text))
 
-    # Step 13: Return False
+    # Step 13: Check harness constraints after step
+    harness.check_after_step(job)
+
+    # Step 14: Return False
     return False
 
 
@@ -431,16 +438,25 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
             statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}", level='debug')
             await run_job_step(job, provider)
+            # Log cost after each LLM request
+            statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
+                       f"cost: ${job.total_cost:.4f}")
             # Log exit status if job completed successfully
             if job.status == JobStatus.DONE and job.py_env.exit_status is not None:
                 exit_msg = f"exit: {job.py_env.exit_status}"
                 job.console_append(exit_msg)
+        except LLM_HarnessError as e:
+            error_msg = f"LLM_HarnessError: {e}"
+            statek_log(error_msg, level='debug')
+            job.py_env.exit_status = f"Error: {e}"
+            job.console_append(error_msg, error_message=error_msg)
+            job.set_status(JobStatus.DONE)
         except Exception as e:
             # If job fails, write full stack trace to console and set status to DONE
             import traceback
             error_msg = f"Job {db0.uuid(job)} failed with error: {e}\n{traceback.format_exc()}"
             statek_log(error_msg, level='debug')
-            job.console_append(error_msg)
+            job.console_append(error_msg, error_message=error_msg)
             job.set_status(JobStatus.DONE)
 
 async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
