@@ -38,7 +38,7 @@ class LLM_Harness:
                 f"Maximum number of turns exceeded: {job.num_turns}/{self.max_turns}")
         if self.max_exceptions is not None and job.exception_count >= self.max_exceptions:
             raise LLM_HarnessError(
-                f"Maximum number of exceptions exceeded: {job.exception_count}/{self.max_exceptions}")
+                f"Maximum number of exceptions exceeded: {job.exception_count}/{self.max_exceptions}") # pylint: disable=line-too-long
         if (self.max_consecutive_exceptions is not None
                 and job.max_consecutive_exceptions >= self.max_consecutive_exceptions):
             raise LLM_HarnessError(
