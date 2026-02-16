@@ -11,8 +11,8 @@ from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
 
 STATEK_LOGGER = get_statek_logger()
 
-# Named tuple for LLM response
-LLM_Response = namedtuple("LLM_Response", ["text", "session_id"])
+LLM_Stats = namedtuple("LLM_Stats", ["total_bytes_sent", "total_bytes_received", "cost"])
+LLM_Response = namedtuple("LLM_Response", ["text", "session_id", "stats"])
 
 
 class LLM_API(ABC):
@@ -42,7 +42,7 @@ class LLM_API(ABC):
             session_id: Provider-specific session ID (if request is a continuation)
 
         Returns:
-            LLM_Response containing the response text and optional session_id
+            LLM_Response containing the response text, optional session_id, and stats
 
         Raises:
             Exception: If the API request fails or model cannot be determined
@@ -109,6 +109,8 @@ class OpenRouter_API(LLM_API):
 
         self.api_url = settings.api_url
         self.api_key = settings.api_key
+        self.total_bytes_sent = 0
+        self.total_bytes_received = 0
 
     def build_messages(
         self,
@@ -183,6 +185,10 @@ class OpenRouter_API(LLM_API):
             "Content-Type": "application/json"
         }
 
+        # Measure bytes sent
+        payload_bytes = json.dumps(payload).encode('utf-8')
+        self.total_bytes_sent += len(payload_bytes)
+
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -192,19 +198,33 @@ class OpenRouter_API(LLM_API):
             )
             response.raise_for_status()
 
+            # Measure bytes received
+            self.total_bytes_received += len(response.content)
+
             # Parse the response
             data = response.json()
 
             # Extract the response text
             # OpenRouter follows OpenAI's response format
+            if "choices" not in data or not data["choices"]:
+                error_detail = data.get("error", {}).get("message", str(data))
+                raise RuntimeError(f"OpenRouter API error: {error_detail}")
             response_text = data["choices"][0]["message"]["content"]
 
             # When response_format is used, extract python_code from JSON
             if self.response_format:
                 response_text = json.loads(response_text)["python_code"]
 
+            cost = data.get("usage", {}).get("cost")
+
+            stats = LLM_Stats(
+                total_bytes_sent=self.total_bytes_sent,
+                total_bytes_received=self.total_bytes_received,
+                cost=cost
+            )
+
             # OpenRouter is stateless, so session_id is None
-            return LLM_Response(text=response_text, session_id=None)
+            return LLM_Response(text=response_text, session_id=None, stats=stats)
 
 
 class Claude_API(LLM_API):
@@ -243,6 +263,8 @@ class Claude_API(LLM_API):
                 "Please provide a model name or configure default_model in settings."
             )
         self.api_key = settings.api_key
+        self.total_bytes_sent = 0
+        self.total_bytes_received = 0
 
     def build_messages(
         self,
@@ -350,6 +372,10 @@ class Claude_API(LLM_API):
         if self.use_prompt_caching:
             headers["anthropic-beta"] = "prompt-caching-2024-07-31"
 
+        # Measure bytes sent
+        payload_bytes = json.dumps(payload).encode('utf-8')
+        self.total_bytes_sent += len(payload_bytes)
+
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -358,6 +384,9 @@ class Claude_API(LLM_API):
                 headers=headers
             )
             response.raise_for_status()
+
+            # Measure bytes received
+            self.total_bytes_received += len(response.content)
 
             # Parse the response
             data = response.json()
@@ -374,5 +403,13 @@ class Claude_API(LLM_API):
             if self.response_format:
                 response_text = json.loads(response_text)["python_code"]
 
+            cost = data.get("usage", {}).get("cost")
+
+            stats = LLM_Stats(
+                total_bytes_sent=self.total_bytes_sent,
+                total_bytes_received=self.total_bytes_received,
+                cost=cost
+            )
+
             # Claude Messages API is stateless, so session_id is None
-            return LLM_Response(text=response_text, session_id=None)
+            return LLM_Response(text=response_text, session_id=None, stats=stats)

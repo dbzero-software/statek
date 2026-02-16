@@ -122,7 +122,13 @@ class Job:
         self.next_instr_num = next_instr_num
         # Continuation warmup block number (for multi-block warmup_code)
         self.warmup_block_num = warmup_block_num
-        
+        # Total context bytes used by this job so far
+        self.context_bytes = 0
+        self.total_bytes_sent = 0
+        self.total_bytes_received = 0
+        # Total cost as reported by the LLM API provider
+        self.total_cost = 0.0
+
         # Log system prompt and prompt template on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
             self._log(self.job_def.agent.system_prompt)
@@ -183,14 +189,20 @@ class Job:
         with open(log_filepath, 'a', encoding='utf-8') as f:
             f.write(f"{content}\n\n")
 
-    def console_append(self, output: str):
+    def console_append(self, output: str, error_message: str = None):
         """
         Append output to the console and optionally log it.
-        
+
         Args:
             output: The output string to append
+            error_message: optional error message (if execution resulted in an exception)
         """
         self.py_env.console_append(output)
+        if error_message is not None:
+            chat_log_item_id = len(self.chat_log) - 1 if self.chat_log else 0
+            if self.py_env.exceptions is None:
+                self.py_env.exceptions = {}
+            self.py_env.exceptions[chat_log_item_id] = error_message
         self._log(f"> {output.rstrip()}")
 
     @property
@@ -428,3 +440,36 @@ class Job:
             # All blocks completed
             return None
         return self.last_response
+
+    @property
+    def num_turns(self) -> int:
+        """Returns the number of turns so far (i.e. the number of chat log items)."""
+        return len(self.chat_log)
+
+    @property
+    def exception_count(self) -> int:
+        """Returns the total number of exceptions so far."""
+        if not self.py_env.exceptions:
+            return 0
+        return len(self.py_env.exceptions)
+
+    @property
+    def max_consecutive_exceptions(self) -> int:
+        """Returns the maximum number of consecutive exceptions in Job history."""
+        if not self.py_env.exceptions or not self.chat_log:
+            return 0
+        exception_ids = set(self.py_env.exceptions.keys())
+        max_streak = 0
+        streak = 0
+        for i in range(len(self.chat_log)):
+            if i in exception_ids:
+                streak += 1
+                max_streak = max(max_streak, streak)
+            else:
+                streak = 0
+        return max_streak
+
+    @property
+    def approx_token_usage(self) -> int:
+        """Calculates approximate token usage based on total bytes sent and received."""
+        return (self.total_bytes_sent + self.total_bytes_received) // 4

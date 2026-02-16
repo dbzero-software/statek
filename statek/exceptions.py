@@ -2,6 +2,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+class LLM_HarnessError(Exception):
+    """Raised when an LLM harness limit has been exceeded."""
+
+
 @dataclass
 class FutureError(Exception):
     """

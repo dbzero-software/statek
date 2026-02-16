@@ -52,6 +52,14 @@ class StatekSettings(BaseSettings):
     prompt_files_dir: Optional[str] = None
     prompt_defs: Dict[str, PromptDef] = Field(default_factory=dict)
     logs_path: Optional[str] = None
+    """The maximum allowed number of LLM turns per conversation"""
+    max_turns: int = 5
+    """The maximum allowed total number of exceptions per conversation"""
+    max_exceptions: int = 3
+    """Maximum number of consecutive exceptions per conversation"""
+    max_consecutive_exceptions: int = 1
+    """Maximum allowed total number of tokens per conversation"""
+    max_token_usage: int = 10000
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -70,6 +78,20 @@ class StatekSettings(BaseSettings):
 
         if self.prompt_files_dir is None:
             self.prompt_files_dir = os.environ.get('STATEK_PROMPT_FILES_DIR')
+
+        if self.logs_path is None:
+            self.logs_path = os.environ.get('STATEK_LOGS_PATH')
+
+        # Parse STATEK_ prefixed env vars for harness settings
+        for attr, env_var in [
+            ('max_turns', 'STATEK_MAX_TURNS'),
+            ('max_exceptions', 'STATEK_MAX_EXCEPTIONS'),
+            ('max_consecutive_exceptions', 'STATEK_MAX_CONSECUTIVE_EXCEPTIONS'),
+            ('max_token_usage', 'STATEK_MAX_TOKEN_USAGE'),
+        ]:
+            env_val = os.environ.get(env_var)
+            if env_val is not None and attr not in data:
+                setattr(self, attr, int(env_val))
 
         if not self.prompt_defs:
             self.prompt_defs = (

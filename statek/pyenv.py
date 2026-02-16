@@ -16,6 +16,8 @@ class PyEnv:
     local_state: Dict = field(default_factory=dict)
     # Console outputs of the LLM's program
     console: List[str] = None
+    # Optional error message by chat_log item ID
+    exceptions: Dict[int, str] = None
     # The next instruction ID for continuation
     next_instr_id: int = None
     # The warmup block number for continuation (for multi-block warmup_code)
