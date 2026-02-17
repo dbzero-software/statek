@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import re
 from typing import List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
-from statek.system import tool
 from statek.utils import block_comment
 from statek.docstring import parse_docstring, format_docstring
 from statek.executors.job import JobDef, parse_warmup_code
@@ -17,7 +16,8 @@ class Agent:
     _system_prompt: str  # f-string with the {tools} placeholder
     _prompt_template: str  # Agent's prompt template / to be formatted with job-specific params
     _tools: List[Callable]
-    _tools_by_name: Optional[List[str]] = None  # NOTE: dynamically created tool are stored by their name
+    # NOTE: dynamically created tools are stored by their name
+    _tools_by_name: Optional[List[str]] = None
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
 
     def __post_init__(self):
@@ -80,16 +80,16 @@ class Agent:
     def _format_tools(self, brief: bool, py_syntax: bool) -> str:
         """Format all tools with the specified settings."""
         formatted = []
-        def inner_format_tool(tool: Callable) -> str:
-            parsed = parse_docstring(tool)
+        def inner_format_tool(fn: Callable) -> str:
+            parsed = parse_docstring(fn)
             return format_docstring(parsed, brief=brief, py_syntax=py_syntax)
-        
-        formatted = [inner_format_tool(tool) for tool in self._tools]
+
+        formatted = [inner_format_tool(fn) for fn in self._tools]
         # also process tools specified by name
         if self._tools_by_name:
             for tool_name in self._tools_by_name:
-                tool = self.context.get(tool_name)
-                formatted.append(inner_format_tool(tool))
+                fn = self.context.get(tool_name)
+                formatted.append(inner_format_tool(fn))
 
         return '\n\n'.join(formatted)
 
@@ -120,7 +120,7 @@ class Agent:
         if format_ctx:
             return self._prompt_template.format_map(format_ctx)
         return self._prompt_template
-    
+
     def append_tool(self, tool_or_name: Callable | str):
         """
         Add a tool to the agent's toolset.
