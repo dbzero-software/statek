@@ -3,11 +3,21 @@
 import os
 import logging
 from functools import lru_cache
-from typing import Optional, Dict
+from typing import ClassVar, Optional, Dict
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dbzero import enum
 
 from statek.prompt_config import PromptDef, load_prompt_files
+
+
+@enum(values=["CONSOLE", "MARKDOWN"])
+class ChatStyle:  # pylint: disable=too-few-public-methods
+    """Defines how code and console outputs are presented to the LLM.
+
+    CONSOLE - code is presented as-is; console results are prefixed with ">".
+    MARKDOWN - code is wrapped in ```python blocks; console output is presented as-is.
+    """
 
 
 class LLM_API_Settings(BaseSettings):
@@ -60,6 +70,7 @@ class StatekSettings(BaseSettings):
     max_consecutive_exceptions: int = 1
     """Maximum allowed total number of tokens per conversation"""
     max_token_usage: int = 10000
+    chat_style: ClassVar[ChatStyle] = ChatStyle.CONSOLE  # pylint: disable=no-member
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -92,6 +103,10 @@ class StatekSettings(BaseSettings):
             env_val = os.environ.get(env_var)
             if env_val is not None and attr not in data:
                 setattr(self, attr, int(env_val))
+
+        env_val = os.environ.get('STATEK_CHAT_STYLE')
+        if env_val is not None and 'chat_style' not in data:
+            setattr(self, 'chat_style', getattr(ChatStyle, env_val.upper(), ChatStyle.CONSOLE))  # pylint: disable=no-member
 
         if not self.prompt_defs:
             self.prompt_defs = (

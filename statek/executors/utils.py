@@ -17,7 +17,7 @@ from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
-from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log
+from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.utils import strip_markup
 
@@ -397,7 +397,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 12: Add new log item using append_chat_log
     job._debug_log(f"LLM Response:\n{response.text}")  # pylint: disable=protected-access
-    job.append_chat_log(request, strip_markup(response.text))
+    chat_style = get_statek_settings().chat_style
+    job.append_chat_log(request, strip_markup(response.text, strict=(chat_style == ChatStyle.MARKDOWN)))
 
     # Step 13: Check harness constraints after step
     harness.check_after_step(job)

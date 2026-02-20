@@ -7,23 +7,31 @@ from typing import (Callable, Iterable, List, Optional, Type, Any,
 import dbzero as db0
 
 
-def strip_markup(text: str) -> str:
+def strip_markup(input: str, strict: bool) -> str:  # pylint: disable=redefined-builtin
     """Strip markdown code fences from LLM output, returning clean executable code.
 
-    If the input contains markdown code blocks (```python ... ```), code is
-    extracted and any surrounding text is converted to Python block comments.
+    If the input contains markdown code blocks, code is extracted and any
+    surrounding text is converted to Python block comments.
     If no code fences are present, the input is returned as-is.
 
     Args:
-        text: The raw LLM response string, potentially containing markdown
+        input: The raw LLM response string, potentially containing markdown
+        strict: If True, only blocks explicitly marked as ```python are treated
+                as code; other fenced blocks are commented out as plain text.
+                If False, any fenced block is treated as code.
 
     Returns:
         Clean Python code with non-code text converted to block comments
     """
-    if '```' not in text:
-        return text
-
-    parts = re.split(r'```\w*\n?', text)
+    if strict:
+        if '```python' not in input:
+            return input
+        # Capturing group yields: [text, code, text, code, ...]
+        parts = re.split(r'```python\n(.*?)```', input, flags=re.DOTALL)
+    else:
+        if '```' not in input:
+            return input
+        parts = re.split(r'```\w*\n?', input)
 
     # Parts alternate: text (even indices), code (odd indices)
     result_parts = []
@@ -236,17 +244,21 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
     return type_str
 
 
-def prompt_append_console(console: List[str], prompt: str = None,
-                          from_pos: int = 0, limit: int = None) -> str:
+def prompt_append_console(console: List[str], chat_style,
+                          prompt: str = None, from_pos: int = 0,
+                          limit: int = None) -> str:
     """
     Extend a prompt with the console outputs.
 
-    This is a helper function to format console output for LLM consumption by
-    appending console items (prefixed with "> ") to an optional initial prompt.
+    This is a helper function to format console output for LLM consumption.
+    Formatting depends on chat_style:
+      CONSOLE  - prompt is presented as-is; console lines are prefixed with "> ".
+      MARKDOWN - prompt is wrapped in a ```python block; console lines are as-is.
 
     Args:
         console: The list representation of the console state
-        prompt: Optional leading prompt (regular text)
+        chat_style: The ChatStyle to apply (CONSOLE or MARKDOWN)
+        prompt: Optional leading prompt (code text)
         from_pos: First element to start output from
         limit: Optional limit of consecutive console elements to be included
 
@@ -256,11 +268,22 @@ def prompt_append_console(console: List[str], prompt: str = None,
     Examples:
         >>> console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
         >>> prompt = 'print(user)\\nprint(clock.now())'
-        >>> prompt_append_console(console, prompt)
+        >>> prompt_append_console(console, ChatStyle.CONSOLE, prompt)
         'print(user)\\nprint(clock.now())\\n> User(name = "Kowalski Adam")\\n> 2026-01-03 12:13:32'
+        >>> prompt_append_console(console, ChatStyle.MARKDOWN, prompt)
+        '```python\\nprint(user)\\nprint(clock.now())\\n```\\n'
+        'User(name = "Kowalski Adam")\\n2026-01-03 12:13:32'
     """
-    # Start with the initial prompt if provided
-    result = prompt if prompt else ""
+    from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+    # Format the prompt section according to chat_style
+    if prompt:
+        if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+            result = f"```python\n{prompt}\n```"
+        else:
+            result = prompt
+    else:
+        result = ""
 
     # Handle case when console is None or empty
     if not console:
@@ -271,10 +294,13 @@ def prompt_append_console(console: List[str], prompt: str = None,
     if limit is not None:
         end_pos = min(from_pos + limit, end_pos)
 
-    # Append console outputs with "> " prefix
+    # Format console outputs according to chat_style
     console_outputs = []
     for i in range(from_pos, end_pos):
-        console_outputs.append(f"> {console[i]}")
+        if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+            console_outputs.append(console[i])
+        else:
+            console_outputs.append(f"> {console[i]}")
 
     # Join console outputs and append to result
     if console_outputs:

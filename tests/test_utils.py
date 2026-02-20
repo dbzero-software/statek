@@ -5,6 +5,7 @@ from typing import Iterable, Union, List, Dict, Optional, ForwardRef
 import dbzero as db0
 from statek.utils import format_callable_decl, prompt_append_console, block_comment, strip_markup
 from statek.future import temporal, FutureResult
+from statek.settings import ChatStyle
 
 
 def test_simple_function():
@@ -151,7 +152,7 @@ def test_prompt_append_console_basic():
     """Test basic usage with prompt and console."""
     console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
     prompt = 'print(user)\nprint(clock.now())'
-    result = prompt_append_console(console, prompt)
+    result = prompt_append_console(console, ChatStyle.CONSOLE, prompt)
 
     expected = (
         'print(user)\nprint(clock.now())\n'
@@ -163,7 +164,7 @@ def test_prompt_append_console_basic():
 def test_prompt_append_console_no_prompt():
     """Test console output without initial prompt."""
     console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
-    result = prompt_append_console(console)
+    result = prompt_append_console(console, ChatStyle.CONSOLE)
 
     expected = '> User(name = "Kowalski Adam")\n> 2026-01-03 12:13:32'
     assert result == expected
@@ -171,14 +172,14 @@ def test_prompt_append_console_no_prompt():
 
 def test_prompt_append_console_empty_console():
     """Test with empty console list."""
-    result = prompt_append_console([], 'prompt only')
+    result = prompt_append_console([], ChatStyle.CONSOLE, 'prompt only')
     assert result == 'prompt only'
 
 
 def test_prompt_append_console_with_from_pos():
     """Test with from_pos parameter to skip initial elements."""
     console = ['line1', 'line2', 'line3', 'line4']
-    result = prompt_append_console(console, 'test', from_pos=2)
+    result = prompt_append_console(console, ChatStyle.CONSOLE, 'test', from_pos=2)
 
     expected = 'test\n> line3\n> line4'
     assert result == expected
@@ -187,7 +188,7 @@ def test_prompt_append_console_with_from_pos():
 def test_prompt_append_console_with_limit():
     """Test with limit parameter to restrict number of elements."""
     console = ['line1', 'line2', 'line3', 'line4', 'line5']
-    result = prompt_append_console(console, 'test', limit=3)
+    result = prompt_append_console(console, ChatStyle.CONSOLE, 'test', limit=3)
 
     expected = 'test\n> line1\n> line2\n> line3'
     assert result == expected
@@ -196,10 +197,34 @@ def test_prompt_append_console_with_limit():
 def test_prompt_append_console_limit_exceeds_length():
     """Test when limit exceeds available elements."""
     console = ['line1', 'line2']
-    result = prompt_append_console(console, from_pos=0, limit=10)
+    result = prompt_append_console(console, ChatStyle.CONSOLE, from_pos=0, limit=10)
 
     expected = '> line1\n> line2'
     assert result == expected
+
+
+def test_prompt_append_console_style_console():
+    """CONSOLE style: prompt as-is, console lines prefixed with '> '."""
+    console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
+    prompt = 'print(user)\nprint(clock.now())'
+    result = prompt_append_console(console, ChatStyle.CONSOLE, prompt)
+
+    assert result == (
+        'print(user)\nprint(clock.now())\n'
+        '> User(name = "Kowalski Adam")\n> 2026-01-03 12:13:32'
+    )
+
+
+def test_prompt_append_console_style_markdown():
+    """MARKDOWN style: prompt in ```python block, console lines as-is."""
+    console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
+    prompt = 'print(user)\nprint(clock.now())'
+    result = prompt_append_console(console, ChatStyle.MARKDOWN, prompt)
+
+    assert result == (
+        '```python\nprint(user)\nprint(clock.now())\n```\n'
+        'User(name = "Kowalski Adam")\n2026-01-03 12:13:32'
+    )
 
 
 def test_format_callable_decl_temporal_function():
@@ -317,7 +342,7 @@ def test_block_comment_with_empty_lines():
 def test_strip_markup_code_block_with_surrounding_text():
     """Test strip_markup extracts code and comments surrounding text."""
     input_text = 'Let me think about the first instruction.\n```python\nprint("Hello")\n```'
-    result = strip_markup(input_text)
+    result = strip_markup(input_text, strict=False)
     expected = '# Let me think about the first instruction.\nprint("Hello")'
     assert result == expected
 
@@ -325,13 +350,13 @@ def test_strip_markup_code_block_with_surrounding_text():
 def test_strip_markup_no_fences():
     """Test strip_markup returns input unchanged when no code fences present."""
     code = 'x = 1\nprint(x)'
-    assert strip_markup(code) == code
+    assert strip_markup(code, strict=False) == code
 
 
 def test_strip_markup_code_only():
     """Test strip_markup with a code block and no surrounding text."""
     input_text = '```python\nprint("Hello")\n```'
-    result = strip_markup(input_text)
+    result = strip_markup(input_text, strict=False)
     assert result == 'print("Hello")'
 
 
@@ -343,7 +368,7 @@ def test_strip_markup_multiple_code_blocks():
         'Now let me print it:\n'
         '```python\nprint(x)\n```'
     )
-    result = strip_markup(input_text)
+    result = strip_markup(input_text, strict=False)
     expected = (
         '# First, let me define a variable:\n'
         'x = 42\n'
@@ -356,7 +381,7 @@ def test_strip_markup_multiple_code_blocks():
 def test_strip_markup_code_block_without_language():
     """Test strip_markup handles code fences without a language specifier."""
     input_text = 'Here is the code:\n```\nprint("hello")\n```'
-    result = strip_markup(input_text)
+    result = strip_markup(input_text, strict=False)
     expected = '# Here is the code:\nprint("hello")'
     assert result == expected
 
@@ -368,10 +393,27 @@ def test_strip_markup_multiline_text_becomes_block_comment():
         'First, create a variable.\n'
         '```python\nx = 1\n```'
     )
-    result = strip_markup(input_text)
+    result = strip_markup(input_text, strict=False)
     expected = (
         '# I will solve this step by step.\n'
         '# First, create a variable.\n'
         'x = 1'
     )
     assert result == expected
+
+
+def test_strip_markup_strict_python_only():
+    """Strict mode: only ```python blocks are code; plain fences are commented."""
+    input_text = (
+        'Let me think about the first instruction.\n'
+        '```python\nprint("Hello")\n```'
+    )
+    result = strip_markup(input_text, strict=True)
+    assert result == '# Let me think about the first instruction.\nprint("Hello")'
+
+
+def test_strip_markup_strict_non_python_fence_commented():
+    """Strict mode: unlabelled fences are treated as text and commented out."""
+    input_text = 'Here is the code:\n```\nprint("hello")\n```'
+    result = strip_markup(input_text, strict=True)
+    assert result == input_text

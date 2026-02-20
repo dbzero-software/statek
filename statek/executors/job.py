@@ -7,6 +7,7 @@ from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem
 from statek.utils import prompt_append_console
 from statek.future import FutureResult
+from statek.settings import get_statek_settings
 
 """
 READY: a fresh job instance ready for execution
@@ -137,7 +138,6 @@ class Job:
     @property
     def logs_path(self) -> Optional[str]:
         """Get the logs path from StatekSettings."""
-        from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
         return get_statek_settings().logs_path
 
     def _log(self, content: str):
@@ -240,10 +240,12 @@ class Job:
         Returns:
             The formatted prompt string ready to be sent to the LLM
         """
+        chat_style = get_statek_settings().chat_style
         if not self.chat_log:
             # First prompt: use job_def.prompt and append entire console from position 0
             prompt = prompt_append_console(
                 self.py_env.console,
+                chat_style,
                 self.job_def.prompt(),
                 from_pos=0
             )
@@ -253,6 +255,7 @@ class Job:
             last_chat_item = self.chat_log[-1]
             return prompt_append_console(
                 self.py_env.console,
+                chat_style,
                 from_pos=last_chat_item.console_pos
             )
                 # Log console output if logging is enabled
@@ -283,10 +286,13 @@ class Job:
             # No history if chat_log is empty
             return
 
+        chat_style = get_statek_settings().chat_style
+
         # First element: initial prompt + console from position 0 to first chat item's console_pos
         first_chat_item = self.chat_log[0]
         first_user_message = prompt_append_console(
             self.py_env.console,
+            chat_style,
             self.job_def.prompt(),
             from_pos=0,
             limit=first_chat_item.console_pos
@@ -304,6 +310,7 @@ class Job:
             # User message: console fragment from prev_chat_item.console_pos to current_chat_item.console_pos
             console_fragment = prompt_append_console(
                 self.py_env.console,
+                chat_style,
                 from_pos=prev_chat_item.console_pos,
                 limit=current_chat_item.console_pos - prev_chat_item.console_pos
             )
