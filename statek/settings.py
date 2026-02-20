@@ -198,7 +198,6 @@ def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Se
     settings = StatekSettings()
     return settings.get_provider_settings(provider)
 
-@lru_cache()
 def get_statek_settings() -> StatekSettings:
     """Get the cached StatekSettings instance."""
     return StatekSettings()
