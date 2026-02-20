@@ -41,7 +41,7 @@ class TestAgent:
         assert "You have access to these tools:" in agent.system_prompt
 
     def test_system_prompt_formatting_no_tools(self, db0_fixture):  # pylint: disable=unused-argument
-        """Test system_prompt property with empty tools list."""
+        """Test system_prompt property with empty explicit tools list - shows default example tools."""
         system_prompt = "Available tools: {tools}"
         tools = []
 
@@ -53,7 +53,8 @@ class TestAgent:
         )
 
         assert "Available tools:" in agent.system_prompt
-        assert agent.system_prompt == "Available tools: "
+        assert "list_of_examples" in agent.system_prompt
+        assert "show_example" in agent.system_prompt
 
     def test_system_prompt_with_block_comment(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with block comment placeholder."""

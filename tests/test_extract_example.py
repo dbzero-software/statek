@@ -51,7 +51,7 @@ class TestExtractExampleMetadata:
         result = extract_example(job_factory(), "x")
         assert result.example_metadata["agent_role"] == "test"
 
-    def test_job_params_included_when_set(self, _job_def_factory, job_factory):
+    def test_job_params_included_when_set(self, job_factory):
         job = job_factory(job_params={"goal": "analyze"})
         result = extract_example(job, "x")
         assert result.example_metadata["job_params"] == {"goal": "analyze"}
