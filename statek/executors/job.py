@@ -7,7 +7,7 @@ from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem
 from statek.utils import prompt_append_console
 from statek.future import FutureResult
-from statek.settings import get_statek_settings
+from statek.settings import get_statek_settings, ChatStyle
 
 """
 READY: a fresh job instance ready for execution
@@ -203,7 +203,11 @@ class Job:
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
             self.py_env.exceptions[chat_log_item_id] = error_message
-        self._log(f"> {output.rstrip()}")
+        chat_style = get_statek_settings().chat_style    
+        if chat_style == ChatStyle.MARKDOWN:
+            self._log(output.rstrip())
+        else:
+            self._log(f"> {output.rstrip()}")
 
     @property
     def status(self) -> JobStatus:
@@ -276,17 +280,25 @@ class Job:
                  and assistant messages (LLM responses)
 
         Example:
-            For a job with chat_log containing 2 items:
+            For a job with chat_log containing 2 items (CONSOLE style):
             - First yield: "initial_prompt\n> console_output_0\n> console_output_1"
             - Second yield: "llm_response_1"
             - Third yield: "> console_output_2\n> console_output_3"
             - Fourth yield: "llm_response_2"
+
+            In MARKDOWN style, user prompts are wrapped in ```python fences and
+            assistant responses are also wrapped in ```python fences.
         """
         if not self.chat_log:
             # No history if chat_log is empty
             return
 
         chat_style = get_statek_settings().chat_style
+
+        def _wrap_resp(resp: str) -> str:
+            if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+                return f"```python\n{resp}\n```"
+            return resp
 
         # First element: initial prompt + console from position 0 to first chat item's console_pos
         first_chat_item = self.chat_log[0]
@@ -300,7 +312,7 @@ class Job:
         yield first_user_message
 
         # Yield first LLM response
-        yield first_chat_item.llm_resp
+        yield _wrap_resp(first_chat_item.llm_resp)
 
         # Process remaining chat log items
         for i in range(1, len(self.chat_log)):
@@ -317,7 +329,7 @@ class Job:
             yield console_fragment
 
             # Assistant message: current LLM response
-            yield current_chat_item.llm_resp
+            yield _wrap_resp(current_chat_item.llm_resp)
 
     def get_next_request(self) -> Dict[str, Any]:
         """
@@ -372,9 +384,11 @@ class Job:
             llm_resp=llm_resp
         )
         self.chat_log.append(chat_item)
-        
-        # Log the LLM response
-        self._log(llm_resp)
+
+        # Log the LLM response in the same format sent back as history
+        chat_style = get_statek_settings().chat_style
+        log_resp = f"```python\n{llm_resp}\n```" if chat_style == ChatStyle.MARKDOWN else llm_resp  # pylint: disable=no-member
+        self._log(log_resp)
 
     @property
     def last_response(self) -> str | None:

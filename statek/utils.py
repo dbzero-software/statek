@@ -10,30 +10,29 @@ import dbzero as db0
 def strip_markup(input: str, strict: bool) -> str:  # pylint: disable=redefined-builtin
     """Strip markdown code fences from LLM output, returning clean executable code.
 
-    If the input contains markdown code blocks, code is extracted and any
-    surrounding text is converted to Python block comments.
-    If no code fences are present, the input is returned as-is.
+    Splits the input on code fence markers. Even-indexed parts are plain text
+    and become block comments; odd-indexed parts are code and are returned as-is.
 
     Args:
         input: The raw LLM response string, potentially containing markdown
-        strict: If True, only blocks explicitly marked as ```python are treated
-                as code; other fenced blocks are commented out as plain text.
-                If False, any fenced block is treated as code.
+        strict: If True, only content inside ```python fences is returned as
+                plain code; everything else (plain text and other fenced blocks)
+                is converted to block comments.
+                If False, any fenced block is treated as code and the input is
+                returned unchanged when no fences are present.
 
     Returns:
         Clean Python code with non-code text converted to block comments
     """
     if strict:
-        if '```python' not in input:
-            return input
-        # Capturing group yields: [text, code, text, code, ...]
-        parts = re.split(r'```python\n(.*?)```', input, flags=re.DOTALL)
+        pattern = r'```python\n(.*?)```'
     else:
         if '```' not in input:
             return input
-        parts = re.split(r'```\w*\n?', input)
+        pattern = r'```\w*\n?'
 
     # Parts alternate: text (even indices), code (odd indices)
+    parts = re.split(pattern, input, flags=re.DOTALL)
     result_parts = []
     for i, part in enumerate(parts):
         stripped = part.strip()
@@ -43,7 +42,6 @@ def strip_markup(input: str, strict: bool) -> str:  # pylint: disable=redefined-
             result_parts.append(block_comment(stripped))
         else:
             result_parts.append(stripped)
-
     return '\n'.join(result_parts)
 
 
@@ -253,7 +251,7 @@ def prompt_append_console(console: List[str], chat_style,
     This is a helper function to format console output for LLM consumption.
     Formatting depends on chat_style:
       CONSOLE  - prompt is presented as-is; console lines are prefixed with "> ".
-      MARKDOWN - prompt is wrapped in a ```python block; console lines are as-is.
+      MARKDOWN - prompt is wrapped in ```python fences; console lines are as-is.
 
     Args:
         console: The list representation of the console state
@@ -276,7 +274,7 @@ def prompt_append_console(console: List[str], chat_style,
     """
     from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
 
-    # Format the prompt section according to chat_style
+    # In MARKDOWN mode wrap the prompt code in python fences; otherwise use as-is
     if prompt:
         if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
             result = f"```python\n{prompt}\n```"

@@ -1,4 +1,4 @@
-# pylint: disable=unused-argument
+# pylint: disable=unused-argument, E1101
 """Tests for statek.utils module."""
 
 from typing import Iterable, Union, List, Dict, Optional, ForwardRef
@@ -216,7 +216,7 @@ def test_prompt_append_console_style_console():
 
 
 def test_prompt_append_console_style_markdown():
-    """MARKDOWN style: prompt in ```python block, console lines as-is."""
+    """MARKDOWN style: prompt wrapped in ```python fences, console lines as-is."""
     console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
     prompt = 'print(user)\nprint(clock.now())'
     result = prompt_append_console(console, ChatStyle.MARKDOWN, prompt)
@@ -403,7 +403,7 @@ def test_strip_markup_multiline_text_becomes_block_comment():
 
 
 def test_strip_markup_strict_python_only():
-    """Strict mode: only ```python blocks are code; plain fences are commented."""
+    """Strict mode: ```python block content is returned as plain code."""
     input_text = (
         'Let me think about the first instruction.\n'
         '```python\nprint("Hello")\n```'
@@ -413,7 +413,7 @@ def test_strip_markup_strict_python_only():
 
 
 def test_strip_markup_strict_non_python_fence_commented():
-    """Strict mode: unlabelled fences are treated as text and commented out."""
+    """Strict mode: input with no ```python fences is fully commented out."""
     input_text = 'Here is the code:\n```\nprint("hello")\n```'
     result = strip_markup(input_text, strict=True)
-    assert result == input_text
+    assert result == '# Here is the code:\n# ```\n# print("hello")\n# ```'

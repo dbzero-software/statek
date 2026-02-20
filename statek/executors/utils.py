@@ -325,7 +325,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Log warmup block before execution
         if job.status == JobStatus.WARMING_UP:
-            job._log(code)  # pylint: disable=protected-access
+            chat_style = get_statek_settings().chat_style
+            log_code = f"```python\n{code}\n```" if chat_style == ChatStyle.MARKDOWN else code  # pylint: disable=no-member
+            job._log(log_code)  # pylint: disable=protected-access
 
         # Step 5: Execute the code using exec_step
         # Pass next_instr_num if resuming from SUSPENDED
