@@ -62,6 +62,7 @@ class StatekSettings(BaseSettings):
     prompt_files_dir: Optional[str] = None
     prompt_defs: Dict[str, PromptDef] = Field(default_factory=dict)
     logs_path: Optional[str] = None
+    examples_dir: Optional[str] = None
     """The maximum allowed number of LLM turns per conversation"""
     max_turns: int = 5
     """The maximum allowed total number of exceptions per conversation"""
@@ -70,7 +71,7 @@ class StatekSettings(BaseSettings):
     max_consecutive_exceptions: int = 1
     """Maximum allowed total number of tokens per conversation"""
     max_token_usage: int = 10000
-    chat_style: ChatStyle = ChatStyle.CONSOLE  # pylint: disable=no-member
+    chat_style: Optional[ChatStyle]= None  # pylint: disable=no-member
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -93,6 +94,9 @@ class StatekSettings(BaseSettings):
         if self.logs_path is None:
             self.logs_path = os.environ.get('STATEK_LOGS_PATH')
 
+        if self.examples_dir is None:
+            self.examples_dir = os.environ.get('STATEK_EXAMPLES_DIR')
+
         # Parse STATEK_ prefixed env vars for harness settings
         for attr, env_var in [
             ('max_turns', 'STATEK_MAX_TURNS'),
@@ -105,9 +109,8 @@ class StatekSettings(BaseSettings):
                 setattr(self, attr, int(env_val))
 
         env_val = os.environ.get('STATEK_CHAT_STYLE')
-        self.chat_style = (  # pylint: disable=no-member
-            ChatStyle[env_val.upper()] if env_val is not None else ChatStyle.CONSOLE  # pylint: disable=no-member
-        )
+        if env_val is not None:
+            self.chat_style = ChatStyle[env_val.upper()]
 
         if not self.prompt_defs:
             self.prompt_defs = (
@@ -198,6 +201,7 @@ def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Se
     settings = StatekSettings()
     return settings.get_provider_settings(provider)
 
+@lru_cache()
 def get_statek_settings() -> StatekSettings:
     """Get the cached StatekSettings instance."""
     return StatekSettings()

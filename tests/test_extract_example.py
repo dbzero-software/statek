@@ -2,10 +2,10 @@
 
 # pylint: disable=no-member
 
-import pytest
-
 from tests.conftest import create_chat_log_item
 from statek.executors.example import Example, extract_example, format_example
+from statek.executors.job import Job, JobStatus, JobDef
+from statek.agents.agent import Agent
 from statek.settings import ChatStyle
 
 
@@ -51,7 +51,7 @@ class TestExtractExampleMetadata:
         result = extract_example(job_factory(), "x")
         assert result.example_metadata["agent_role"] == "test"
 
-    def test_job_params_included_when_set(self, job_def_factory, job_factory):
+    def test_job_params_included_when_set(self, _job_def_factory, job_factory):
         job = job_factory(job_params={"goal": "analyze"})
         result = extract_example(job, "x")
         assert result.example_metadata["job_params"] == {"goal": "analyze"}
@@ -70,18 +70,16 @@ class TestExtractWarmupItems:
 
     def test_no_warmup_code_returns_empty(self, job_factory):
         result = extract_example(job_factory(), "x")
-        assert result.warmup_items == []
+        assert not result.warmup_items
 
     def test_single_block_no_console(self, job_def_factory):
         job_def = job_def_factory(warmup_code="x = 1")
-        from statek.executors.job import Job, JobStatus
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         result = extract_example(job, "x")
         assert result.warmup_items == ["x = 1", ""]
 
     def test_single_block_with_console_no_chat_log(self, job_def_factory):
         job_def = job_def_factory(warmup_code="print('hi')")
-        from statek.executors.job import Job, JobStatus
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         job.py_env.console_append("hi")
         result = extract_example(job, "x")
@@ -90,7 +88,6 @@ class TestExtractWarmupItems:
     def test_single_block_console_boundary_from_chat_log(self, job_def_factory):
         """console_pos of first chat item marks end of warmup console."""
         job_def = job_def_factory(warmup_code="x = 1")
-        from statek.executors.job import Job, JobStatus
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         job.py_env.console = ["warmup_out", "llm_out"]
         # First LLM turn recorded after warmup_out (pos=1)
@@ -102,7 +99,6 @@ class TestExtractWarmupItems:
     def test_single_block_multiple_warmup_console_lines(self, job_def_factory):
         """Multiple console lines from a single warmup block are joined."""
         job_def = job_def_factory(warmup_code="print(1)\nprint(2)\nprint(3)")
-        from statek.executors.job import Job, JobStatus
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         job.py_env.console = ["1", "2", "3"]
         result = extract_example(job, "x")
@@ -111,7 +107,6 @@ class TestExtractWarmupItems:
     def test_multiple_warmup_blocks_last_gets_console(self, job_def_factory):
         """Only the last warmup block receives the accumulated console output."""
         job_def = job_def_factory(warmup_code=["a = 1", "b = 2", "print(b)"])
-        from statek.executors.job import Job, JobStatus
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         job.py_env.console_append("2")
         result = extract_example(job, "x")
@@ -125,7 +120,6 @@ class TestExtractWarmupItems:
     def test_multiple_warmup_blocks_length(self, job_def_factory):
         """warmup_items has exactly 2*N entries for N warmup blocks."""
         job_def = job_def_factory(warmup_code=["a = 1", "b = 2"])
-        from statek.executors.job import Job, JobStatus
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         result = extract_example(job, "x")
         assert len(result.warmup_items) == 4
@@ -133,7 +127,6 @@ class TestExtractWarmupItems:
     def test_warmup_items_no_formatting_characters(self, job_def_factory):
         """warmup_items must not contain markdown fences or '> ' prefixes."""
         job_def = job_def_factory(warmup_code="x = 1\nprint(x)")
-        from statek.executors.job import Job, JobStatus
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         job.py_env.console_append("1")
         result = extract_example(job, "x")
@@ -259,13 +252,9 @@ class TestFormatExample:
 
     def _make_example(self, job_factory, warmup_code=None, console=None, turns=()):
         """Helper: build an Example from a job with given console and turns."""
-        from statek.executors.job import Job, JobStatus, JobDef
         if warmup_code is not None:
-            from tests.conftest import create_chat_log_item as _ccli
-            from statek.agents.agent import Agent
             agent = Agent(role="test", _system_prompt="Test agent",
                           _prompt_template="Test task", _tools=[])
-            from statek.executors.job import JobDef, JobStatus
             job_def = JobDef(agent=agent, warmup_code=warmup_code)
             job = Job(job_def=job_def, model_family="t", model="t",
                       job_status=JobStatus.READY)

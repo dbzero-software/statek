@@ -2,9 +2,38 @@ from dataclasses import dataclass
 import re
 from typing import List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
-from statek.utils import block_comment
+from statek.utils import block_comment, find_locals
+from statek.system import tool
 from statek.docstring import parse_docstring, format_docstring
 from statek.executors.job import JobDef, parse_warmup_code
+
+
+@tool
+def list_of_examples(start_index: int = 0, limit: int = 10, **kwargs):  # pylint: disable=unused-argument
+    """Lists available examples for this agent.
+
+    Results are printed as a numbered list (index: name).
+
+    Args:
+        start_index: Index of the first example to show (default: 0).
+        limit: Maximum number of examples to show (default: 10).
+    """
+    from statek.agents.list_of_examples import list_of_examples as _impl  # pylint: disable=import-outside-toplevel
+    agent_name = next(iter(find_locals(var_name="agent_name")), None)
+    _impl(agent_name, start_index, limit)
+
+
+@tool
+def show_example(example_id: int, **kwargs):  # pylint: disable=unused-argument
+    """Shows the content of a specific example by its index.
+
+    Args:
+        example_id: Index of the example to show (as listed by list_of_examples).
+    """
+    from statek.agents.list_of_examples import show_example as _impl  # pylint: disable=import-outside-toplevel
+    agent_name = next(iter(find_locals(var_name="agent_name")), None)
+    _impl(agent_name, example_id)
+
 
 @db0.memo
 @dataclass
@@ -44,6 +73,11 @@ class Agent:
                 self._system_prompt = prompt_def.system
             if prompt_def.template:
                 self._prompt_template = prompt_def.template
+        self.append_tool(list_of_examples)
+        self.append_tool(show_example)
+        if self._X__context is None:
+            self._X__context = {}
+        self._X__context["agent_name"] = self.role
 
     @property
     def system_prompt(self) -> str:
