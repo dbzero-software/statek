@@ -149,13 +149,13 @@ class TestExtractExampleItems:
 
     def test_no_chat_log_returns_empty(self, job_factory):
         result = extract_example(job_factory(), "x")
-        assert result.example_items == []
+        assert not result.example_items
 
     def test_no_chat_log_with_console_returns_empty(self, job_factory):
         job = job_factory()
         job.py_env.console = ["out1", "out2"]
         result = extract_example(job, "x")
-        assert result.example_items == []
+        assert not result.example_items
 
     def test_single_turn_structure(self, job_factory):
         """Single LLM turn → [llm_resp, post_console]."""

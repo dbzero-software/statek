@@ -129,7 +129,6 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     # Merge agent's private context if available
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         global_context.update(job.job_def.agent.context)
-        local_context.update(job.job_def.agent.context)
     for tool in job.job_def.agent._tools:
         global_context[tool.__name__] = inject_context(tool, local_context)
     
@@ -360,8 +359,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 8: Handle warmup block progression or transition to STARTED
         if job.status == JobStatus.WARMING_UP:
-            # Record console position after this warmup block completed
-            job.record_warmup_console_pos()
             if job.has_more_warmup_blocks():
                 # Advance to next warmup block, stay in WARMING_UP
                 job.advance_warmup_block()

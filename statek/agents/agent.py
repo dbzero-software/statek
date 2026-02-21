@@ -79,6 +79,26 @@ class Agent:
             self._X__context = {}
         self._X__context["agent_name"] = self.role
 
+    def _expand_tool_placeholders(self, text: str) -> str:
+        """Expand {tools}, {brief_tools}, {detailed_tools} placeholders in text.
+
+        Lines starting with '#' before a placeholder are embedded as a block comment.
+        """
+        placeholders = [
+            ('tools', True, False),
+            ('brief_tools', True, False),
+            ('detailed_tools', False, True),
+        ]
+        for name, brief, py_syntax in placeholders:
+            pattern = re.compile(rf'^(\s*#\s*)\{{{name}\}}', re.MULTILINE)
+            if pattern.search(text):
+                tools_str = self._format_tools(brief, py_syntax)
+                text = pattern.sub(block_comment(tools_str), text)
+            elif f'{{{name}}}' in text:
+                tools_str = self._format_tools(brief, py_syntax)
+                text = text.replace(f'{{{name}}}', tools_str)
+        return text
+
     @property
     def system_prompt(self) -> str:
         """
@@ -92,24 +112,7 @@ class Agent:
         """
         if self._system_prompt is None:
             return ""
-
-        result = self._system_prompt
-        placeholders = [
-            ('tools', True, False),
-            ('brief_tools', True, False),
-            ('detailed_tools', False, True),
-        ]
-
-        for name, brief, py_syntax in placeholders:
-            pattern = re.compile(rf'^(\s*#\s*)\{{{name}\}}', re.MULTILINE)
-            if pattern.search(result):
-                tools_str = self._format_tools(brief, py_syntax)
-                result = pattern.sub(block_comment(tools_str), result)
-            elif f'{{{name}}}' in result:
-                tools_str = self._format_tools(brief, py_syntax)
-                result = result.replace(f'{{{name}}}', tools_str)
-
-        return result
+        return self._expand_tool_placeholders(self._system_prompt)
 
     def _format_tools(self, brief: bool, py_syntax: bool) -> str:
         """Format all tools with the specified settings."""
@@ -145,6 +148,7 @@ class Agent:
         Returns:
             Formatted prompt string
         """
+        result = self._expand_tool_placeholders(self._prompt_template)
         format_ctx = {}
         if job_params:
             format_ctx.update(job_params)
@@ -152,8 +156,8 @@ class Agent:
             format_ctx.update(kwargs)
 
         if format_ctx:
-            return self._prompt_template.format_map(format_ctx)
-        return self._prompt_template
+            return result.format_map(format_ctx)
+        return result
 
     def append_tool(self, tool_or_name: Callable | str):
         """
