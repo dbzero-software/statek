@@ -9,7 +9,7 @@ from statek.settings import ChatStyle
 
 # Separator inserted between the warmup section and the example section in the
 # formatted output so that parse_example can correctly reconstruct both lists.
-_WARMUP_SEPARATOR = "---"
+_WARMUP_SEPARATOR = "# ----------"
 
 
 @dataclass
@@ -60,12 +60,21 @@ def _extract_warmup_items(job: Job) -> List[str]:
 
     console = job.py_env.console or []
     warmup_console_end = job.chat_log[0].console_pos if job.chat_log else len(console)
-    warmup_console = "\n".join(console[:warmup_console_end])
+    positions = job.warmup_console_positions
 
     items = []
+    prev_pos = 0
     for i, block in enumerate(blocks):
         items.append(block)
-        items.append(warmup_console if i == len(blocks) - 1 else "")
+        if i < len(positions):
+            end_pos = min(positions[i], warmup_console_end)
+            items.append("\n".join(console[prev_pos:end_pos]))
+            prev_pos = end_pos
+        elif i == len(blocks) - 1:
+            # Fallback: last block gets remaining console
+            items.append("\n".join(console[prev_pos:warmup_console_end]))
+        else:
+            items.append("")
 
     return items
 
@@ -103,7 +112,7 @@ def format_example(example: Example, chat_style: ChatStyle,
 
 
 def _format_metadata(metadata: Dict) -> str:
-    lines = ["# Example metadata:"]
+    lines = []
     for key, value in metadata.items():
         lines.append(f"# {key}: {value}")
     return "\n".join(lines)
@@ -142,9 +151,11 @@ def parse_example(example_md: str) -> Example:
     """Parse a valid example markdown file into an Example instance.
 
     Handles both MARKDOWN style (```python fences) and CONSOLE style (> prefixed
-    console lines).  A ``---`` separator line between the warmup and example
-    sections is used to reconstruct warmup_items and example_items separately.
-    If no separator is present all items are placed in example_items.
+    console lines).  Lines of the form ``# key: value`` outside of code fences are
+    treated as metadata and stripped from the content.  A ``# ----------`` separator
+    line between the warmup and example sections reconstructs warmup_items and
+    example_items separately.  If no separator is present all items are placed in
+    example_items.
 
     Args:
         example_md: contents of the input markdown file
@@ -156,21 +167,23 @@ def parse_example(example_md: str) -> Example:
         ValueError: if the content before the first code block is non-empty
     """
     metadata: Dict = {}
-    content = example_md
+    kept_lines = []
+    in_code_block = False
 
-    # Parse optional metadata block at the top of the file
-    if content.startswith('# Example metadata:'):
-        lines = content.split('\n')
-        i = 1  # skip the header line
-        while i < len(lines) and lines[i].startswith('# '):
-            meta_line = lines[i][2:]  # strip leading '# '
-            key, sep, value = meta_line.partition(': ')
+    for line in example_md.split('\n'):
+        if line.startswith('```'):
+            in_code_block = not in_code_block
+            kept_lines.append(line)
+            continue
+        if not in_code_block and line.startswith('# '):
+            meta_part = line[2:]  # strip leading '# '
+            key, sep, value = meta_part.partition(': ')
             if sep:
                 metadata[key] = _parse_metadata_value(value)
-            i += 1
-        content = '\n'.join(lines[i:])
+                continue  # strip metadata line from content
+        kept_lines.append(line)
 
-    content = content.lstrip('\n')
+    content = '\n'.join(kept_lines).lstrip('\n')
 
     # Split on the warmup/example separator when present
     separator_line = f'\n{_WARMUP_SEPARATOR}\n'
@@ -317,14 +330,11 @@ def _parse_console_items(content: str) -> List[str]:
 
 def _extract_example_items(job: Job) -> List[str]:
     console = job.py_env.console or []
-    prompt = job.job_def.prompt()
 
     if not job.chat_log:
-        items = [prompt, "\n".join(console)]
-        return items
+        return []
 
-    items = [prompt, "\n".join(console[:job.chat_log[0].console_pos])]
-
+    items = []
     for i, chat_item in enumerate(job.chat_log):
         items.append(chat_item.llm_resp)
         end = job.chat_log[i + 1].console_pos if i + 1 < len(job.chat_log) else len(console)

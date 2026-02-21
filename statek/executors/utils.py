@@ -360,6 +360,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 8: Handle warmup block progression or transition to STARTED
         if job.status == JobStatus.WARMING_UP:
+            # Record console position after this warmup block completed
+            job.record_warmup_console_pos()
             if job.has_more_warmup_blocks():
                 # Advance to next warmup block, stay in WARMING_UP
                 job.advance_warmup_block()
