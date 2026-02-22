@@ -280,6 +280,24 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
     return job.py_env.exit_status is None
 
 
+def _log_pending_console(job: Job):
+    """Log console output accumulated since the last logged boundary.
+
+    Determines from_pos based on job state:
+    - After LLM turns: from last chat_log item's console_pos
+    - After warmup: from last warmup_console_positions entry
+    - Initial state: from 0
+    """
+    if job.chat_log:
+        from_pos = job.chat_log[-1].console_pos
+    elif job.warmup_console_positions:
+        from_pos = job.warmup_console_positions[-1]
+    else:
+        from_pos = 0
+    to_pos = len(job.py_env.console) if job.py_env.console else 0
+    job._log_console_batch(from_pos, to_pos)  # pylint: disable=protected-access
+
+
 async def run_job_step(job: Job, provider: str = None) -> bool:
     """
     Execute a single step of the agentic pipeline.
@@ -354,11 +372,18 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
             job.set_status(JobStatus.DONE)
+            # Log any pending console output before the exit marker
+            _log_pending_console(job)
             job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
             return True
 
         # Step 8: Handle warmup block progression or transition to STARTED
         if job.status == JobStatus.WARMING_UP:
+            # Capture from_pos before recording, then log this block's console slice
+            warmup_batch_from = job.warmup_console_positions[-1] if job.warmup_console_positions else 0
+            # Record console position after this block so chat history can interleave correctly
+            job.record_warmup_console_pos()
+            job._log_console_batch(warmup_batch_from, job.warmup_console_positions[-1])  # pylint: disable=protected-access
             if job.has_more_warmup_blocks():
                 # Advance to next warmup block, stay in WARMING_UP
                 job.advance_warmup_block()
@@ -373,13 +398,19 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         provider = get_statek_settings().default_llm_api_provider
     llm_api = LLM_API.get(provider_name=provider, model=job.model)
 
-    # Step 10: Get next request parameters
+    # Step 10: Get next request parameters — log pending console batch first
+    _log_pending_console(job)
     request = job.get_next_request()
+    # Materialize chat_history generator so it can be consumed by both debug logging and process_request
+    if 'chat_history' in request:
+        request['chat_history'] = list(request['chat_history'])
 
     # Log full messages being sent to LLM
     messages = llm_api.build_messages(**{k: v for k, v in request.items() if k != 'session_id'})
     messages_str = "LLM Request messages:\n"
     for msg in messages:
+        if msg['content'] is None:
+            continue
         messages_str += f"[{msg['role']}]: {msg['content']}\n"
     job._debug_log(messages_str)  # pylint: disable=protected-access
 

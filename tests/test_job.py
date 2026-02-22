@@ -306,6 +306,162 @@ class TestJobGetNextRequest:
         assert job.last_response == "print('second response')"
 
 
+class TestJobGetNextPromptWithWarmup:
+    """Test get_next_prompt when warmup was executed."""
+
+    def test_no_warmup_behavior_unchanged(self, job_factory):
+        """Without warmup_code the prompt is unchanged."""
+        job = job_factory()
+        job.py_env.console = ["line1", "line2"]
+
+        result = job.get_next_prompt()
+
+        assert result == "Test task\n> line1\n> line2"
+
+    def test_warmup_prompt_is_last_block_console_output(self, job_factory):
+        """With warmup, prompt is the console output OF the last warmup block."""
+        job = job_factory(warmup_code="x = 1")
+        job.py_env.console = ["last block output"]
+        job.warmup_console_positions = [1]  # block 0 produced 1 line
+
+        result = job.get_next_prompt()
+
+        assert "> last block output" in result
+
+    def test_warmup_prompt_excludes_template_and_warmup_code(self, job_factory):
+        """With warmup, template and code are NOT in the prompt (they're in chat_history)."""
+        job = job_factory(warmup_code="x = 1")
+        job.py_env.console = ["last block output"]
+        job.warmup_console_positions = [1]
+
+        result = job.get_next_prompt()
+
+        assert "Test task" not in result
+        assert "x = 1" not in result
+
+    def test_warmup_multi_block_prompt_is_last_block_output(self, job_factory):
+        """With multiple warmup blocks, prompt is ONLY the last block's console output."""
+        job = job_factory(warmup_code=["block1", "block2"])
+        job.py_env.console = ["out1", "out2"]
+        job.warmup_console_positions = [1, 2]  # block0->1 line, block1->1 line
+
+        result = job.get_next_prompt()
+
+        assert "> out2" in result
+
+    def test_warmup_multi_block_prompt_excludes_earlier_blocks(self, job_factory):
+        """Earlier warmup block outputs are NOT in the prompt (they're in chat_history)."""
+        job = job_factory(warmup_code=["block1", "block2"])
+        job.py_env.console = ["out1", "out2"]
+        job.warmup_console_positions = [1, 2]
+
+        result = job.get_next_prompt()
+
+        assert "block1" not in result
+        assert "block2" not in result
+        assert "> out1" not in result
+
+
+class TestJobGetChatHistoryWithWarmup:
+    """Test get_chat_history formats warmup as assistant/user message pairs."""
+
+    def test_warmup_no_chat_log_yields_history(self, job_factory):
+        """With warmup but empty chat_log, get_chat_history is non-empty."""
+        job = job_factory(warmup_code="x = 1")
+        job.py_env.console = ["warmup output"]
+        job.warmup_console_positions = [1]
+
+        history = list(job.get_chat_history())
+
+        assert len(history) > 0
+
+    def test_warmup_no_chat_log_single_block_structure(self, job_factory):
+        """Single warmup block, no chat_log: [template(user), warmup(asst)]."""
+        job = job_factory(warmup_code="x = 1")
+        job.py_env.console = ["warmup output", "remaining"]
+        job.warmup_console_positions = [1]
+
+        history = list(job.get_chat_history())
+
+        # Exactly 2 items: template (user) and warmup code (assistant)
+        assert len(history) == 2
+        assert history[0] == "Test task"     # user: template
+        assert "x = 1" in history[1]        # assistant: warmup code
+
+    def test_warmup_no_chat_log_two_blocks_structure(self, job_factory):
+        """Two warmup blocks, no chat_log: [template, w0, console0, w1]."""
+        job = job_factory(warmup_code=["block1", "block2"])
+        job.py_env.console = ["out1", "out2", "remaining"]
+        job.warmup_console_positions = [1, 2]
+
+        history = list(job.get_chat_history())
+
+        # 4 items: template, block1, console0, block2
+        assert len(history) == 4
+        assert history[0] == "Test task"      # user: template
+        assert "block1" in history[1]         # assistant: warmup block 0
+        assert "> out1" in history[2]         # user: console for block 0
+        assert "block2" in history[3]         # assistant: warmup block 1
+
+    def test_warmup_no_chat_log_last_item_is_assistant(self, job_factory):
+        """Last item in chat_history is always the last warmup block (assistant)."""
+        job = job_factory(warmup_code=["block1", "block2"])
+        job.py_env.console = ["out1", "out2"]
+        job.warmup_console_positions = [1, 2]
+
+        history = list(job.get_chat_history())
+
+        assert "block2" in history[-1]
+
+    def test_warmup_with_chat_log_structure(self, job_factory):
+        """With warmup and chat_log: [template, warmup, merged_console, first_resp, …]."""
+        job = job_factory(warmup_code="x = 1")
+        job.py_env.console = ["warmup out", "post-warmup out"]
+        job.warmup_console_positions = [1]
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
+
+        history = list(job.get_chat_history())
+
+        # [template(user), warmup(asst), merged_console(user), resp1(asst)]
+        assert len(history) == 4
+        assert history[0] == "Test task"             # user: template
+        assert "x = 1" in history[1]                # assistant: warmup code
+        assert "> warmup out" in history[2]          # user: merged console (warmup + remaining)
+        assert "> post-warmup out" in history[2]     # user: merged console (both lines)
+        assert history[3] == "resp1"                 # assistant: first LLM response
+
+    def test_warmup_with_chat_log_merged_console_covers_remaining(self, job_factory):
+        """The last warmup user message covers console up to the first LLM turn."""
+        job = job_factory(warmup_code="x = 1")
+        # warmup produced line 0, then extra line 1 before first LLM call
+        job.py_env.console = ["warmup out", "extra before llm", "after llm"]
+        job.warmup_console_positions = [1]   # warmup produced 1 line
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
+        job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
+
+        history = list(job.get_chat_history())
+
+        # history[2] is the merged user message after warmup (covers console[0:2])
+        assert "> warmup out" in history[2]
+        assert "> extra before llm" in history[2]
+
+    def test_warmup_not_in_subsequent_messages(self, job_factory):
+        """Warmup code does not appear in subsequent user messages."""
+        job = job_factory(warmup_code="x = 1")
+        job.py_env.console = ["warmup out", "post-warmup out", "after-first-llm"]
+        job.warmup_console_positions = [1]
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
+        job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
+
+        history = list(job.get_chat_history())
+
+        # Structure: [template, warmup, merged(0:2), resp1, console(2:3), resp2]
+        # history[4] is the second user message (console after first LLM turn)
+        second_user_msg = history[4]
+        assert "x = 1" not in second_user_msg
+        assert "> after-first-llm" in second_user_msg
+
+
 class TestJobSetStatus:  # pylint: disable=too-few-public-methods
     """Test cases for Job.set_status method."""
 

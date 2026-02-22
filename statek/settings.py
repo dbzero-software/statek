@@ -78,6 +78,8 @@ class StatekSettings(BaseSettings):
     xml_box_console: Optional[str] = None
     """The boxing XML tag for code examples"""
     xml_box_example: Optional[str] = None
+    """Log level for statek logger (DEBUG, INFO, WARNING, ERROR, CRITICAL)"""
+    log_level: str = "WARNING"
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -127,6 +129,11 @@ class StatekSettings(BaseSettings):
 
         if self.xml_box_example is None:
             self.xml_box_example = os.environ.get('STATEK_XML_BOX_EXAMPLE')
+
+        env_val = os.environ.get('STATEK_LOG_LEVEL')
+        if env_val is not None:
+            self.log_level = env_val.upper()
+        set_log_level(self.log_level)
 
         if not self.prompt_defs:
             self.prompt_defs = (
@@ -278,9 +285,6 @@ def set_log_level(log_level: str = "WARNING") -> None:
 
     logger.propagate = False
 
-
-# Set default log level to WARNING
-set_log_level("WARNING")
 
 
 @lru_cache()

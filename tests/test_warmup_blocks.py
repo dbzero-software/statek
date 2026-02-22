@@ -152,6 +152,64 @@ class TestRunJobStepMultipleBlocks:
         assert job.py_env.exit_status == "complete"
 
     @pytest.mark.asyncio
+    async def test_warmup_console_positions_recorded_after_each_block(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """warmup_console_positions records the console length after each completed block."""
+        job_def = job_def_factory(warmup_code=[
+            'print("block0")',
+            'print("block1")',
+            'exit("done")',
+        ])
+        job = Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY
+        )
+
+        # After first block: one position recorded
+        await run_job_step(job)
+        assert len(job.warmup_console_positions) == 1
+        assert job.warmup_console_positions[0] == len(job.py_env.console)
+
+        # After second block: two positions recorded
+        await run_job_step(job)
+        assert len(job.warmup_console_positions) == 2
+        assert job.warmup_console_positions[1] == len(job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_warmup_console_positions_interleave_correctly(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """Each block's console output is bounded by consecutive warmup_console_positions."""
+        job_def = job_def_factory(warmup_code=[
+            'print("from block0")',
+            'print("from block1")',
+            'exit("done")',
+        ])
+        job = Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY
+        )
+
+        await run_job_step(job)  # block 0
+        await run_job_step(job)  # block 1
+
+        pos0 = job.warmup_console_positions[0]
+        pos1 = job.warmup_console_positions[1]
+
+        # Console lines for block 0 are before pos0
+        block0_output = job.py_env.console[:pos0]
+        assert any("block0" in line for line in block0_output)
+
+        # Console lines for block 1 are between pos0 and pos1
+        block1_output = job.py_env.console[pos0:pos1]
+        assert any("block1" in line for line in block1_output)
+
+    @pytest.mark.asyncio
     async def test_run_job_step_multiple_blocks_continuation_after_future_error(
         self, job_def_factory, db0_fixture
     ):  # pylint: disable=unused-argument

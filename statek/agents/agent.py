@@ -79,11 +79,13 @@ class Agent:
             self._X__context = {}
         self._X__context["agent_name"] = self.role
 
-    def _expand_tool_placeholders(self, text: str) -> str:
+    def _expand_tool_placeholders(self, text: str) -> Optional[str]:
         """Expand {tools}, {brief_tools}, {detailed_tools} placeholders in text.
 
         Lines starting with '#' before a placeholder are embedded as a block comment.
         """
+        if text is None:
+            return None
         placeholders = [
             ('tools', True, False),
             ('brief_tools', True, False),
@@ -149,6 +151,8 @@ class Agent:
             Formatted prompt string
         """
         result = self._expand_tool_placeholders(self._prompt_template)
+        if result is None:
+            return None
         format_ctx = {}
         if job_params:
             format_ctx.update(job_params)
