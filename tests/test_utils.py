@@ -227,6 +227,49 @@ def test_prompt_append_console_style_markdown():
     )
 
 
+def test_prompt_append_console_xml_tags_none_no_boxing():
+    """xml_tags=None leaves output unchanged."""
+    console = ['line1', 'line2']
+    result = prompt_append_console(console, ChatStyle.CONSOLE, 'code', xml_tags=None)
+    assert result == 'code\n> line1\n> line2'
+
+
+def test_prompt_append_console_xml_tags_no_console_key_no_boxing():
+    """xml_tags without 'console' key leaves output unchanged."""
+    console = ['line1', 'line2']
+    result = prompt_append_console(console, ChatStyle.CONSOLE, 'code', xml_tags={"example": "ex"})
+    assert result == 'code\n> line1\n> line2'
+
+
+def test_prompt_append_console_xml_tags_console_key_boxes_console_lines_console_style():
+    """xml_tags with 'console' key wraps the console portion in XML tags (CONSOLE style)."""
+    console = ['line1', 'line2']
+    result = prompt_append_console(
+        console, ChatStyle.CONSOLE, 'code', xml_tags={"console": "output"})
+    assert result == 'code\n<output>\n> line1\n> line2\n</output>'
+
+
+def test_prompt_append_console_xml_tags_console_key_boxes_console_lines_markdown_style():
+    """xml_tags with 'console' key wraps the console portion in XML tags (MARKDOWN style)."""
+    console = ['line1', 'line2']
+    result = prompt_append_console(
+        console, ChatStyle.MARKDOWN, 'code', xml_tags={"console": "output"})
+    assert result == '```python\ncode\n```\n<output>\nline1\nline2\n</output>'
+
+
+def test_prompt_append_console_xml_tags_boxing_no_prompt():
+    """Boxing works when no prompt is provided."""
+    console = ['line1', 'line2']
+    result = prompt_append_console(console, ChatStyle.CONSOLE, xml_tags={"console": "out"})
+    assert result == '<out>\n> line1\n> line2\n</out>'
+
+
+def test_prompt_append_console_xml_tags_empty_console_no_boxing():
+    """Empty console produces no XML box even when tag is configured."""
+    result = prompt_append_console([], ChatStyle.CONSOLE, 'code', xml_tags={"console": "output"})
+    assert result == 'code'
+
+
 def test_format_callable_decl_temporal_function():
     """Test formatting a temporal function shows non-FutureResult return type."""
 

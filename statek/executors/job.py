@@ -246,14 +246,17 @@ class Job:
         Returns:
             The formatted prompt string ready to be sent to the LLM
         """
-        chat_style = get_statek_settings().chat_style
+        settings = get_statek_settings()
+        chat_style = settings.chat_style
+        xml_tags = settings.get_xml_box_tags()
         if not self.chat_log:
             # First prompt: use job_def.prompt and append entire console from position 0
             prompt = prompt_append_console(
                 self.py_env.console,
                 chat_style,
                 self.job_def.prompt(),
-                from_pos=0
+                from_pos=0,
+                xml_tags=xml_tags
             )
             return prompt
         else:
@@ -262,7 +265,8 @@ class Job:
             return prompt_append_console(
                 self.py_env.console,
                 chat_style,
-                from_pos=last_chat_item.console_pos
+                from_pos=last_chat_item.console_pos,
+                xml_tags=xml_tags
             )
                 # Log console output if logging is enabled
 
@@ -295,7 +299,9 @@ class Job:
             # No history if chat_log is empty
             return
 
-        chat_style = get_statek_settings().chat_style
+        settings = get_statek_settings()
+        chat_style = settings.chat_style
+        xml_tags = settings.get_xml_box_tags()
 
         def _wrap_resp(resp: str) -> str:
             if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
@@ -309,7 +315,8 @@ class Job:
             chat_style,
             self.job_def.prompt(),
             from_pos=0,
-            limit=first_chat_item.console_pos
+            limit=first_chat_item.console_pos,
+            xml_tags=xml_tags
         )
         yield first_user_message
 
@@ -326,7 +333,8 @@ class Job:
                 self.py_env.console,
                 chat_style,
                 from_pos=prev_chat_item.console_pos,
-                limit=current_chat_item.console_pos - prev_chat_item.console_pos
+                limit=current_chat_item.console_pos - prev_chat_item.console_pos,
+                xml_tags=xml_tags
             )
             yield console_fragment
 

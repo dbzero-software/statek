@@ -139,3 +139,45 @@ Output: {output}
         # Test retrieving non-existent prompt definition
         missing_def = settings.get_prompt_def("nonexistent")
         assert missing_def is None
+
+
+def test_get_xml_box_tags_returns_empty_when_not_configured():
+    """Test that get_xml_box_tags returns an empty dict when no tags are configured."""
+    settings = StatekSettings()
+    assert not settings.get_xml_box_tags()
+
+
+def test_get_xml_box_tags_returns_configured_tags():
+    """Test that get_xml_box_tags returns only configured XML box tags."""
+    settings = StatekSettings(xml_box_console="console_output", xml_box_example="code_block")
+    tags = settings.get_xml_box_tags()
+    assert tags == {"console": "console_output", "example": "code_block"}
+
+
+def test_get_xml_box_tags_partial_configuration():
+    """Test that get_xml_box_tags excludes unconfigured tags."""
+    settings = StatekSettings(xml_box_console="output_box")
+    tags = settings.get_xml_box_tags()
+    assert tags == {"console": "output_box"}
+    assert "example" not in tags
+
+    settings2 = StatekSettings(xml_box_example="example_box")
+    tags2 = settings2.get_xml_box_tags()
+    assert tags2 == {"example": "example_box"}
+    assert "console" not in tags2
+
+
+def test_get_xml_box_tags_from_environment_variables():
+    """Test that xml_box fields are read from STATEK_XML_BOX_* environment variables."""
+    os.environ['STATEK_XML_BOX_CONSOLE'] = 'env_console_tag'
+    os.environ['STATEK_XML_BOX_EXAMPLE'] = 'env_example_tag'
+    try:
+        settings = StatekSettings()
+    finally:
+        del os.environ['STATEK_XML_BOX_CONSOLE']
+        del os.environ['STATEK_XML_BOX_EXAMPLE']
+
+    assert settings.xml_box_console == 'env_console_tag'
+    assert settings.xml_box_example == 'env_example_tag'
+    tags = settings.get_xml_box_tags()
+    assert tags == {"console": "env_console_tag", "example": "env_example_tag"}

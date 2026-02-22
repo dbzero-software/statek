@@ -85,5 +85,13 @@ def show_example(agent_name: str, example_id: int, **kwargs):  # pylint: disable
     if example_id < 0 or example_id >= len(examples):
         print(f"# Example {example_id} not found (total: {len(examples)})")
         return
-    chat_style = get_statek_settings().chat_style
-    print(format_example(examples[example_id], chat_style))
+    settings = get_statek_settings()
+    style = settings.examples_style or settings.chat_style
+    example = examples[example_id]
+    if settings.xml_box_example:
+        print(format_example(example, style, xml_tags={"example": settings.xml_box_example}))
+    else:
+        name = example.example_metadata.get("name", "")
+        print(f"# --- EXAMPLE: {name} ---")
+        print(format_example(example, style))
+        print("# --- END OF EXAMPLE ---")

@@ -107,3 +107,58 @@ def test_roundtrip_from_real_job(job_factory):
     original = format_example(ex, ChatStyle.MARKDOWN, **fmt_kwargs)
     parsed = parse_example(original)
     assert format_example(parsed, ChatStyle.MARKDOWN, **fmt_kwargs) == original
+
+
+# --- xml_tags boxing tests ---
+
+def test_xml_tags_none_produces_no_boxing():
+    """xml_tags=None (default) leaves output unchanged."""
+    ex = _example([], ["x = 1", "1"])
+    unboxed = _fmt(ex)
+    boxed = format_example(ex, ChatStyle.MARKDOWN, xml_tags=None)
+    assert boxed == unboxed
+
+
+def test_xml_tags_empty_dict_produces_no_boxing():
+    """xml_tags={} (no 'example' key) leaves output unchanged."""
+    ex = _example([], ["x = 1", "1"])
+    unboxed = _fmt(ex)
+    boxed = format_example(ex, ChatStyle.MARKDOWN, xml_tags={})
+    assert boxed == unboxed
+
+
+def test_xml_tags_example_key_wraps_output():
+    """xml_tags with 'example' key wraps the formatted output in XML tags."""
+    ex = _example([], ["x = 1", "1"])
+    inner = _fmt(ex)
+    result = format_example(ex, ChatStyle.MARKDOWN, xml_tags={"example": "code_block"})
+    assert result == f"<code_block>\n{inner}\n</code_block>"
+
+
+def test_xml_tags_without_example_key_produces_no_boxing():
+    """Only the 'example' key triggers boxing; other keys (e.g. 'console') do not."""
+    ex = _example([], ["x = 1", "1"])
+    unboxed = _fmt(ex)
+    result = format_example(ex, ChatStyle.MARKDOWN, xml_tags={"console": "output_box"})
+    assert result == unboxed
+
+
+def test_xml_tags_boxing_includes_warmup_and_metadata():
+    """Boxing wraps the complete output including warmup and metadata sections."""
+    ex = _example(["setup()", ""], ["x = 1", "1"], metadata={"name": "demo"})
+    inner = format_example(ex, ChatStyle.MARKDOWN, include_warmup=True, include_metadata=True)
+    result = format_example(
+        ex, ChatStyle.MARKDOWN,
+        xml_tags={"example": "snippet"},
+        include_warmup=True,
+        include_metadata=True,
+    )
+    assert result == f"<snippet>\n{inner}\n</snippet>"
+
+
+def test_xml_tags_boxing_with_console_style():
+    """Boxing works with CONSOLE chat style too."""
+    ex = _example([], ["print(1)", "1"])
+    inner = format_example(ex, ChatStyle.CONSOLE)
+    result = format_example(ex, ChatStyle.CONSOLE, xml_tags={"example": "output"})
+    assert result == f"<output>\n{inner}\n</output>"
