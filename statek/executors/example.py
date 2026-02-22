@@ -80,6 +80,7 @@ def _extract_warmup_items(job: Job) -> List[str]:
 
 
 def format_example(example: Example, chat_style: ChatStyle,
+                   xml_tags: Dict[str, str] = None,
                    include_warmup: bool = True,
                    include_metadata: bool = False) -> str:
     """Format an example as a string using the specified chat style.
@@ -87,11 +88,13 @@ def format_example(example: Example, chat_style: ChatStyle,
     Args:
         example: the example object instance
         chat_style: formatting style (CONSOLE or MARKDOWN)
+        xml_tags: optional dict of XML boxing tags; if the 'example' key is
+                  present its value is used to wrap the entire output
         include_warmup: flag indicating if warmup block should be included
         include_metadata: flag indicating if metadata should be included
 
     Returns:
-        str: the formatted string
+        str: the formatted string (possibly boxed in an XML tag)
     """
     sections = []
 
@@ -108,7 +111,13 @@ def format_example(example: Example, chat_style: ChatStyle,
     if example_str:
         sections.append(example_str)
 
-    return "\n".join(sections)
+    result = "\n".join(sections)
+
+    tag = xml_tags.get("example") if xml_tags else None
+    if tag:
+        result = f"<{tag}>\n{result}\n</{tag}>"
+
+    return result
 
 
 def _format_metadata(metadata: Dict) -> str:

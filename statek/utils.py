@@ -242,9 +242,19 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
     return type_str
 
 
-def prompt_append_console(console: List[str], chat_style,
-                          prompt: str = None, from_pos: int = 0,
-                          limit: int = None) -> str:
+def _fmt_console_lines(lines: List[str], chat_style) -> str:
+    """Format a slice of console lines according to chat_style."""
+    from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+    if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+        return "\n".join(lines)
+    return "\n".join(f"> {line}" for line in lines)
+
+
+def prompt_append_console(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        console: List[str], chat_style,
+        prompt: str = None, from_pos: int = 0,
+        limit: int = None,
+        xml_tags: dict = None) -> str:
     """
     Extend a prompt with the console outputs.
 
@@ -273,7 +283,6 @@ def prompt_append_console(console: List[str], chat_style,
         'User(name = "Kowalski Adam")\\n2026-01-03 12:13:32'
     """
     from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
-
     # In MARKDOWN mode wrap the prompt code in python fences; otherwise use as-is
     if prompt:
         if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
@@ -293,16 +302,12 @@ def prompt_append_console(console: List[str], chat_style,
         end_pos = min(from_pos + limit, end_pos)
 
     # Format console outputs according to chat_style
-    console_outputs = []
-    for i in range(from_pos, end_pos):
-        if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
-            console_outputs.append(console[i])
-        else:
-            console_outputs.append(f"> {console[i]}")
-
-    # Join console outputs and append to result
-    if console_outputs:
-        console_text = "\n".join(console_outputs)
+    console_slice = console[from_pos:end_pos]
+    if console_slice:
+        console_text = _fmt_console_lines(console_slice, chat_style)
+        tag = xml_tags and xml_tags.get("console")
+        if tag:
+            console_text = f"<{tag}>\n{console_text}\n</{tag}>"
         if result:
             result += "\n" + console_text
         else:

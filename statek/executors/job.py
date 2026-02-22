@@ -191,6 +191,26 @@ class Job:
         with open(log_filepath, 'a', encoding='utf-8') as f:
             f.write(f"{content}\n\n")
 
+    def _log_console_batch(self, from_pos: int, to_pos: int):
+        """Log a slice of the console as a single batch with XML tags if configured.
+
+        Called at block/turn boundaries so the log matches the format sent to the LLM.
+
+        Args:
+            from_pos: First console element to include
+            to_pos: One-past-the-last console element to include
+        """
+        if to_pos <= from_pos:
+            return
+        settings = get_statek_settings()
+        text = prompt_append_console(
+            self.py_env.console, settings.chat_style,
+            from_pos=from_pos, limit=to_pos - from_pos,
+            xml_tags=settings.get_xml_box_tags()
+        )
+        if text:
+            self._log(text)
+
     def console_append(self, output: str, error_message: str = None):
         """
         Append output to the console and optionally log it.
@@ -205,11 +225,7 @@ class Job:
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
             self.py_env.exceptions[chat_log_item_id] = error_message
-        chat_style = get_statek_settings().chat_style    
-        if chat_style == ChatStyle.MARKDOWN:
-            self._log(output.rstrip())
-        else:
-            self._log(f"> {output.rstrip()}")
+        # Console is logged in batches at block/turn boundaries (see _log_console_batch)
 
     @property
     def status(self) -> JobStatus:
@@ -246,27 +262,51 @@ class Job:
         Returns:
             The formatted prompt string ready to be sent to the LLM
         """
-        chat_style = get_statek_settings().chat_style
+        settings = get_statek_settings()
+        chat_style = settings.chat_style
+        xml_tags = settings.get_xml_box_tags()
         if not self.chat_log:
-            # First prompt: use job_def.prompt and append entire console from position 0
-            prompt = prompt_append_console(
-                self.py_env.console,
-                chat_style,
-                self.job_def.prompt(),
-                from_pos=0
-            )
-            return prompt
+            warmup = self.job_def.warmup_code
+            if warmup:
+                # Warmup exists: template and warmup turns go in chat_history as
+                # alternating assistant/user pairs.  The prompt (current user message)
+                # is the console output OF the last warmup block, spanning from the
+                # end of the previous block to the end of the last block.
+                warmup_blocks = [warmup] if isinstance(warmup, str) else list(warmup)
+                n = len(warmup_blocks)
+                last_end = (
+                    self.warmup_console_positions[n - 1]
+                    if n - 1 < len(self.warmup_console_positions)
+                    else len(self.py_env.console) if self.py_env.console else 0
+                )
+                prev_end = (
+                    self.warmup_console_positions[n - 2]
+                    if n >= 2 and n - 2 < len(self.warmup_console_positions)
+                    else 0
+                )
+                limit = last_end - prev_end
+                return prompt_append_console(
+                    self.py_env.console, chat_style,
+                    from_pos=prev_end, limit=limit if limit > 0 else 0,
+                    xml_tags=xml_tags
+                ) if limit > 0 else ""
+            else:
+                # No warmup: template + all console is the first user prompt
+                template = self.job_def.prompt()
+                console_part = prompt_append_console(
+                    self.py_env.console, chat_style, from_pos=0, xml_tags=xml_tags
+                )
+                parts = [p for p in [template, console_part] if p]
+                return "\n".join(parts)
         else:
             # Not first prompt: format console from last chat element's console position
             last_chat_item = self.chat_log[-1]
             return prompt_append_console(
                 self.py_env.console,
                 chat_style,
-                from_pos=last_chat_item.console_pos
+                from_pos=last_chat_item.console_pos,
+                xml_tags=xml_tags
             )
-                # Log console output if logging is enabled
-
-        return prompt
 
     def get_chat_history(self) -> Iterable[str]:
         """
@@ -288,50 +328,98 @@ class Job:
             - Third yield: "> console_output_2\n> console_output_3"
             - Fourth yield: "llm_response_2"
 
-            In MARKDOWN style, user prompts are wrapped in ```python fences and
-            assistant responses are also wrapped in ```python fences.
+            In MARKDOWN style, assistant messages (LLM code and warmup code) are wrapped
+            in ```python fences; warmup blocks appear as assistant turns before the first
+            LLM response.
         """
+        settings = get_statek_settings()
+        chat_style = settings.chat_style
+        xml_tags = settings.get_xml_box_tags()
+
+        def _wrap_code(code: str) -> str:
+            if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+                return f"```python\n{code}\n```"
+            return code
+
+        warmup = self.job_def.warmup_code
+        warmup_blocks = ([warmup] if isinstance(warmup, str) else list(warmup)) if warmup else []
+
         if not self.chat_log:
-            # No history if chat_log is empty
+            if not warmup_blocks:
+                return  # No history
+
+            # First LLM call with warmup: yield template then warmup assistant/user pairs.
+            # The last warmup block (assistant) is the final item; remaining console goes in prompt.
+            yield self.job_def.prompt()  # user: template
+            prev_pos = 0
+            for i, block in enumerate(warmup_blocks):
+                yield _wrap_code(block)  # assistant: warmup code
+                is_last = (i == len(warmup_blocks) - 1)
+                if not is_last:
+                    # Yield console between this block and the next as a user message
+                    block_end = (
+                        self.warmup_console_positions[i]
+                        if i < len(self.warmup_console_positions)
+                        else len(self.py_env.console) if self.py_env.console else 0
+                    )
+                    limit = block_end - prev_pos
+                    yield prompt_append_console(
+                        self.py_env.console, chat_style,
+                        from_pos=prev_pos, limit=limit if limit > 0 else 0,
+                        xml_tags=xml_tags
+                    ) if limit > 0 else ""  # user: console for this block
+                    prev_pos = block_end
             return
 
-        chat_style = get_statek_settings().chat_style
-
-        def _wrap_resp(resp: str) -> str:
-            if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
-                return f"```python\n{resp}\n```"
-            return resp
-
-        # First element: initial prompt + console from position 0 to first chat item's console_pos
+        # chat_log is non-empty
         first_chat_item = self.chat_log[0]
-        first_user_message = prompt_append_console(
-            self.py_env.console,
-            chat_style,
-            self.job_def.prompt(),
-            from_pos=0,
-            limit=first_chat_item.console_pos
-        )
-        yield first_user_message
 
-        # Yield first LLM response
-        yield _wrap_resp(first_chat_item.llm_resp)
+        if not warmup_blocks:
+            # No warmup: first user message = template + console up to first LLM turn
+            template = self.job_def.prompt()
+            console_part = prompt_append_console(
+                self.py_env.console, chat_style,
+                from_pos=0, limit=first_chat_item.console_pos,
+                xml_tags=xml_tags
+            ) if first_chat_item.console_pos > 0 else ""
+            yield f"{template}\n{console_part}" if console_part else template
+        else:
+            # With warmup: template, then warmup assistant/user pairs.
+            # The last warmup user message is extended to cover all console up to the first LLM turn.
+            yield self.job_def.prompt()  # user: template
+            prev_pos = 0
+            for i, block in enumerate(warmup_blocks):
+                yield _wrap_code(block)  # assistant: warmup code
+                is_last = (i == len(warmup_blocks) - 1)
+                if is_last:
+                    block_end = first_chat_item.console_pos  # extend to cover remaining console
+                elif i < len(self.warmup_console_positions):
+                    block_end = self.warmup_console_positions[i]
+                else:
+                    block_end = len(self.py_env.console) if self.py_env.console else 0
+                limit = block_end - prev_pos
+                yield prompt_append_console(
+                    self.py_env.console, chat_style,
+                    from_pos=prev_pos, limit=limit if limit > 0 else 0,
+                    xml_tags=xml_tags
+                ) if limit > 0 else ""  # user: console for this block
+                prev_pos = block_end
 
-        # Process remaining chat log items
+        # Yield first LLM response then remaining turns
+        yield _wrap_code(first_chat_item.llm_resp)
+
         for i in range(1, len(self.chat_log)):
             prev_chat_item = self.chat_log[i - 1]
             current_chat_item = self.chat_log[i]
 
-            # User message: console fragment from prev_chat_item.console_pos to current_chat_item.console_pos
             console_fragment = prompt_append_console(
-                self.py_env.console,
-                chat_style,
+                self.py_env.console, chat_style,
                 from_pos=prev_chat_item.console_pos,
-                limit=current_chat_item.console_pos - prev_chat_item.console_pos
+                limit=current_chat_item.console_pos - prev_chat_item.console_pos,
+                xml_tags=xml_tags
             )
             yield console_fragment
-
-            # Assistant message: current LLM response
-            yield _wrap_resp(current_chat_item.llm_resp)
+            yield _wrap_code(current_chat_item.llm_resp)
 
     def get_next_request(self) -> Dict[str, Any]:
         """

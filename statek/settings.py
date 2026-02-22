@@ -72,6 +72,14 @@ class StatekSettings(BaseSettings):
     """Maximum allowed total number of tokens per conversation"""
     max_token_usage: int = 10000
     chat_style: Optional[ChatStyle]= None  # pylint: disable=no-member
+    """Optional style for formatting examples (overrides chat_style when set)"""
+    examples_style: Optional[ChatStyle] = None  # pylint: disable=no-member
+    """The boxing XML tag for console outputs"""
+    xml_box_console: Optional[str] = None
+    """The boxing XML tag for code examples"""
+    xml_box_example: Optional[str] = None
+    """Log level for statek logger (DEBUG, INFO, WARNING, ERROR, CRITICAL)"""
+    log_level: str = "WARNING"
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -111,6 +119,21 @@ class StatekSettings(BaseSettings):
         env_val = os.environ.get('STATEK_CHAT_STYLE')
         if env_val is not None:
             self.chat_style = ChatStyle[env_val.upper()]
+
+        env_val = os.environ.get('STATEK_EXAMPLES_STYLE')
+        if env_val is not None:
+            self.examples_style = getattr(ChatStyle, env_val.upper())
+
+        if self.xml_box_console is None:
+            self.xml_box_console = os.environ.get('STATEK_XML_BOX_CONSOLE')
+
+        if self.xml_box_example is None:
+            self.xml_box_example = os.environ.get('STATEK_XML_BOX_EXAMPLE')
+
+        env_val = os.environ.get('STATEK_LOG_LEVEL')
+        if env_val is not None:
+            self.log_level = env_val.upper()
+        set_log_level(self.log_level)
 
         if not self.prompt_defs:
             self.prompt_defs = (
@@ -193,6 +216,20 @@ class StatekSettings(BaseSettings):
         provider_name = provider or self.default_llm_api_provider
         return self.llm_api_settings.get(provider_name)
 
+    def get_xml_box_tags(self) -> Dict[str, str]:
+        """For configured tags retrieves tag name -> tag box mapping.
+
+        Returns a dict mapping logical names to configured XML tag names.
+        Only includes entries for tags that have been configured (non-None).
+        Logical names: 'console' for xml_box_console, 'example' for xml_box_example.
+        """
+        tags = {}
+        if self.xml_box_console:
+            tags["console"] = self.xml_box_console
+        if self.xml_box_example:
+            tags["example"] = self.xml_box_example
+        return tags
+
 
 
 @lru_cache()
@@ -248,9 +285,6 @@ def set_log_level(log_level: str = "WARNING") -> None:
 
     logger.propagate = False
 
-
-# Set default log level to WARNING
-set_log_level("WARNING")
 
 
 @lru_cache()

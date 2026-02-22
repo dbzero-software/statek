@@ -137,12 +137,15 @@ class OpenRouter_API(LLM_API):
         # Add chat history if provided
         if chat_history:
             for i, message in enumerate(chat_history):
+                if message is None:
+                    continue
                 # Alternate between user and assistant roles
                 role = "user" if i % 2 == 0 else "assistant"
                 messages.append({"role": role, "content": message})
 
-        # Add current prompt
-        messages.append({"role": "user", "content": prompt})
+        # Add current prompt (skip if None)
+        if prompt is not None:
+            messages.append({"role": "user", "content": prompt})
 
         return messages
 
@@ -196,6 +199,7 @@ class OpenRouter_API(LLM_API):
                 json=payload,
                 headers=headers
             )
+            STATEK_LOGGER.debug("OpenRouter payload: %s", json.dumps(payload))
             response.raise_for_status()
 
             # Measure bytes received
@@ -203,6 +207,7 @@ class OpenRouter_API(LLM_API):
 
             # Parse the response
             data = response.json()
+            STATEK_LOGGER.debug("OpenRouter response: %s", json.dumps(data))
 
             # Extract the response text
             # OpenRouter follows OpenAI's response format
@@ -286,6 +291,8 @@ class Claude_API(LLM_API):
         if chat_history:
             history_list = list(chat_history)
             for i, message in enumerate(history_list):
+                if message is None:
+                    continue
                 # Alternate between user and assistant roles
                 role = "user" if i % 2 == 0 else "assistant"
                 msg = {"role": role, "content": message}
@@ -302,8 +309,9 @@ class Claude_API(LLM_API):
 
                 messages.append(msg)
 
-        # Add current prompt
-        messages.append({"role": "user", "content": prompt})
+        # Add current prompt (skip if None)
+        if prompt is not None:
+            messages.append({"role": "user", "content": prompt})
 
         return messages
 

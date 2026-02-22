@@ -177,8 +177,8 @@ def job_def_factory(agent):
 @pytest.fixture
 def job_factory(job_def_factory):
     """Factory fixture to create Job instances with custom parameters."""
-    def _create_job(job_params=None, model_family="test", model="test-model"):
-        job_def = job_def_factory(job_params=job_params)
+    def _create_job(job_params=None, warmup_code=None, model_family="test", model="test-model"):
+        job_def = job_def_factory(job_params=job_params, warmup_code=warmup_code)
         return Job(
             job_def=job_def,
             model_family=model_family,
