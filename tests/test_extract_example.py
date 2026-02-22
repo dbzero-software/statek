@@ -104,8 +104,8 @@ class TestExtractWarmupItems:
         result = extract_example(job, "x")
         assert result.warmup_items == ["print(1)\nprint(2)\nprint(3)", "1\n2\n3"]
 
-    def test_multiple_warmup_blocks_last_gets_console(self, job_def_factory):
-        """Only the last warmup block receives the accumulated console output."""
+    def test_multiple_warmup_blocks_fallback_without_positions(self, job_def_factory):
+        """Fallback (no positions tracked): last block gets all accumulated console output."""
         job_def = job_def_factory(warmup_code=["a = 1", "b = 2", "print(b)"])
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         job.py_env.console_append("2")
@@ -116,6 +116,15 @@ class TestExtractWarmupItems:
         assert result.warmup_items[3] == ""      # no per-block console
         assert result.warmup_items[4] == "print(b)"
         assert result.warmup_items[5] == "2"
+
+    def test_multiple_warmup_blocks_per_block_console(self, job_def_factory):
+        """When warmup_console_positions are tracked, each block gets its own console slice."""
+        job_def = job_def_factory(warmup_code=["print('a')", "print('b')", "print('c')"])
+        job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
+        job.py_env.console = ["a", "b", "c"]
+        job.warmup_console_positions = [1, 2, 3]
+        result = extract_example(job, "x")
+        assert result.warmup_items == ["print('a')", "a", "print('b')", "b", "print('c')", "c"]
 
     def test_multiple_warmup_blocks_length(self, job_def_factory):
         """warmup_items has exactly 2*N entries for N warmup blocks."""
@@ -138,43 +147,33 @@ class TestExtractWarmupItems:
 class TestExtractExampleItems:
     """Tests for example_items field."""
 
-    def test_no_chat_log_no_console(self, job_factory):
+    def test_no_chat_log_returns_empty(self, job_factory):
         result = extract_example(job_factory(), "x")
-        assert result.example_items == ["Test task", ""]
+        assert not result.example_items
 
-    def test_no_chat_log_with_console(self, job_factory):
+    def test_no_chat_log_with_console_returns_empty(self, job_factory):
         job = job_factory()
         job.py_env.console = ["out1", "out2"]
         result = extract_example(job, "x")
-        assert result.example_items == ["Test task", "out1\nout2"]
+        assert not result.example_items
 
     def test_single_turn_structure(self, job_factory):
-        """Single LLM turn → [prompt, pre_console, llm_resp, post_console]."""
+        """Single LLM turn → [llm_resp, post_console]."""
         job = job_factory()
         job.py_env.console = ["warmup_line", "exec_line"]
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="y = 42"))
         result = extract_example(job, "x")
-        assert len(result.example_items) == 4
-        assert result.example_items[0] == "Test task"
-        assert result.example_items[1] == "warmup_line"
-        assert result.example_items[2] == "y = 42"
-        assert result.example_items[3] == "exec_line"
-
-    def test_single_turn_multiple_pre_console_lines(self, job_factory):
-        """Multiple console lines before first LLM turn are joined."""
-        job = job_factory()
-        job.py_env.console = ["line1", "line2", "line3", "after_llm"]
-        job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="code"))
-        result = extract_example(job, "x")
-        assert result.example_items[1] == "line1\nline2\nline3"
+        assert len(result.example_items) == 2
+        assert result.example_items[0] == "y = 42"
+        assert result.example_items[1] == "exec_line"
 
     def test_single_turn_multiple_post_console_lines(self, job_factory):
-        """Multiple console lines produced after one LLM response are joined."""
+        """Multiple console lines produced after an LLM response are joined."""
         job = job_factory()
-        job.py_env.console = ["before", "after1", "after2", "after3"]
-        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="code"))
+        job.py_env.console = ["after1", "after2", "after3"]
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="code"))
         result = extract_example(job, "x")
-        assert result.example_items[3] == "after1\nafter2\nafter3"
+        assert result.example_items[1] == "after1\nafter2\nafter3"
 
     def test_multiple_turns_console_correctly_segmented(self, job_factory):
         """Each turn's console slice is bounded by adjacent console_pos values."""
@@ -184,23 +183,21 @@ class TestExtractExampleItems:
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp1"))
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
         result = extract_example(job, "x")
-        # [prompt, console[0:1], resp1, console[1:3], resp2, console[3:6]]
-        assert result.example_items[0] == "Test task"
-        assert result.example_items[1] == "w"
-        assert result.example_items[2] == "resp1"
-        assert result.example_items[3] == "t1a\nt1b"
-        assert result.example_items[4] == "resp2"
-        assert result.example_items[5] == "t2a\nt2b\nt2c"
+        # [resp1, console[1:3], resp2, console[3:6]]
+        assert result.example_items[0] == "resp1"
+        assert result.example_items[1] == "t1a\nt1b"
+        assert result.example_items[2] == "resp2"
+        assert result.example_items[3] == "t2a\nt2b\nt2c"
 
     def test_three_turns_length(self, job_factory):
-        """N LLM turns → 2 + 2*N items (prompt + initial_console + N*(code+console))."""
+        """N LLM turns → 2*N items (N*(code+console))."""
         job = job_factory()
         job.py_env.console = ["c0", "c1", "c2", "c3"]
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="r1"))
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="r2"))
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="r3"))
         result = extract_example(job, "x")
-        assert len(result.example_items) == 8  # 2 + 2*3
+        assert len(result.example_items) == 6  # 2*3
 
     def test_empty_console_between_turns_is_empty_string(self, job_factory):
         """If no console output between turns, item is empty string not omitted."""
@@ -209,7 +206,7 @@ class TestExtractExampleItems:
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="r1"))
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="r2"))
         result = extract_example(job, "x")
-        assert result.example_items[3] == ""   # no new console between r1 and r2
+        assert result.example_items[1] == ""   # no new console between r1 and r2
 
     def test_last_turn_trailing_console_to_end(self, job_factory):
         """Last LLM response collects all console lines after its console_pos."""
@@ -217,7 +214,7 @@ class TestExtractExampleItems:
         job.py_env.console = ["pre", "post1", "post2", "post3"]
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="code"))
         result = extract_example(job, "x")
-        assert result.example_items[3] == "post1\npost2\npost3"
+        assert result.example_items[1] == "post1\npost2\npost3"
 
     def test_example_items_no_formatting_characters(self, job_factory):
         """example_items must contain plain text without markdown or '> ' prefixes."""
@@ -231,11 +228,12 @@ class TestExtractExampleItems:
             assert "```" not in item
             assert not item.startswith("> ")
 
-    def test_example_items_first_element_is_code(self, job_factory):
-        """First element of example_items is always the prompt (code block)."""
+    def test_example_items_first_element_is_llm_response(self, job_factory):
+        """First element of example_items is the first LLM response (no prompt)."""
         job = job_factory()
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="x = 1"))
         result = extract_example(job, "x")
-        assert result.example_items[0] == "Test task"
+        assert result.example_items[0] == "x = 1"
 
     def test_example_items_even_length(self, job_factory):
         """example_items always has an even number of elements (pairs of code+console)."""
@@ -268,17 +266,17 @@ class TestFormatExample:
 
     def test_console_style_code_is_plain(self, job_factory):
         """CONSOLE style: code blocks appear as plain text (no fences)."""
-        example = self._make_example(job_factory)
+        example = self._make_example(job_factory, turns=[(0, "x = 1")])
         result = format_example(example, ChatStyle.CONSOLE)
         assert "```" not in result
-        assert "Test task" in result
+        assert "x = 1" in result
 
     def test_console_style_console_prefixed(self, job_factory):
         """CONSOLE style: each console line is prefixed with '> '."""
         example = self._make_example(
             job_factory,
             console=["out1", "out2"],
-            turns=[(2, "x = 1")]
+            turns=[(0, "x = 1")]
         )
         result = format_example(example, ChatStyle.CONSOLE)
         assert "> out1" in result
@@ -286,16 +284,16 @@ class TestFormatExample:
 
     def test_markdown_style_code_fenced(self, job_factory):
         """MARKDOWN style: code blocks are wrapped in ```python fences."""
-        example = self._make_example(job_factory)
+        example = self._make_example(job_factory, turns=[(0, "x = 1")])
         result = format_example(example, ChatStyle.MARKDOWN)
-        assert "```python\nTest task\n```" in result
+        assert "```python\nx = 1\n```" in result
 
     def test_markdown_style_console_plain(self, job_factory):
         """MARKDOWN style: console lines are not prefixed with '> '."""
         example = self._make_example(
             job_factory,
             console=["output_line"],
-            turns=[(1, "code")]
+            turns=[(0, "code")]
         )
         result = format_example(example, ChatStyle.MARKDOWN)
         assert "output_line" in result
@@ -313,8 +311,7 @@ class TestFormatExample:
         """include_metadata=True: metadata key-value pairs appear in output."""
         example = self._make_example(job_factory)
         result = format_example(example, ChatStyle.CONSOLE, include_metadata=True)
-        assert "# Example metadata:" in result
-        assert "name: test" in result
+        assert "# name: test" in result
 
     def test_include_metadata_false_omits_metadata(self, job_factory):
         """include_metadata=False (default): no metadata header in output."""

@@ -123,6 +123,8 @@ class Job:
         self.next_instr_num = next_instr_num
         # Continuation warmup block number (for multi-block warmup_code)
         self.warmup_block_num = warmup_block_num
+        # Console position recorded after each warmup block completes
+        self.warmup_console_positions: List[int] = []
         # Total context bytes used by this job so far
         self.context_bytes = 0
         self.total_bytes_sent = 0
@@ -436,6 +438,10 @@ class Job:
             self.warmup_block_num = 1
         else:
             self.warmup_block_num += 1
+
+    def record_warmup_console_pos(self):
+        """Record the current console length after a warmup block completes."""
+        self.warmup_console_positions.append(len(self.py_env.console) if self.py_env.console else 0)
 
     def get_next_code_block(self) -> str | None:
         """
