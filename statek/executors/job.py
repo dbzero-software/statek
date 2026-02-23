@@ -71,15 +71,25 @@ class JobDef:
 
     def prompt(self) -> str:
         """
-        Generate the prompt by calling agent's prompt method with job_params.
-        
+        Generate the user prompt from the agent's prompt template.
+
+        Reads the 'prompt_template' key from agent._metadata and formats it
+        with job_params using format_map.
+
         Returns:
-            Formatted prompt string
+            Formatted prompt string, or None if no template is set
         """
         if self.agent is None:
             return ""
-        
-        return self.agent.prompt(job_params=self.job_params)
+        template = (
+            self.agent._metadata.get('prompt_template')  # pylint: disable=protected-access
+            if self.agent._metadata else None
+        )
+        if template is None:
+            return None
+        if self.job_params:
+            return template.format_map(self.job_params)
+        return template
 
 
 @memo
@@ -134,7 +144,7 @@ class Job:
 
         # Log system prompt and prompt template on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
-            self._log(self.job_def.agent.system_prompt)
+            self._log(self.job_def.agent.system_prompt(job_params=self.job_def.job_params))
             self._log(self.job_def.prompt())
 
     @property
@@ -434,12 +444,14 @@ class Job:
                 - chat_history (Iterable[str]): Generator of alternating user/assistant messages
                   ending with the next user prompt (from get_chat_history + get_next_prompt)
                 - system_prompt (str): The agent's system prompt
+                - metadata (Dict[str, str]): The agent's metadata (may be None)
                 - session_id (str, optional): The session ID if available
 
         Example:
             {
                 "chat_history": <generator>,  # ends with the latest user prompt
                 "system_prompt": "You are a helpful assistant",
+                "metadata": {"MODEL": "gpt-4o"},
                 "session_id": "abc123"  # Only if session_id is not None
             }
         """
@@ -449,7 +461,8 @@ class Job:
 
         request_params = {
             "chat_history": _full_history(),
-            "system_prompt": self.job_def.agent.system_prompt
+            "system_prompt": self.job_def.agent.system_prompt(job_params=self.job_def.job_params),
+            "metadata": self.job_def.agent._metadata  # pylint: disable=protected-access
         }
 
         # Only include session_id if it's not None

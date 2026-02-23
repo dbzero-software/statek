@@ -23,17 +23,22 @@ class LLM_API(ABC):
     A single LLM_API instance is intended for a single session with the LLM agent.
     """
 
-    @abstractmethod
     async def process_request(
         self,
         system_prompt: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
         """Process a request to the LLM API.
 
+        Logs metadata before the call and the response text after. Delegates
+        the actual provider interaction to _process_request.
+
         Args:
             system_prompt: Optional system prompt to guide the LLM behavior
+            metadata: Optional metadata key/value pairs. If the "MODEL" key is present
+                     it overrides the class-level default model for this request.
             chat_history: Conversation history including the latest user message as the
                          final element. Depending on the provider, if session is not managed
                          on the provider side, this history needs to be included in the
@@ -46,6 +51,25 @@ class LLM_API(ABC):
         Raises:
             Exception: If the API request fails or model cannot be determined
         """
+        STATEK_LOGGER.debug("%s metadata: %s", self.__class__.__name__, metadata)
+        response = await self._process_request(
+            system_prompt=system_prompt,
+            metadata=metadata,
+            chat_history=chat_history,
+            session_id=session_id
+        )
+        STATEK_LOGGER.debug("%s response: %s", self.__class__.__name__, response.text)
+        return response
+
+    @abstractmethod
+    async def _process_request(
+        self,
+        system_prompt: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        chat_history: Optional[Iterable[str]] = None,
+        session_id: Optional[str] = None
+    ) -> LLM_Response:
+        """Provider-specific request implementation. Called by process_request."""
 
     @staticmethod
     def _load_response_format(settings: LLM_API_Settings) -> Optional[dict]:
@@ -143,9 +167,10 @@ class OpenRouter_API(LLM_API):
 
         return messages
 
-    async def process_request(  # pylint: disable=too-many-locals
+    async def _process_request(  # pylint: disable=too-many-locals
         self,
         system_prompt: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
@@ -153,6 +178,8 @@ class OpenRouter_API(LLM_API):
 
         Args:
             system_prompt: Optional system prompt
+            metadata: Optional metadata. If it contains the "MODEL" key it overrides
+                     the instance-level default model for this request.
             chat_history: Conversation history including the latest user message as
                          the final element
             session_id: Not used by OpenRouter (stateless)
@@ -165,10 +192,11 @@ class OpenRouter_API(LLM_API):
             KeyError: If the response format is unexpected
         """
         messages = self.build_messages(system_prompt, chat_history)
+        model = metadata.get('MODEL', self.model) if metadata else self.model
 
         # Prepare the request payload
         payload = {
-            "model": self.model,
+            "model": model,
             "messages": messages
         }
         if self.response_format:
@@ -184,6 +212,7 @@ class OpenRouter_API(LLM_API):
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
         self.total_bytes_sent += len(payload_bytes)
+        STATEK_LOGGER.debug("OpenRouter payload: %s", json.dumps(payload))
 
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -192,7 +221,6 @@ class OpenRouter_API(LLM_API):
                 json=payload,
                 headers=headers
             )
-            STATEK_LOGGER.debug("OpenRouter payload: %s", json.dumps(payload))
             response.raise_for_status()
 
             # Measure bytes received
@@ -329,9 +357,10 @@ class Claude_API(LLM_API):
             ]
         return system_prompt
 
-    async def process_request(  # pylint: disable=too-many-locals
+    async def _process_request(  # pylint: disable=too-many-locals
         self,
         system_prompt: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
@@ -339,6 +368,8 @@ class Claude_API(LLM_API):
 
         Args:
             system_prompt: Optional system prompt
+            metadata: Optional metadata. If it contains the "MODEL" key it overrides
+                     the instance-level default model for this request.
             chat_history: Conversation history including the latest user message as
                          the final element
             session_id: Not used (Claude Messages API is stateless)
@@ -351,10 +382,11 @@ class Claude_API(LLM_API):
             KeyError: If the response format is unexpected
         """
         messages = self.build_messages(chat_history=chat_history)
+        model = metadata.get('MODEL', self.model) if metadata else self.model
 
         # Prepare the request payload
         payload = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "max_tokens": self.kwargs.get("max_tokens", 4096)
         }
@@ -377,6 +409,7 @@ class Claude_API(LLM_API):
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
         self.total_bytes_sent += len(payload_bytes)
+        STATEK_LOGGER.debug("Claude payload: %s", json.dumps(payload))
 
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -392,6 +425,7 @@ class Claude_API(LLM_API):
 
             # Parse the response
             data = response.json()
+            STATEK_LOGGER.debug("Claude response: %s", json.dumps(data))
 
             # Extract the response text from Claude's response format
             # Claude returns content as an array of content blocks

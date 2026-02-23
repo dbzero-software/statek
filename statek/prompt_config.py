@@ -103,3 +103,7 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
         # Update agent's system prompt if changed
         if prompt_def.system and agent._system_prompt != prompt_def.system:  # pylint: disable=protected-access
             agent._system_prompt = prompt_def.system  # pylint: disable=protected-access
+
+        # Update agent's metadata if changed
+        if prompt_def.metadata:
+            agent.update_metadata(prompt_def.metadata)
