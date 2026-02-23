@@ -1,49 +1,51 @@
 """Prompt configuration utilities to avoid cyclic imports."""
 
+import re
+from collections import namedtuple
 from pathlib import Path
 from typing import Optional, Dict
-from dataclasses import dataclass
 
 
-@dataclass
-class PromptDef:
-    """Definition for an agent prompt."""
-    system: str
-    template: str
-    role: Optional[str] = None
+# system = the system prompt
+# metadata = prompt's metadata (as key-value dictionary)
+PromptDef = namedtuple("PromptDef", ["system", "metadata"])
 
 
 def parse_prompt_file(file_path: Path) -> Optional[PromptDef]:
     """Parse a single prompt definition file.
 
+    The file format uses # KEY: value comment lines for metadata and a
+    # System Prompt section for the system prompt content.
+
     Args:
         file_path: Path to the .md file
 
     Returns:
-        PromptDef with system and template, or None if parsing fails
+        PromptDef with system and metadata, or None if parsing fails
     """
     content = file_path.read_text(encoding='utf-8')
 
-    current_section = None
-    sections = {'system': [], 'template': []}
+    metadata = {}
+    system_lines = []
+    in_system = False
 
     for line in content.split('\n'):
-        stripped = line.strip().lower()
+        if in_system:
+            system_lines.append(line)
+        else:
+            # Check for System Prompt section header
+            if re.match(r'^#\s+System Prompt\s*$', line, re.IGNORECASE):
+                in_system = True
+            else:
+                # Check for metadata comment: # KEY: value
+                meta_match = re.match(r'^#\s+(\w+):\s+(.+)$', line)
+                if meta_match:
+                    metadata[meta_match.group(1)] = meta_match.group(2).strip()
 
-        if stripped == '# system':
-            current_section = 'system'
-        elif stripped == '# template':
-            current_section = 'template'
-        elif stripped == '---':
-            continue
-        elif current_section:
-            sections[current_section].append(line)
-
-    system_prompt = '\n'.join(sections['system']).strip() if sections['system'] else None
-    template = '\n'.join(sections['template']).strip() if sections['template'] else None
+    system_prompt = '\n'.join(system_lines).strip() if system_lines else None
 
     if system_prompt:
-        return PromptDef(system=system_prompt, template=template or "")
+        return PromptDef(system=system_prompt, metadata=metadata)
 
     return None
 
@@ -69,7 +71,6 @@ def load_prompt_files(prompt_files_dir: str) -> Dict[str, PromptDef]:
         role = file_path.stem
         prompt_def = parse_prompt_file(file_path)
         if prompt_def:
-            prompt_def.role = role
             prompt_defs[role] = prompt_def
 
     return prompt_defs
@@ -97,8 +98,6 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
             # Quietly skip agents without matching prompt definitions
             continue
 
-        # Update agent's system prompt and template only if changed
+        # Update agent's system prompt if changed
         if prompt_def.system and agent._system_prompt != prompt_def.system:  # pylint: disable=protected-access
             agent._system_prompt = prompt_def.system  # pylint: disable=protected-access
-        if prompt_def.template and agent._prompt_template != prompt_def.template:  # pylint: disable=protected-access
-            agent._prompt_template = prompt_def.template  # pylint: disable=protected-access
