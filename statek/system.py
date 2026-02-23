@@ -1,4 +1,4 @@
-from typing import Any, Callable, Tuple, Dict
+from typing import Any, Callable, Iterable, Optional, Tuple, Dict
 import asyncio
 import functools
 import inspect
@@ -9,6 +9,9 @@ import dbzero as db0
 from .future import get_any_future, get_all_future
 from .docstring import parse_docstring, format_docstring
 from .utils import find_locals
+
+
+_TOOL_REGISTRY: list[Callable] = []
 
 
 def inject_context(func, __local_context):
@@ -117,39 +120,75 @@ def _convert_enum_args(f, args, kwargs):
     return _rebuild_args(sig, converted)
 
 
-def tool(f):
-    """Marks a function as a tool for LLM agent."""
+def tool(f=None, *, system: bool = False):
+    """Marks a function as a tool for LLM agent.
 
-    # Check if the function signature includes **kwargs
-    sig = inspect.signature(f)
-    has_var_keyword = any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in sig.parameters.values()
-    )
+    Can be used as ``@tool`` or ``@tool(system=True)``.
 
-    if not has_var_keyword:
-        raise TypeError(
-            f"Function '{f.__name__}' must accept **kwargs to be used as a tool. "
-            f"Current signature: {sig}"
+    Args:
+        system: When True, the tool is classified as a system-level tool
+            (e.g. docs, brief) rather than an application-level tool.
+    """
+
+    def _decorate(func):
+        # Check if the function signature includes **kwargs
+        sig = inspect.signature(func)
+        has_var_keyword = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
         )
 
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        args, kwargs = _convert_enum_args(f, args, kwargs)
-        args, kwargs = _bind_by_name(f, args, kwargs)
+        if not has_var_keyword:
+            raise TypeError(
+                f"Function '{func.__name__}' must accept **kwargs to be used as a tool. "
+                f"Current signature: {sig}"
+            )
 
-        # update globals with local context
-        result = None
-        if inspect.iscoroutinefunction(f):
-            # This library patches asyncio to allow nested event loops
-            nest_asyncio.apply()
-            # If f is async, run it using the event loop
-            result = asyncio.get_running_loop().run_until_complete(f(*args, **kwargs))
-        else:
-            # If f is sync, just call it
-            result = f(*args, **kwargs)
-        return result
-    return wrapper
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            args, kwargs = _convert_enum_args(func, args, kwargs)
+            args, kwargs = _bind_by_name(func, args, kwargs)
+
+            # update globals with local context
+            result = None
+            if inspect.iscoroutinefunction(func):
+                # This library patches asyncio to allow nested event loops
+                nest_asyncio.apply()
+                # If func is async, run it using the event loop
+                result = asyncio.get_running_loop().run_until_complete(func(*args, **kwargs))
+            else:
+                # If func is sync, just call it
+                result = func(*args, **kwargs)
+            return result
+
+        wrapper.tool_system = system
+        _TOOL_REGISTRY.append(wrapper)
+        return wrapper
+
+    if f is None:
+        # Called as @tool() or @tool(system=True)
+        return _decorate
+    # Called as @tool (without parentheses)
+    return _decorate(f)
+
+
+def find_tools(scope: Optional[str] = None) -> Iterable[Callable]:
+    """Returns registered tools, optionally filtered by scope.
+
+    Args:
+        scope: Optional scope filter.
+            ``"SYSTEM"`` returns only tools decorated with ``system=True``.
+            ``"APPLICATION"`` returns only non-system tools.
+            ``None`` returns all registered tools.
+
+    Returns:
+        An iterable of tool callables matching the requested scope.
+    """
+    if scope == "SYSTEM":
+        return [t for t in _TOOL_REGISTRY if t.tool_system]
+    if scope == "APPLICATION":
+        return [t for t in _TOOL_REGISTRY if not t.tool_system]
+    return list(_TOOL_REGISTRY)
 
 
 # pylint: disable=redefined-builtin
@@ -189,7 +228,7 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
     return new_tool
 
 
-@tool
+@tool(system=True)
 def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
     """Prints the docstring associated with a tool, class, object instance or method.
 
@@ -231,7 +270,7 @@ def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pyl
     print(formatted)
 
 
-@tool
+@tool(system=True)
 def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
     """Prints brief documentation for a tool, class, object instance or method.
 

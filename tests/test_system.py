@@ -5,7 +5,7 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import docs, brief, tool, create_tool, inject_context
+from statek.system import docs, brief, tool, create_tool, inject_context, find_tools
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.docstring import DocstringParseError
 from statek.utils import format_callable_decl
@@ -548,3 +548,106 @@ class TestToolBindByName:
 
         result = send_to("user")
         assert result == "user"
+
+
+class TestToolSystemFlag:
+    """Test cases for system=True parameter on @tool decorator."""
+
+    def test_tool_without_system_flag_is_application(self):
+        """@tool without system=True sets tool_system to False."""
+        @tool
+        def my_app_tool(**kwargs):  # pylint: disable=unused-argument
+            """An application tool."""
+
+        assert my_app_tool.tool_system is False
+
+    def test_tool_with_system_true(self):
+        """@tool(system=True) sets tool_system to True."""
+        @tool(system=True)
+        def my_system_tool(**kwargs):  # pylint: disable=unused-argument
+            """A system tool."""
+
+        assert my_system_tool.tool_system is True
+
+    def test_tool_with_system_false_explicit(self):
+        """@tool(system=False) sets tool_system to False."""
+        @tool(system=False)
+        def my_app_tool(**kwargs):  # pylint: disable=unused-argument
+            """An application tool."""
+
+        assert my_app_tool.tool_system is False
+
+    def test_tool_without_kwargs_raises(self):
+        """@tool(system=True) still enforces **kwargs requirement."""
+        with pytest.raises(TypeError, match="must accept \\*\\*kwargs"):
+            @tool(system=True)
+            def bad_tool(x: int):  # pylint: disable=unused-argument
+                """Missing **kwargs."""
+
+
+class TestFindTools:
+    """Test cases for find_tools function."""
+
+    def test_find_tools_none_returns_all(self):
+        """find_tools(None) returns all registered tools."""
+        @tool
+        def _app1(**kwargs):  # pylint: disable=unused-argument
+            """App tool 1."""
+
+        @tool(system=True)
+        def _sys1(**kwargs):  # pylint: disable=unused-argument
+            """System tool 1."""
+
+        all_tools = list(find_tools())
+        assert _app1 in all_tools
+        assert _sys1 in all_tools
+
+    def test_find_tools_system_scope(self):
+        """find_tools("SYSTEM") returns only system tools."""
+        @tool(system=True)
+        def _sys2(**kwargs):  # pylint: disable=unused-argument
+            """System tool 2."""
+
+        @tool
+        def _app2(**kwargs):  # pylint: disable=unused-argument
+            """App tool 2."""
+
+        system_tools = list(find_tools("SYSTEM"))
+        assert _sys2 in system_tools
+        assert _app2 not in system_tools
+        assert all(t.tool_system for t in system_tools)
+
+    def test_find_tools_application_scope(self):
+        """find_tools("APPLICATION") returns only non-system tools."""
+        @tool
+        def _app3(**kwargs):  # pylint: disable=unused-argument
+            """App tool 3."""
+
+        @tool(system=True)
+        def _sys3(**kwargs):  # pylint: disable=unused-argument
+            """System tool 3."""
+
+        app_tools = list(find_tools("APPLICATION"))
+        assert _app3 in app_tools
+        assert _sys3 not in app_tools
+        assert all(not t.tool_system for t in app_tools)
+
+    def test_tools_in_system_scope(self):
+        """docs appears in find_tools("SYSTEM")."""
+        system_tools = list(find_tools("SYSTEM"))
+        assert docs in system_tools
+        assert brief in system_tools
+
+    def test_tools_not_in_application_scope(self):
+        """docs does not appear in find_tools("APPLICATION")."""
+        app_tools = list(find_tools("APPLICATION"))
+        assert docs not in app_tools
+        assert brief not in app_tools
+
+    def test_list_of_examples_and_show_example_in_system_scope(self):
+        """list_of_examples and show_example appear in find_tools("SYSTEM")."""
+        # Import triggers registration
+        from statek.agents.list_of_examples import list_of_examples, show_example  # pylint: disable=import-outside-toplevel
+        system_tools = list(find_tools("SYSTEM"))
+        assert list_of_examples in system_tools
+        assert show_example in system_tools
