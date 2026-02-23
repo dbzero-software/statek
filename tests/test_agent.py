@@ -15,13 +15,13 @@ class TestAgent:
         agent = Agent(
             role="test",
             _system_prompt=system_prompt,
-            _prompt_template="Test",
+
             _tools=tools
         )
 
-        assert "clock()" in agent.system_prompt
-        assert "Get the current time." in agent.system_prompt
-        assert "Available tools:\n" in agent.system_prompt
+        assert "clock()" in agent.system_prompt()
+        assert "Get the current time." in agent.system_prompt()
+        assert "Available tools:\n" in agent.system_prompt()
 
     def test_system_prompt_formatting_multiple_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with multiple tools."""
@@ -31,14 +31,14 @@ class TestAgent:
         agent = Agent(
             role="test",
             _system_prompt=system_prompt,
-            _prompt_template="Test",
+
             _tools=tools
         )
 
-        assert "clock()" in agent.system_prompt
-        assert "docs(class_name, method_name" in agent.system_prompt
-        assert "exit_tool(reason)" in agent.system_prompt
-        assert "You have access to these tools:" in agent.system_prompt
+        assert "clock()" in agent.system_prompt()
+        assert "docs(class_name, method_name" in agent.system_prompt()
+        assert "exit_tool(reason)" in agent.system_prompt()
+        assert "You have access to these tools:" in agent.system_prompt()
 
     def test_system_prompt_formatting_no_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with empty explicit tools list"""
@@ -48,13 +48,13 @@ class TestAgent:
         agent = Agent(
             role="test",
             _system_prompt=system_prompt,
-            _prompt_template="Test",
+
             _tools=tools
         )
 
-        assert "Available tools:" in agent.system_prompt
-        assert "list_of_examples" in agent.system_prompt
-        assert "show_example" in agent.system_prompt
+        assert "Available tools:" in agent.system_prompt()
+        assert "list_of_examples" in agent.system_prompt()
+        assert "show_example" in agent.system_prompt()
 
     def test_system_prompt_with_block_comment(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with block comment placeholder."""
@@ -64,13 +64,13 @@ class TestAgent:
         agent = Agent(
             role="test",
             _system_prompt=system_prompt,
-            _prompt_template="Test",
+
             _tools=tools
         )
 
         # Each line should be prefixed with #
-        assert "# clock()" in agent.system_prompt
-        assert "#     Get the current time." in agent.system_prompt
+        assert "# clock()" in agent.system_prompt()
+        assert "#     Get the current time." in agent.system_prompt()
 
     def test_system_prompt_detailed_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with detailed_tools placeholder."""
@@ -80,10 +80,10 @@ class TestAgent:
         agent = Agent(
             role="test",
             _system_prompt=system_prompt,
-            _prompt_template="Test",
+
             _tools=tools
         )
 
         # detailed_tools uses py_syntax=True
-        assert "def clock()" in agent.system_prompt
-        assert '"""Get the current time.' in agent.system_prompt
+        assert "def clock()" in agent.system_prompt()
+        assert '"""Get the current time.' in agent.system_prompt()

@@ -55,7 +55,6 @@ class MessageDispatcher(SupervisedAgent):
         super().__init__(
             role="message_dispatcher",
             _system_prompt=None, # Prompt is readed in StatekSetings
-            _prompt_template=None,  # Prompt template is readed in StatekSetings
             _tools=basic_tools,
             _X__context=x_context
         )

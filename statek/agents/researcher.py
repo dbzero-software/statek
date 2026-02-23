@@ -47,7 +47,6 @@ class Researcher(SupervisedAgent):
         super().__init__(
             role="researcher",
             _system_prompt=None, # Prompt is readed in StatekSetings
-            _prompt_template=None,  # Prompt template is readed in StatekSetings
             _tools=basic_tools,
             _X__context=None
         )

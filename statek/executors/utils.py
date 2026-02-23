@@ -406,7 +406,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         request['chat_history'] = list(request['chat_history'])
 
     # Log full messages being sent to LLM
-    messages = llm_api.build_messages(**{k: v for k, v in request.items() if k != 'session_id'})
+    messages = llm_api.build_messages(**{
+        k: v for k, v in request.items() if k not in ('session_id', 'metadata')
+    })
     messages_str = "LLM Request messages:\n"
     for msg in messages:
         if msg['content'] is None:

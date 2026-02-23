@@ -252,7 +252,7 @@ class TestFormatExample:
         """Helper: build an Example from a job with given console and turns."""
         if warmup_code is not None:
             agent = Agent(role="test", _system_prompt="Test agent",
-                          _prompt_template="Test task", _tools=[])
+                          _metadata={'prompt_template': 'Test task'}, _tools=[])
             job_def = JobDef(agent=agent, warmup_code=warmup_code)
             job = Job(job_def=job_def, model_family="t", model="t",
                       job_status=JobStatus.READY)

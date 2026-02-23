@@ -764,7 +764,6 @@ print(f"Result: {result}")
         agent = Agent(
             role="test",
             _system_prompt="Test agent with context",
-            _prompt_template="Test with agent context",
             _tools=[],
             _X__context={"custom_tool": custom_tool, "agent_var": 42}
         )

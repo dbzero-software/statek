@@ -1,11 +1,14 @@
 from dataclasses import dataclass
 import re
-from typing import List, Callable, Dict, Optional, Sequence, Union
+from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import block_comment, find_locals
 from statek.system import tool
 from statek.docstring import parse_docstring, format_docstring
 from statek.executors.job import JobDef, parse_warmup_code
+from statek.settings import get_statek_logger
+
+STATEK_LOGGER = get_statek_logger()
 
 
 @tool
@@ -43,10 +46,10 @@ class Agent:
     """
     role: str  # An arbitrary role name
     _system_prompt: str  # f-string with the {tools} placeholder
-    _prompt_template: str  # Agent's prompt template / to be formatted with job-specific params
     _tools: List[Callable]
     # NOTE: dynamically created tools are stored by their name
     _tools_by_name: Optional[List[str]] = None
+    _metadata: Optional[Dict[str, str]] = None  # prompt meta-data as key/value pairs
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
 
     def __post_init__(self):
@@ -54,7 +57,7 @@ class Agent:
         Apply prompt configuration from StatekSettings after initialization.
 
         If a prompt definition exists for this agent's role, it will override
-        the _system_prompt and _prompt_template values.
+        the _system_prompt and _metadata values.
         """
         # pylint: disable=import-outside-toplevel,cyclic-import
         from statek.prompt_config import load_prompt_files
@@ -71,11 +74,28 @@ class Agent:
         if prompt_def is not None:
             if prompt_def.system:
                 self._system_prompt = prompt_def.system
+            if prompt_def.metadata:
+                self.update_metadata(prompt_def.metadata)
         self.append_tool(list_of_examples)
         self.append_tool(show_example)
         if self._X__context is None:
             self._X__context = {}
         self._X__context["agent_name"] = self.role
+
+    def update_metadata(self, new_metadata: Dict[str, str]) -> bool:
+        """Update _metadata only if keys or values differ from the current state.
+
+        Args:
+            new_metadata: Metadata dict to apply.
+
+        Returns:
+            True if metadata was updated, False if it was already up to date.
+        """
+        if self._metadata == new_metadata:
+            return False
+        self._metadata = new_metadata
+        STATEK_LOGGER.debug("Agent '%s' metadata updated: %s", self.role, self._metadata)
+        return True
 
     def _expand_tool_placeholders(self, text: str) -> Optional[str]:
         """Expand {tools}, {brief_tools}, {detailed_tools} placeholders in text.
@@ -99,20 +119,37 @@ class Agent:
                 text = text.replace(f'{{{name}}}', tools_str)
         return text
 
-    @property
-    def system_prompt(self) -> str:
+    def system_prompt(self, job_params: Dict = None, **kwargs) -> str:
         """
-        Format system_prompt with tool descriptions.
+        Format system_prompt with tool descriptions and job-specific parameters.
 
-        Supports placeholders: {tools}, {brief_tools}, {detailed_tools}
+        Supports tool placeholders: {tools}, {brief_tools}, {detailed_tools}
         - tools/brief_tools: formatted with brief=True, py_syntax=False
         - detailed_tools: formatted with brief=False, py_syntax=True
 
         If the placeholder line starts with '#', the result is embedded in a block comment.
+
+        Additional {key} placeholders are resolved via job_params and kwargs using
+        format_map, allowing job-specific values to be injected into the system prompt.
+
+        Args:
+            job_params: optional context for format (e.g. job local variables)
+            kwargs: optional additional params
+
+        Returns:
+            Formatted system prompt string
         """
         if self._system_prompt is None:
             return ""
-        return self._expand_tool_placeholders(self._system_prompt)
+        result = self._expand_tool_placeholders(self._system_prompt)
+        format_ctx = {}
+        if job_params:
+            format_ctx.update(job_params)
+        if kwargs:
+            format_ctx.update(kwargs)
+        if format_ctx:
+            return result.format_map(format_ctx)
+        return result
 
     def _format_tools(self, brief: bool, py_syntax: bool) -> str:
         """Format all tools with the specified settings."""
@@ -137,28 +174,15 @@ class Agent:
         """
         return self._X__context
 
-    def prompt(self, job_params: Dict = None, **kwargs) -> str:
-        """
-        Format prompt message from prompt template by filling in job specific parameters.
-
-        Args:
-            job_params: optional context for format (e.g. job local variables)
-            kwargs: optional additional params
-
-        Returns:
-            Formatted prompt string
-        """
-        result = self._expand_tool_placeholders(self._prompt_template)
-        if result is None:
-            return None
-        format_ctx = {}
-        if job_params:
-            format_ctx.update(job_params)
-        if kwargs:
-            format_ctx.update(kwargs)
-
-        if format_ctx:
-            return result.format_map(format_ctx)
+    @property
+    def system_tools(self) -> Iterable[Callable]:
+        """Return agent-assigned tools marked with system=True."""
+        result = [fn for fn in self._tools if getattr(fn, 'tool_system', False)]
+        if self._tools_by_name:
+            for tool_name in self._tools_by_name:
+                fn = self.context.get(tool_name)
+                if fn is not None and getattr(fn, 'tool_system', False):
+                    result.append(fn)
         return result
 
     def append_tool(self, tool_or_name: Callable | str):

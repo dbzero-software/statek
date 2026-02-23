@@ -219,7 +219,7 @@ class TestDelegateTask:
         agent = SupervisedAgent(
             role="test",
             _system_prompt="Test agent",
-            _prompt_template="Process {data_type} for {user}",
+            _metadata={'prompt_template': 'Process {data_type} for {user}'},
             _tools=[]
         )
 
