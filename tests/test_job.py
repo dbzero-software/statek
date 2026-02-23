@@ -1,6 +1,7 @@
 """Tests for Job class."""
 
 import types
+from unittest.mock import patch
 import dbzero as db0
 from tests.conftest import create_chat_log_item
 from statek.executors.job import Job, JobStatus
@@ -552,3 +553,57 @@ class TestJobAppendChatLog:
 
         assert job.chat_log[2].console_pos == 4
         assert job.chat_log[2].llm_resp == "code_block_3"
+
+
+class TestJobDefUpdateWarmupCode:
+    """Tests for JobDef.update_warmup_code."""
+
+    def test_update_applies_new_value(self, job_def_factory):
+        """warmup_code is updated when the parsed new value differs from current."""
+        job_def = job_def_factory(warmup_code=None)
+        job_def.update_warmup_code("x = 1")
+        assert job_def.warmup_code == "x = 1"
+
+    def test_update_none_clears_existing(self, job_def_factory):
+        """Passing None clears an existing warmup_code value."""
+        job_def = job_def_factory(warmup_code="x = 1")
+        job_def.update_warmup_code(None)
+        assert job_def.warmup_code is None
+
+    def test_no_update_when_value_identical(self, job_def_factory):
+        """warmup_code is not reassigned when the parsed value equals the current one."""
+        job_def = job_def_factory(warmup_code="x = 1")
+        with patch('statek.executors.job.statek_log') as mock_log:
+            job_def.update_warmup_code("x = 1")
+        update_calls = [c for c in mock_log.call_args_list
+                        if "updating warmup code" in str(c)]
+        assert update_calls == []
+        assert job_def.warmup_code == "x = 1"
+
+    def test_no_update_when_none_stays_none(self, job_def_factory):
+        """Calling update_warmup_code(None) on a None field does nothing."""
+        job_def = job_def_factory(warmup_code=None)
+        with patch('statek.executors.job.statek_log') as mock_log:
+            job_def.update_warmup_code(None)
+        update_calls = [c for c in mock_log.call_args_list
+                        if "updating warmup code" in str(c)]
+        assert update_calls == []
+        assert job_def.warmup_code is None
+
+    def test_update_logs_debug_when_changed(self, job_def_factory):
+        """A debug log is emitted exactly once when the value actually changes."""
+        job_def = job_def_factory(warmup_code=None)
+        with patch('statek.executors.job.statek_log') as mock_log:
+            job_def.update_warmup_code("x = 1")
+        update_calls = [c for c in mock_log.call_args_list
+                        if "updating warmup code" in str(c)]
+        assert len(update_calls) == 1
+
+    def test_update_sequence_to_list(self, job_def_factory):
+        """A sequence of two blocks is stored as a two-element sequence."""
+        job_def = job_def_factory(warmup_code=None)
+        job_def.update_warmup_code(["a = 1", "b = 2"])
+        warmup = job_def.warmup_code
+        assert len(warmup) == 2
+        assert warmup[0] == "a = 1"
+        assert warmup[1] == "b = 2"

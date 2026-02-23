@@ -4,15 +4,32 @@ import ast
 import re
 import inspect
 from collections import namedtuple
-from typing import (Callable, Iterable, List, Dict, Optional, Type, Any,
+from dataclasses import dataclass
+from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Type, Any,
                     get_type_hints, get_origin, get_args, Union, ForwardRef)
 import dbzero as db0
 
 
 ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
 ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
-WarmupCallRequest = namedtuple("WarmupCallRequest", ["id", "name", "args", "kwargs"])
-CodeBlock = namedtuple("CodeBlock", ["code", "call_requests"])
+
+
+@db0.memo
+@dataclass
+class CallSpec:
+    """LLM or system-assigned tool call specification."""
+    id: str
+    func_name: str
+    args: Optional[List[Any]] = None
+    kwargs: Optional[Dict[str, Any]] = None
+
+
+@db0.memo
+@dataclass
+class CodeBlock:
+    """A block of executable Python code with optional tool-call requests."""
+    code: Optional[str] = None
+    tool_calls: Optional[Sequence[CallSpec]] = None
 
 _STATEK_TOOL_MARKER = "#STATEK: as tool"
 
@@ -48,8 +65,8 @@ def parse_func_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-
 def parse_warmup_block(code: str) -> ParsedWarmupBlock:
     """Parse a single warmup block into code and tool call definitions.
 
-    Lines annotated with ``#STATEK: as tool`` are extracted as tool calls.
-    The marker is stripped from those lines in the returned code field.
+    Lines annotated with ``#STATEK: as tool`` are extracted as tool calls
+    and removed from the returned code field.
 
     Args:
         code: Python code block to be parsed
@@ -68,7 +85,6 @@ def parse_warmup_block(code: str) -> ParsedWarmupBlock:
         if marker_pos != -1:
             call_str = line[:marker_pos].rstrip()
             tool_calls.append(parse_func_call(call_str))
-            clean_lines.append(call_str)
         else:
             clean_lines.append(line)
     return ParsedWarmupBlock(code="\n".join(clean_lines), tool_calls=tool_calls)
@@ -97,16 +113,16 @@ def build_warmup_code(
         if not parsed_block.tool_calls:
             blocks.append(parsed_block.code)
         else:
-            call_requests = []
+            tool_calls = []
             for tc in parsed_block.tool_calls:
                 counter += 1
-                call_requests.append(WarmupCallRequest(
+                tool_calls.append(CallSpec(
                     id=f"STATEK-{counter:03d}",
-                    name=tc.name,
+                    func_name=tc.name,
                     args=tc.args if tc.args else [],
                     kwargs=tc.kwargs if tc.kwargs is not None else {},
                 ))
-            blocks.append(CodeBlock(code=parsed_block.code, call_requests=call_requests))
+            blocks.append(CodeBlock(code=parsed_block.code, tool_calls=tool_calls))
 
     if len(blocks) == 1:
         return blocks[0]

@@ -1,9 +1,12 @@
 """Tests for build_warmup_code function."""
 
+import pytest
 from statek.utils import (
     ParsedFuncCall, ParsedWarmupBlock,
-    build_warmup_code, CodeBlock, WarmupCallRequest,
+    build_warmup_code, CodeBlock, CallSpec,
 )
+
+pytestmark = pytest.mark.usefixtures("db0_fixture")
 
 
 def _parsed(code, tool_calls=None):
@@ -25,21 +28,21 @@ def test_build_warmup_code_single_with_tool_calls_returns_code_block():
     assert isinstance(result, CodeBlock)
 
 
-def test_build_warmup_code_code_block_has_code_and_call_requests():
-    """CodeBlock has .code and .call_requests with WarmupCallRequest items."""
+def test_build_warmup_code_code_block_has_code_and_tool_calls():
+    """CodeBlock has .code and .tool_calls with CallSpec items."""
     tc = ParsedFuncCall(name='ping', args=[], kwargs=None)
     result = build_warmup_code([_parsed("ping()", [tc])])
     assert result.code == "ping()"
-    assert len(result.call_requests) == 1
-    assert isinstance(result.call_requests[0], WarmupCallRequest)
-    assert result.call_requests[0].name == 'ping'
+    assert len(result.tool_calls) == 1
+    assert isinstance(result.tool_calls[0], CallSpec)
+    assert result.tool_calls[0].func_name == 'ping'
 
 
 def test_build_warmup_code_call_id_format():
     """Call IDs follow the STATEK-NNN format."""
     tc = ParsedFuncCall(name='list_examples', args=[], kwargs=None)
     result = build_warmup_code([_parsed("list_examples()", [tc])])
-    assert result.call_requests[0].id == "STATEK-001"
+    assert result.tool_calls[0].id == "STATEK-001"
 
 
 def test_build_warmup_code_call_ids_sequential():
@@ -47,7 +50,7 @@ def test_build_warmup_code_call_ids_sequential():
     tc1 = ParsedFuncCall(name='alpha', args=[], kwargs=None)
     tc2 = ParsedFuncCall(name='beta', args=[], kwargs=None)
     result = build_warmup_code([_parsed("alpha()\nbeta()", [tc1, tc2])])
-    assert [cp.id for cp in result.call_requests] == ["STATEK-001", "STATEK-002"]
+    assert [cp.id for cp in result.tool_calls] == ["STATEK-001", "STATEK-002"]
 
 
 def test_build_warmup_code_call_ids_unique_across_blocks():
@@ -55,7 +58,7 @@ def test_build_warmup_code_call_ids_unique_across_blocks():
     tc1 = ParsedFuncCall(name='alpha', args=[], kwargs=None)
     tc2 = ParsedFuncCall(name='beta', args=[], kwargs=None)
     result = build_warmup_code([_parsed("alpha()", [tc1]), _parsed("beta()", [tc2])])
-    ids = [cp.id for cb in result if isinstance(cb, CodeBlock) for cp in cb.call_requests]
+    ids = [cp.id for cb in result if isinstance(cb, CodeBlock) for cp in cb.tool_calls]
     assert ids == ["STATEK-001", "STATEK-002"]
 
 
@@ -76,16 +79,16 @@ def test_build_warmup_code_multiple_mixed_types():
 
 
 def test_build_warmup_code_call_params_args_and_kwargs():
-    """Tool call arguments and kwargs are preserved in WarmupCallRequest."""
+    """Tool call arguments and kwargs are preserved in CallSpec."""
     tc = ParsedFuncCall(name='search', args=['query'], kwargs={'max_results': 5})
     result = build_warmup_code([_parsed("search('query', max_results=5)", [tc])])
-    cp = result.call_requests[0]
+    cp = result.tool_calls[0]
     assert cp.args == ['query']
     assert cp.kwargs == {'max_results': 5}
 
 
 def test_build_warmup_code_none_kwargs_becomes_empty_dict():
-    """ParsedFuncCall with kwargs=None maps to WarmupCallRequest with kwargs={}."""
+    """ParsedFuncCall with kwargs=None maps to CallSpec with kwargs={}."""
     tc = ParsedFuncCall(name='ping', args=[], kwargs=None)
     result = build_warmup_code([_parsed("ping()", [tc])])
-    assert result.call_requests[0].kwargs == {}
+    assert result.tool_calls[0].kwargs == {}

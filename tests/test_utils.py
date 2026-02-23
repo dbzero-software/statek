@@ -941,12 +941,11 @@ def test_parse_warmup_block_single_tool_call():
     assert result.tool_calls[0] == ParsedFuncCall(name='list_of_examples', args=[], kwargs=None)
 
 
-def test_parse_warmup_block_strips_marker_from_code():
-    """The #STATEK: as tool marker is stripped from annotated lines in the code field."""
+def test_parse_warmup_block_removes_tool_call_lines_from_code():
+    """Lines annotated with #STATEK: as tool are excluded from the returned code field."""
     code = "list_of_examples() #STATEK: as tool\nuser, message = fetch_next_message()"
     result = parse_warmup_block(code)
-    assert "#STATEK" not in result.code
-    assert "list_of_examples()" in result.code
+    assert "list_of_examples()" not in result.code
     assert "user, message = fetch_next_message()" in result.code
 
 
