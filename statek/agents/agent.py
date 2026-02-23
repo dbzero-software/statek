@@ -11,7 +11,7 @@ from statek.settings import get_statek_logger
 STATEK_LOGGER = get_statek_logger()
 
 
-@tool
+@tool(system=True)
 def list_of_examples(start_index: int = 0, limit: int = 10, **kwargs):  # pylint: disable=unused-argument
     """Lists available examples for this agent.
 
@@ -26,7 +26,7 @@ def list_of_examples(start_index: int = 0, limit: int = 10, **kwargs):  # pylint
     _impl(agent_name, start_index, limit)
 
 
-@tool
+@tool(system=True)
 def show_example(example_id: int, **kwargs):  # pylint: disable=unused-argument
     """Shows the content of a specific example by its index.
 
@@ -173,6 +173,17 @@ class Agent:
         Get agent's private context.
         """
         return self._X__context
+
+    @property
+    def all_tools(self) -> List[Callable]:
+        """Return all tools assigned to this agent (both _tools list and named context tools)."""
+        result = list(self._tools)
+        if self._tools_by_name:
+            for tool_name in self._tools_by_name:
+                fn = self.context.get(tool_name)
+                if fn is not None:
+                    result.append(fn)
+        return result
 
     @property
     def system_tools(self) -> Iterable[Callable]:

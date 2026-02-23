@@ -5,7 +5,7 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import docs, brief, tool, create_tool, inject_context, find_tools
+from statek.system import docs, brief, tool, create_tool, inject_context, find_tools, select_tools
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.docstring import DocstringParseError
 from statek.utils import format_callable_decl
@@ -651,3 +651,135 @@ class TestFindTools:
         system_tools = list(find_tools("SYSTEM"))
         assert list_of_examples in system_tools
         assert show_example in system_tools
+
+
+class TestSelectTools:
+    """Test cases for select_tools function."""
+
+    @staticmethod
+    def _make_tools():
+        """Create a small set of system and application tools for testing."""
+        @tool(system=True)
+        def sys_a(**kwargs):  # pylint: disable=unused-argument
+            """System tool A."""
+
+        @tool(system=True)
+        def sys_b(**kwargs):  # pylint: disable=unused-argument
+            """System tool B."""
+
+        @tool
+        def app_a(**kwargs):  # pylint: disable=unused-argument
+            """Application tool A."""
+
+        @tool
+        def app_b(**kwargs):  # pylint: disable=unused-argument
+            """Application tool B."""
+
+        return sys_a, sys_b, app_a, app_b
+
+    def test_select_tools_system_scope(self):
+        """'SYSTEM' scope returns only tools marked system=True."""
+        sys_a, sys_b, app_a, app_b = self._make_tools()
+        result = select_tools([sys_a, sys_b, app_a, app_b], "SYSTEM")
+        assert sys_a in result
+        assert sys_b in result
+        assert app_a not in result
+        assert app_b not in result
+
+    def test_select_tools_application_scope(self):
+        """'APPLICATION' scope returns only non-system tools."""
+        sys_a, sys_b, app_a, app_b = self._make_tools()
+        result = select_tools([sys_a, sys_b, app_a, app_b], "APPLICATION")
+        assert app_a in result
+        assert app_b in result
+        assert sys_a not in result
+        assert sys_b not in result
+
+    def test_select_tools_none_scope_returns_all(self):
+        """None scope is a pass-through returning every provided tool."""
+        sys_a, sys_b, app_a, app_b = self._make_tools()
+        all_tools = [sys_a, sys_b, app_a, app_b]
+        result = select_tools(all_tools, None)
+        assert set(result) == set(all_tools)
+
+    def test_select_tools_all_scope_returns_all(self):
+        """"ALL" scope is a pass-through returning every provided tool."""
+        sys_a, sys_b, app_a, app_b = self._make_tools()
+        all_tools = [sys_a, sys_b, app_a, app_b]
+        result = select_tools(all_tools, "ALL")
+        assert set(result) == set(all_tools)
+
+    def test_select_tools_preserves_order(self):
+        """Output order matches input order for all scopes."""
+        sys_a, sys_b, app_a, app_b = self._make_tools()
+        ordered = [app_b, sys_a, app_a, sys_b]
+
+        assert select_tools(ordered, "ALL") == ordered
+        assert select_tools(ordered, "SYSTEM") == [sys_a, sys_b]
+        assert select_tools(ordered, "APPLICATION") == [app_b, app_a]
+
+    def test_select_tools_empty_input_returns_empty(self):
+        """Empty input always yields an empty list regardless of scope."""
+        assert select_tools([], "SYSTEM") == []
+        assert select_tools([], "APPLICATION") == []
+        assert select_tools([], "ALL") == []
+        assert select_tools([], None) == []
+
+    def test_select_tools_plain_callable_excluded_from_system(self):
+        """Plain callables without tool_system are excluded from 'SYSTEM'."""
+        def plain():
+            """A plain function."""
+
+        result = select_tools([plain], "SYSTEM")
+        assert plain not in result
+
+    def test_select_tools_plain_callable_included_in_application(self):
+        """Plain callables without tool_system are included in 'APPLICATION'."""
+        def plain():
+            """A plain function."""
+
+        result = select_tools([plain], "APPLICATION")
+        assert plain in result
+
+    def test_select_tools_plain_callable_included_in_all(self):
+        """Plain callables without tool_system are included in 'ALL' and None."""
+        def plain():
+            """A plain function."""
+
+        assert plain in select_tools([plain], "ALL")
+        assert plain in select_tools([plain], None)
+
+    def test_select_tools_mixed_with_plain_callable(self):
+        """Mix of @tool functions and plain callables is filtered correctly."""
+        sys_a, _, app_a, _ = self._make_tools()
+
+        def plain():
+            """Plain callable."""
+
+        pool = [sys_a, app_a, plain]
+
+        system_result = select_tools(pool, "SYSTEM")
+        assert system_result == [sys_a]
+
+        app_result = select_tools(pool, "APPLICATION")
+        assert set(app_result) == {app_a, plain}
+
+    def test_select_tools_all_system_with_system_scope(self):
+        """All-system input with SYSTEM scope returns all of them."""
+        sys_a, sys_b, _, _ = self._make_tools()
+        result = select_tools([sys_a, sys_b], "SYSTEM")
+        assert set(result) == {sys_a, sys_b}
+
+    def test_select_tools_all_application_with_application_scope(self):
+        """All-application input with APPLICATION scope returns all of them."""
+        _, _, app_a, app_b = self._make_tools()
+        result = select_tools([app_a, app_b], "APPLICATION")
+        assert set(result) == {app_a, app_b}
+
+    def test_select_tools_returns_list(self):
+        """Return type is always a list."""
+        sys_a, _, _, _ = self._make_tools()
+        assert isinstance(select_tools([sys_a], "SYSTEM"), list)
+        assert isinstance(select_tools([sys_a], "APPLICATION"), list)
+        assert isinstance(select_tools([sys_a], "ALL"), list)
+        assert isinstance(select_tools([sys_a], None), list)

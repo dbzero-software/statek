@@ -191,6 +191,30 @@ def find_tools(scope: Optional[str] = None) -> Iterable[Callable]:
     return list(_TOOL_REGISTRY)
 
 
+def select_tools(tools: Iterable[Callable], scope: str) -> Iterable[Callable]:
+    """Select tools from an iterable by the requested scope.
+
+    Filters the provided tools based on their ``tool_system`` attribute (set by
+    the ``@tool`` decorator).  Callables that do not carry the attribute are
+    treated as application-level tools (i.e. they are *excluded* from
+    ``"SYSTEM"`` and *included* in ``"APPLICATION"`` and ``"ALL"``).
+
+    Args:
+        tools: The sequence of tools to select from.
+        scope: ``"SYSTEM"`` for system tools only,
+               ``"APPLICATION"`` for non-system tools only,
+               ``"ALL"`` or ``None`` to return all tools unchanged.
+
+    Returns:
+        A list of callables from *tools* that match the requested scope.
+    """
+    if scope == "SYSTEM":
+        return [t for t in tools if getattr(t, "tool_system", False)]
+    if scope == "APPLICATION":
+        return [t for t in tools if not getattr(t, "tool_system", False)]
+    return list(tools)
+
+
 # pylint: disable=redefined-builtin
 def create_tool(tool_name: str, callable: Callable, docstring: str,
                 context: Dict, *args, **kwargs) -> Callable:

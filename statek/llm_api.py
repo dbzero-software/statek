@@ -3,16 +3,127 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from functools import lru_cache
-from typing import Optional, Iterable, List, Dict
+from typing import Optional, Iterable, Sequence, List, Dict, Callable
 import json
 import httpx
 
 from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
+from .exceptions import InvalidFormat
 
 STATEK_LOGGER = get_statek_logger()
 
 LLM_Stats = namedtuple("LLM_Stats", ["total_bytes_sent", "total_bytes_received", "cost"])
-LLM_Response = namedtuple("LLM_Response", ["text", "session_id", "stats"])
+# text: response text from the LLM (empty string when the LLM made tool calls instead)
+# session_id: optional provider-managed session identifier
+# stats: byte/cost accounting
+# call_requests: list of CallParams when the LLM requested tool calls, else None
+LLM_Response = namedtuple("LLM_Response", ["text", "session_id", "stats", "call_requests"])
+
+# id    - call identifier assigned by the LLM provider
+# name  - function / tool name to invoke
+# args  - positional arguments (always [] for OpenAI-format calls)
+# kwargs - keyword arguments parsed from the JSON arguments string
+CallParams = namedtuple("CallParams", ["id", "name", "args", "kwargs"])
+
+
+def extract_call_params(tool_call_req: Dict) -> CallParams:
+    """Extract function call parameters from an OpenAI- or Anthropic-format tool call.
+
+    Supports two wire formats:
+
+    **OpenAI / OpenRouter** (``type`` is ``"function"`` or absent)::
+
+        {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "Boston"}'
+            }
+        }
+
+    **Anthropic / Claude** (``type`` is ``"tool_use"``)::
+
+        {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "get_weather",
+            "input": {"city": "Boston"}
+        }
+
+    ``args`` is always ``[]`` — both protocols pass only keyword arguments.
+
+    Returns:
+        CallParams with ``id``, ``name``, ``args=[]``, and ``kwargs``.
+
+    Raises:
+        InvalidFormat: If required keys are missing, the type is unrecognised,
+            ``arguments`` is not valid JSON, or the decoded value is not a dict.
+    """
+    try:
+        call_id = tool_call_req.get("id", "")
+        call_type = tool_call_req.get("type")
+
+        # ---- Anthropic / Claude format ----------------------------------------
+        if call_type == "tool_use":
+            if "name" not in tool_call_req:
+                raise InvalidFormat(
+                    "Missing 'name' in Anthropic tool_use block."
+                )
+            name = tool_call_req["name"]
+            if not isinstance(name, str):
+                raise InvalidFormat(
+                    f"'name' must be a string, got {type(name).__name__}."
+                )
+            kwargs = tool_call_req.get("input", {})
+            if not isinstance(kwargs, dict):
+                raise InvalidFormat(
+                    f"'input' must be a dict, got {type(kwargs).__name__}."
+                )
+            return CallParams(id=call_id, name=name, args=[], kwargs=kwargs)
+
+        # ---- OpenAI / OpenRouter format ---------------------------------------
+        if call_type is not None and call_type != "function":
+            raise InvalidFormat(
+                f"Unsupported tool call type: '{call_type}'. Expected 'function' or 'tool_use'."
+            )
+
+        if "function" not in tool_call_req:
+            raise InvalidFormat("Missing 'function' key in tool call request.")
+
+        fn = tool_call_req["function"]
+
+        if "name" not in fn:
+            raise InvalidFormat("Missing 'name' in tool call function.")
+
+        name = fn["name"]
+        if not isinstance(name, str):
+            raise InvalidFormat(
+                f"'name' must be a string, got {type(name).__name__}."
+            )
+
+        arguments_str = fn.get("arguments", "{}")
+        try:
+            kwargs = json.loads(arguments_str)
+        except json.JSONDecodeError as exc:
+            raise InvalidFormat(
+                f"Invalid JSON in 'arguments': {exc}"
+            ) from exc
+
+        if not isinstance(kwargs, dict):
+            raise InvalidFormat(
+                f"'arguments' must decode to a JSON object, "
+                f"got {type(kwargs).__name__}."
+            )
+
+        return CallParams(id=call_id, name=name, args=[], kwargs=kwargs)
+
+    except InvalidFormat:
+        raise
+    except Exception as exc:
+        raise InvalidFormat(
+            f"Unable to parse tool call request: {exc}"
+        ) from exc
 
 
 class LLM_API(ABC):
@@ -23,10 +134,11 @@ class LLM_API(ABC):
     A single LLM_API instance is intended for a single session with the LLM agent.
     """
 
-    async def process_request(
+    async def process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
+        available_tools: Optional[Sequence[Callable]] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
@@ -35,10 +147,19 @@ class LLM_API(ABC):
         Logs metadata before the call and the response text after. Delegates
         the actual provider interaction to _process_request.
 
+        When metadata contains ``"LLM_TOOLS_SCOPE"``, the tools from
+        ``available_tools`` are filtered by that scope (via ``select_tools``)
+        and forwarded to the provider as a formal tools parameter.
+
         Args:
             system_prompt: Optional system prompt to guide the LLM behavior
-            metadata: Optional metadata key/value pairs. If the "MODEL" key is present
-                     it overrides the class-level default model for this request.
+            metadata: Optional metadata key/value pairs. If the ``"MODEL"`` key
+                     is present it overrides the class-level default model for
+                     this request. If ``"LLM_TOOLS_SCOPE"`` is present, tools
+                     from ``available_tools`` matching that scope are sent to
+                     the provider.
+            available_tools: All tools available in the agent's local context.
+                     Only used when ``"LLM_TOOLS_SCOPE"`` is set in metadata.
             chat_history: Conversation history including the latest user message as the
                          final element. Depending on the provider, if session is not managed
                          on the provider side, this history needs to be included in the
@@ -51,21 +172,44 @@ class LLM_API(ABC):
         Raises:
             Exception: If the API request fails or model cannot be determined
         """
+        from .system import select_tools  # pylint: disable=import-outside-toplevel
+
         STATEK_LOGGER.debug("%s metadata: %s", self.__class__.__name__, metadata)
+        STATEK_LOGGER.debug(
+            "%s available_tools: %s",
+            self.__class__.__name__,
+            [t.__name__ for t in available_tools] if available_tools else None
+        )
+
+        tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
+        tools = (
+            select_tools(available_tools, tools_scope)
+            if tools_scope and available_tools
+            else None
+        )
+
         response = await self._process_request(
             system_prompt=system_prompt,
             metadata=metadata,
+            tools=tools,
             chat_history=chat_history,
             session_id=session_id
         )
         STATEK_LOGGER.debug("%s response: %s", self.__class__.__name__, response.text)
+        if response.call_requests:
+            STATEK_LOGGER.debug(
+                "%s call_requests: %s",
+                self.__class__.__name__,
+                [cp.name for cp in response.call_requests]
+            )
         return response
 
     @abstractmethod
-    async def _process_request(
+    async def _process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
@@ -167,10 +311,11 @@ class OpenRouter_API(LLM_API):
 
         return messages
 
-    async def _process_request(  # pylint: disable=too-many-locals
+    async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
@@ -180,6 +325,8 @@ class OpenRouter_API(LLM_API):
             system_prompt: Optional system prompt
             metadata: Optional metadata. If it contains the "MODEL" key it overrides
                      the instance-level default model for this request.
+            tools: Optional list of tool callables to include as formal tool definitions
+                   in the OpenAI function-calling format.
             chat_history: Conversation history including the latest user message as
                          the final element
             session_id: Not used by OpenRouter (stateless)
@@ -191,6 +338,8 @@ class OpenRouter_API(LLM_API):
             httpx.HTTPError: If the API request fails
             KeyError: If the response format is unexpected
         """
+        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
+
         messages = self.build_messages(system_prompt, chat_history)
         model = metadata.get('MODEL', self.model) if metadata else self.model
 
@@ -199,6 +348,8 @@ class OpenRouter_API(LLM_API):
             "model": model,
             "messages": messages
         }
+        if tools:
+            payload["tools"] = [format_tool_spec(t) for t in tools]
         if self.response_format:
             payload["response_format"] = self.response_format
         # set any additional parameters from kwargs
@@ -235,10 +386,20 @@ class OpenRouter_API(LLM_API):
             if "choices" not in data or not data["choices"]:
                 error_detail = data.get("error", {}).get("message", str(data))
                 raise RuntimeError(f"OpenRouter API error: {error_detail}")
-            response_text = data["choices"][0]["message"]["content"]
+
+            message = data["choices"][0]["message"]
+
+            # Parse tool calls when the LLM chose to invoke tools
+            raw_tool_calls = message.get("tool_calls")
+            call_requests = (
+                [extract_call_params(tc) for tc in raw_tool_calls]
+                if raw_tool_calls else None
+            )
+
+            response_text = message.get("content") or ""
 
             # When response_format is used, extract python_code from JSON
-            if self.response_format:
+            if self.response_format and response_text:
                 response_text = json.loads(response_text)["python_code"]
 
             cost = data.get("usage", {}).get("cost")
@@ -250,7 +411,10 @@ class OpenRouter_API(LLM_API):
             )
 
             # OpenRouter is stateless, so session_id is None
-            return LLM_Response(text=response_text, session_id=None, stats=stats)
+            return LLM_Response(
+                text=response_text, session_id=None, stats=stats,
+                call_requests=call_requests
+            )
 
 
 class Claude_API(LLM_API):
@@ -357,10 +521,28 @@ class Claude_API(LLM_API):
             ]
         return system_prompt
 
-    async def _process_request(  # pylint: disable=too-many-locals
+    @staticmethod
+    def _to_anthropic_tool(spec: Dict) -> Dict:
+        """Convert an OpenAI-format tool spec to Anthropic's tool format.
+
+        Args:
+            spec: Tool spec dict in OpenAI function-calling format
+
+        Returns:
+            Tool dict in Anthropic format with ``input_schema`` instead of ``parameters``
+        """
+        fn = spec["function"]
+        return {
+            "name": fn["name"],
+            "description": fn["description"],
+            "input_schema": fn["parameters"],
+        }
+
+    async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
@@ -370,6 +552,8 @@ class Claude_API(LLM_API):
             system_prompt: Optional system prompt
             metadata: Optional metadata. If it contains the "MODEL" key it overrides
                      the instance-level default model for this request.
+            tools: Optional list of tool callables to include as formal tool definitions
+                   in Anthropic's tool format.
             chat_history: Conversation history including the latest user message as
                          the final element
             session_id: Not used (Claude Messages API is stateless)
@@ -381,6 +565,8 @@ class Claude_API(LLM_API):
             httpx.HTTPError: If the API request fails
             KeyError: If the response format is unexpected
         """
+        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
+
         messages = self.build_messages(chat_history=chat_history)
         model = metadata.get('MODEL', self.model) if metadata else self.model
 
@@ -390,6 +576,12 @@ class Claude_API(LLM_API):
             "messages": messages,
             "max_tokens": self.kwargs.get("max_tokens", 4096)
         }
+
+        # Add tools in Anthropic format if provided
+        if tools:
+            payload["tools"] = [
+                self._to_anthropic_tool(format_tool_spec(t)) for t in tools
+            ]
 
         # Add system prompt if provided (Claude uses a separate 'system' field)
         if system_prompt:
@@ -427,16 +619,24 @@ class Claude_API(LLM_API):
             data = response.json()
             STATEK_LOGGER.debug("Claude response: %s", json.dumps(data))
 
-            # Extract the response text from Claude's response format
-            # Claude returns content as an array of content blocks
+            # Extract text and tool_use blocks from Claude's content array
             content_blocks = data.get("content", [])
             response_text = ""
+            tool_use_blocks = []
             for block in content_blocks:
                 if block.get("type") == "text":
                     response_text += block.get("text", "")
+                elif block.get("type") == "tool_use":
+                    tool_use_blocks.append(block)
+
+            # Convert Claude tool_use blocks to CallParams via extract_call_params
+            call_requests = (
+                [extract_call_params(block) for block in tool_use_blocks]
+                if tool_use_blocks else None
+            )
 
             # When response_format is used, extract python_code from JSON
-            if self.response_format:
+            if self.response_format and response_text:
                 response_text = json.loads(response_text)["python_code"]
 
             cost = data.get("usage", {}).get("cost")
@@ -448,4 +648,7 @@ class Claude_API(LLM_API):
             )
 
             # Claude Messages API is stateless, so session_id is None
-            return LLM_Response(text=response_text, session_id=None, stats=stats)
+            return LLM_Response(
+                text=response_text, session_id=None, stats=stats,
+                call_requests=call_requests
+            )

@@ -2,9 +2,24 @@
 
 import re
 import inspect
-from typing import (Callable, Iterable, List, Optional, Type, Any,
+from typing import (Callable, Iterable, List, Dict, Optional, Type, Any,
                     get_type_hints, get_origin, get_args, Union, ForwardRef)
 import dbzero as db0
+
+
+_NONE_TYPE = type(None)
+
+_JSON_SCHEMA_TYPE_MAP = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    tuple: "array",
+    set: "array",
+    frozenset: "array",
+    dict: "object",
+}
 
 
 def strip_markup(input: str, strict: bool) -> str:  # pylint: disable=redefined-builtin
@@ -98,6 +113,111 @@ def format_callable_decl(func: Callable) -> str:
         decl += f"\n{docstring}"
 
     return decl
+
+
+def format_tool_spec(func: Callable) -> Dict:
+    """
+    Format a callable as a JSON tool specification for OpenAI/Anthropic APIs.
+
+    Inspects the callable's name, type hints, and docstring to produce a formal
+    tool specification in the OpenAI function-calling format, which is also
+    compatible with Anthropic's Claude API and services like OpenRouter.
+
+    Args:
+        func: A callable (e.g., function) to format
+
+    Returns:
+        The tool specification as a Python dict following the OpenAI function-calling
+        schema, with ``"type": "function"`` wrapper.
+
+    Examples:
+        >>> def execute_python(code: str) -> str: ...
+        >>> spec = format_tool_spec(execute_python)
+        >>> spec["type"]
+        'function'
+        >>> spec["function"]["name"]
+        'execute_python'
+    """
+    func_name = func.__name__
+    description, param_descs = _extract_docstring_info(func)
+    hints = _get_type_hints(func)
+    sig = inspect.signature(func)
+
+    properties: Dict = {}
+    required: List[str] = []
+
+    for name, param in sig.parameters.items():
+        if name.startswith('_') or param.kind in (
+            inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL
+        ):
+            continue
+
+        prop: Dict = {"type": _type_to_json_schema(hints[name]) if name in hints else "string"}
+        if name in param_descs:
+            prop["description"] = param_descs[name]
+        properties[name] = prop
+
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+
+    parameters: Dict = {"type": "object", "properties": properties}
+    if required:
+        parameters["required"] = required
+
+    return {
+        "type": "function",
+        "function": {
+            "name": func_name,
+            "description": description,
+            "parameters": parameters,
+        },
+    }
+
+
+def _extract_docstring_info(func: Callable) -> tuple:
+    """Extract brief description and parameter descriptions from a callable's docstring.
+
+    Returns a (description, param_descs) tuple. Falls back gracefully when the
+    docstring is absent or incompletely documents the function's parameters.
+    """
+    from statek.docstring import parse_docstring, DocstringParseError  # pylint: disable=import-outside-toplevel
+    try:
+        doc = parse_docstring(func)
+        description = doc.brief_desc or ""
+        param_descs = {arg.name: arg.desc for arg in doc.args} if doc.args else {}
+        return description, param_descs
+    except DocstringParseError:
+        docstring = inspect.getdoc(func)
+        description = docstring.split('\n', maxsplit=1)[0].strip() if docstring else ""
+        return description, {}
+
+
+def _type_to_json_schema(type_hint) -> str:
+    """Map a Python type hint to a JSON Schema type string.
+
+    Handles primitives, generics (List, Dict, Optional, Union), and db0 enum types.
+    Unknown or complex types default to ``"string"``.
+    """
+    # db0 enum types are presented as string values
+    if db0.is_enum(type_hint):  # pylint: disable=no-member
+        return "string"
+
+    origin = get_origin(type_hint)
+    args = get_args(type_hint)
+
+    # Optional[X] = Union[X, None] and other Union types
+    if origin is Union:
+        non_none = [a for a in args if a is not _NONE_TYPE]
+        return _type_to_json_schema(non_none[0]) if non_none else "null"
+
+    # Generic collection types: infer from origin
+    if origin is not None:
+        if origin is dict or (isinstance(origin, type) and issubclass(origin, dict)):
+            return "object"
+        return "array"
+
+    # NoneType and primitive types
+    return _JSON_SCHEMA_TYPE_MAP.get(type_hint, "null" if type_hint is _NONE_TYPE else "string")
 
 
 def _get_type_hints(func: Callable) -> dict:
