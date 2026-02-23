@@ -426,26 +426,29 @@ class Job:
         Generate a complete set of parameters compatible with LLM_API.process_request method.
 
         This method creates a dictionary containing all necessary parameters for making
-        an LLM API request, including the prompt, chat history, system prompt, and session ID.
+        an LLM API request, including the full chat history (with the latest user message
+        as its final element), system prompt, and session ID.
 
         Returns:
             Dict[str, Any]: A dictionary with the following keys:
-                - prompt (str): The next prompt to send (from get_next_prompt)
-                - chat_history (Iterable[str]): Generator of alternating user/assistant messages (from get_chat_history)
+                - chat_history (Iterable[str]): Generator of alternating user/assistant messages
+                  ending with the next user prompt (from get_chat_history + get_next_prompt)
                 - system_prompt (str): The agent's system prompt
                 - session_id (str, optional): The session ID if available
 
         Example:
             {
-                "prompt": "Process the data",
-                "chat_history": <generator>,
+                "chat_history": <generator>,  # ends with the latest user prompt
                 "system_prompt": "You are a helpful assistant",
                 "session_id": "abc123"  # Only if session_id is not None
             }
         """
+        def _full_history():
+            yield from self.get_chat_history()
+            yield self.get_next_prompt()
+
         request_params = {
-            "prompt": self.get_next_prompt(),
-            "chat_history": self.get_chat_history(),
+            "chat_history": _full_history(),
             "system_prompt": self.job_def.agent.system_prompt
         }
 

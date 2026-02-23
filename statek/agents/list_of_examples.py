@@ -22,7 +22,7 @@ def _get_examples_dir() -> Optional[str]:
     return get_statek_settings().examples_dir
 
 
-@tool
+@tool(system=True)
 def list_of_examples(agent_name: str, start_index: int = 0, limit: int = 10, **kwargs):  # pylint: disable=unused-argument
     """Lists available examples for a given agent.
 
@@ -56,7 +56,7 @@ def list_of_examples(agent_name: str, start_index: int = 0, limit: int = 10, **k
         name = ex.example_metadata.get("name", "")
         print(f"{idx}: {name}")
 
-@tool
+@tool(system=True)
 def show_example(agent_name: str, example_id: int, **kwargs):  # pylint: disable=unused-argument
     """Shows a specific example for a given agent.
 

@@ -71,8 +71,6 @@ class Agent:
         if prompt_def is not None:
             if prompt_def.system:
                 self._system_prompt = prompt_def.system
-            if prompt_def.template:
-                self._prompt_template = prompt_def.template
         self.append_tool(list_of_examples)
         self.append_tool(show_example)
         if self._X__context is None:

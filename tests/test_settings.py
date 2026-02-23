@@ -99,23 +99,18 @@ def test_get_prompt_def_from_settings_instance():
 
         # Create a test prompt file
         test_prompt = prompt_dir / "test_agent.md"
-        test_prompt.write_text("""# System
+        test_prompt.write_text("""# MODEL: gpt-4o
+# LLM_TOOLS_SCOPE: SYSTEM
+# System Prompt
 You are a test agent. You help with testing.
-
-# Template
-Test question: {question}
 """)
 
         # Create another prompt file
         another_prompt = prompt_dir / "another_agent.md"
-        another_prompt.write_text("""# System
+        another_prompt.write_text("""# MODEL: openai/gpt-4o
+# CHAT_STYLE: CONSOLE
+# System Prompt
 You are another agent.
-
----
-
-# Template
-Input: {input}
-Output: {output}
 """)
 
         # Initialize settings with the prompt directory
@@ -126,15 +121,15 @@ Output: {output}
         assert prompt_def is not None
         assert "test agent" in prompt_def.system.lower()
         assert "testing" in prompt_def.system.lower()
-        assert "Test question:" in prompt_def.template
-        assert "{question}" in prompt_def.template
+        assert prompt_def.metadata.get("MODEL") == "gpt-4o"
+        assert prompt_def.metadata.get("LLM_TOOLS_SCOPE") == "SYSTEM"
 
         # Test retrieving another prompt definition
         another_def = settings.get_prompt_def("another_agent")
         assert another_def is not None
         assert "another agent" in another_def.system.lower()
-        assert "Input:" in another_def.template
-        assert "{output}" in another_def.template
+        assert another_def.metadata.get("MODEL") == "openai/gpt-4o"
+        assert another_def.metadata.get("CHAT_STYLE") == "CONSOLE"
 
         # Test retrieving non-existent prompt definition
         missing_def = settings.get_prompt_def("nonexistent")

@@ -26,7 +26,6 @@ class LLM_API(ABC):
     @abstractmethod
     async def process_request(
         self,
-        prompt: str,
         system_prompt: Optional[str] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
@@ -34,11 +33,11 @@ class LLM_API(ABC):
         """Process a request to the LLM API.
 
         Args:
-            prompt: The prompt to be sent to LLM (only the latest input)
             system_prompt: Optional system prompt to guide the LLM behavior
-            chat_history: Optional conversation history so far. Depending on the provider,
-                         if session is not managed on the provider side, this history
-                         needs to be included in the message sent to the LLM API
+            chat_history: Conversation history including the latest user message as the
+                         final element. Depending on the provider, if session is not managed
+                         on the provider side, this history needs to be included in the
+                         message sent to the LLM API
             session_id: Provider-specific session ID (if request is a continuation)
 
         Returns:
@@ -114,16 +113,15 @@ class OpenRouter_API(LLM_API):
 
     def build_messages(
         self,
-        prompt: str,
         system_prompt: Optional[str] = None,
         chat_history: Optional[Iterable[str]] = None
     ) -> List[Dict[str, str]]:
         """Build the messages list for the OpenRouter API request.
 
         Args:
-            prompt: The current user prompt
             system_prompt: Optional system prompt
-            chat_history: Optional chat history
+            chat_history: Conversation history including the latest user message as
+                         the final element
 
         Returns:
             List of message dictionaries with 'role' and 'content' fields
@@ -134,7 +132,7 @@ class OpenRouter_API(LLM_API):
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
 
-        # Add chat history if provided
+        # Add chat history (including latest user message as the last element)
         if chat_history:
             for i, message in enumerate(chat_history):
                 if message is None:
@@ -143,15 +141,10 @@ class OpenRouter_API(LLM_API):
                 role = "user" if i % 2 == 0 else "assistant"
                 messages.append({"role": role, "content": message})
 
-        # Add current prompt (skip if None)
-        if prompt is not None:
-            messages.append({"role": "user", "content": prompt})
-
         return messages
 
     async def process_request(  # pylint: disable=too-many-locals
         self,
-        prompt: str,
         system_prompt: Optional[str] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
@@ -159,9 +152,9 @@ class OpenRouter_API(LLM_API):
         """Process a request to the OpenRouter API.
 
         Args:
-            prompt: The prompt to be sent to LLM
             system_prompt: Optional system prompt
-            chat_history: Optional conversation history
+            chat_history: Conversation history including the latest user message as
+                         the final element
             session_id: Not used by OpenRouter (stateless)
 
         Returns:
@@ -171,7 +164,7 @@ class OpenRouter_API(LLM_API):
             httpx.HTTPError: If the API request fails
             KeyError: If the response format is unexpected
         """
-        messages = self.build_messages(prompt, system_prompt, chat_history)
+        messages = self.build_messages(system_prompt, chat_history)
 
         # Prepare the request payload
         payload = {
@@ -273,21 +266,26 @@ class Claude_API(LLM_API):
 
     def build_messages(
         self,
-        prompt: str,
+        system_prompt: Optional[str] = None,
         chat_history: Optional[Iterable[str]] = None
     ) -> List[Dict]:
         """Build the messages list for the Claude API request.
 
         Args:
-            prompt: The current user prompt
-            chat_history: Optional chat history
+            system_prompt: Optional system prompt (included for display/logging only;
+                          the actual API call passes it as a top-level 'system' field)
+            chat_history: Conversation history including the latest user message as
+                         the final element
 
         Returns:
             List of message dictionaries with 'role' and 'content' fields
         """
         messages = []
 
-        # Add chat history if provided
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
+        # Add chat history (including latest user message as the last element)
         if chat_history:
             history_list = list(chat_history)
             for i, message in enumerate(history_list):
@@ -297,8 +295,9 @@ class Claude_API(LLM_API):
                 role = "user" if i % 2 == 0 else "assistant"
                 msg = {"role": role, "content": message}
 
-                # Add cache_control to the last history message if caching is enabled
-                if self.use_prompt_caching and i == len(history_list) - 1:
+                # Add cache_control to the last assistant message (second-to-last element)
+                # to cache the conversation history without caching the current user prompt
+                if self.use_prompt_caching and i == len(history_list) - 2:
                     msg["content"] = [
                         {
                             "type": "text",
@@ -308,10 +307,6 @@ class Claude_API(LLM_API):
                     ]
 
                 messages.append(msg)
-
-        # Add current prompt (skip if None)
-        if prompt is not None:
-            messages.append({"role": "user", "content": prompt})
 
         return messages
 
@@ -336,7 +331,6 @@ class Claude_API(LLM_API):
 
     async def process_request(  # pylint: disable=too-many-locals
         self,
-        prompt: str,
         system_prompt: Optional[str] = None,
         chat_history: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None
@@ -344,9 +338,9 @@ class Claude_API(LLM_API):
         """Process a request to the Claude API using the Messages API.
 
         Args:
-            prompt: The prompt to be sent to LLM
             system_prompt: Optional system prompt
-            chat_history: Optional conversation history
+            chat_history: Conversation history including the latest user message as
+                         the final element
             session_id: Not used (Claude Messages API is stateless)
 
         Returns:
@@ -356,7 +350,7 @@ class Claude_API(LLM_API):
             httpx.HTTPError: If the API request fails
             KeyError: If the response format is unexpected
         """
-        messages = self.build_messages(prompt, chat_history)
+        messages = self.build_messages(chat_history=chat_history)
 
         # Prepare the request payload
         payload = {

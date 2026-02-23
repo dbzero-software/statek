@@ -205,16 +205,14 @@ class TestJobGetNextRequest:
 
         request = job.get_next_request()
 
-        # Verify all required keys are present
-        assert "prompt" in request
+        # Verify required keys are present (no 'prompt' key — it's in chat_history)
+        assert "prompt" not in request
         assert "chat_history" in request
         assert "system_prompt" in request
 
-        # Verify prompt includes description and console
-        assert request["prompt"] == "Test task\n> Output 1\n> Output 2"
-
-        # Verify chat_history is empty generator (no history yet)
-        assert not list(request["chat_history"])
+        # Verify chat_history contains only the current prompt (no prior history)
+        history = list(request["chat_history"])
+        assert history == ["Test task\n> Output 1\n> Output 2"]
 
         # Verify system_prompt is from agent
         assert request["system_prompt"] == "Test agent"
@@ -246,16 +244,17 @@ class TestJobGetNextRequest:
 
         request = job.get_next_request()
 
-        # Verify prompt is only new console output
-        assert request["prompt"] == ""  # No new console after position 4
+        # Verify no separate 'prompt' key — it's the last element of chat_history
+        assert "prompt" not in request
 
-        # Verify chat_history contains alternating messages
+        # Verify chat_history contains alternating messages ending with the current prompt
         history = list(request["chat_history"])
-        assert len(history) == 4
+        assert len(history) == 5
         assert history[0] == "Test task\n> Out1\n> Out2"
         assert history[1] == "Response 1"
         assert history[2] == "> Out3\n> Out4"
         assert history[3] == "Response 2"
+        assert history[4] == ""  # No new console after position 4
 
     def test_get_next_request_structure(self, job_factory):
         """Test that get_next_request returns a proper dictionary structure."""
@@ -264,12 +263,11 @@ class TestJobGetNextRequest:
 
         request = job.get_next_request()
 
-        # Verify it's a dictionary
+        # Verify it's a dictionary with no separate 'prompt' key
         assert isinstance(request, dict)
+        assert "prompt" not in request
 
         # Verify types of values
-        assert isinstance(request["prompt"], str)
-        # chat_history should be a generator/iterable
         assert isinstance(request["chat_history"], types.GeneratorType)
         assert isinstance(request["system_prompt"], str)
         assert isinstance(request["session_id"], str)
@@ -280,9 +278,10 @@ class TestJobGetNextRequest:
 
         request = job.get_next_request()
 
-        # Prompt should be just the description
-        assert request["prompt"] == "Test task"
-        assert not list(request["chat_history"])
+        # chat_history should contain only the current prompt (just the description)
+        assert "prompt" not in request
+        history = list(request["chat_history"])
+        assert history == ["Test task"]
         assert "session_id" not in request
 
     def test_last_response_empty_chat_log(self, job_factory):
