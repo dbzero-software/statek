@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections import namedtuple
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional, Iterable, Sequence, List, Dict, Callable
 import json
@@ -19,11 +20,55 @@ LLM_Stats = namedtuple("LLM_Stats", ["total_bytes_sent", "total_bytes_received",
 # call_requests: list of CallParams when the LLM requested tool calls, else None
 LLM_Response = namedtuple("LLM_Response", ["text", "session_id", "stats", "call_requests"])
 
-# id    - call identifier assigned by the LLM provider
-# name  - function / tool name to invoke
-# args  - positional arguments (always [] for OpenAI-format calls)
-# kwargs - keyword arguments parsed from the JSON arguments string
-CallParams = namedtuple("CallParams", ["id", "name", "args", "kwargs"])
+class CallParams:
+    """Parameters for a single function/tool call requested by the LLM.
+
+    id     - call identifier assigned by the LLM provider
+    name   - function / tool name to invoke
+    args   - positional arguments (always [] for OpenAI-format calls)
+    kwargs - keyword arguments parsed from the JSON arguments string
+
+    Instances are hashable and compare equal when their id matches, so a
+    dict of results can be keyed directly by CallParams objects.
+    """
+
+    __slots__ = ("id", "name", "args", "kwargs")
+
+    def __init__(self, call_id: str, name: str, args: list, kwargs: dict):
+        self.id = call_id
+        self.name = name
+        self.args = args
+        self.kwargs = kwargs
+
+    def __hash__(self):
+        return hash(self.id)
+
+    def __eq__(self, other):
+        if isinstance(other, CallParams):
+            return self.id == other.id
+        return NotImplemented
+
+    def __repr__(self):
+        return (
+            f"CallParams(id={self.id!r}, name={self.name!r},"
+            f" args={self.args!r}, kwargs={self.kwargs!r})"
+        )
+
+
+@dataclass
+class ChatStepData:
+    """Represents a single completed step in the LLM conversation history.
+
+    Each step captures the LLM's code response and the subsequent console
+    output produced by executing that code. Tool calls made during the step
+    are stored in tool_calls (currently ignored when building API messages).
+    """
+    code: str
+    """Code requested for execution in this step (LLM assistant response)."""
+    console_output: str
+    """The console output from code execution (user feedback message)."""
+    tool_calls: Optional[Dict] = None
+    """Tool call requests and their results: Dict[CallParams, str]. Not yet used."""
 
 
 def extract_call_params(tool_call_req: Dict) -> CallParams:
@@ -80,7 +125,7 @@ def extract_call_params(tool_call_req: Dict) -> CallParams:
                 raise InvalidFormat(
                     f"'input' must be a dict, got {type(kwargs).__name__}."
                 )
-            return CallParams(id=call_id, name=name, args=[], kwargs=kwargs)
+            return CallParams(call_id=call_id, name=name, args=[], kwargs=kwargs)
 
         # ---- OpenAI / OpenRouter format ---------------------------------------
         if call_type is not None and call_type != "function":
@@ -116,7 +161,7 @@ def extract_call_params(tool_call_req: Dict) -> CallParams:
                 f"got {type(kwargs).__name__}."
             )
 
-        return CallParams(id=call_id, name=name, args=[], kwargs=kwargs)
+        return CallParams(call_id=call_id, name=name, args=[], kwargs=kwargs)
 
     except InvalidFormat:
         raise
@@ -139,7 +184,7 @@ class LLM_API(ABC):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         available_tools: Optional[Sequence[Callable]] = None,
-        chat_history: Optional[Iterable[str]] = None,
+        chat_history: Optional[Iterable[ChatStepData]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
         """Process a request to the LLM API.
@@ -210,7 +255,7 @@ class LLM_API(ABC):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
-        chat_history: Optional[Iterable[str]] = None,
+        chat_history: Optional[Iterable[ChatStepData]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
         """Provider-specific request implementation. Called by process_request."""
@@ -282,32 +327,32 @@ class OpenRouter_API(LLM_API):
     def build_messages(
         self,
         system_prompt: Optional[str] = None,
-        chat_history: Optional[Iterable[str]] = None
+        chat_history: Optional[Iterable[ChatStepData]] = None
     ) -> List[Dict[str, str]]:
         """Build the messages list for the OpenRouter API request.
 
+        Each ChatStepData expands to an optional assistant message (code) followed
+        by an optional user message (console_output). Empty strings are skipped.
+
         Args:
             system_prompt: Optional system prompt
-            chat_history: Conversation history including the latest user message as
-                         the final element
+            chat_history: Conversation history as ChatStepData objects. The final
+                         element's console_output is the current user message.
 
         Returns:
             List of message dictionaries with 'role' and 'content' fields
         """
         messages = []
 
-        # Add system prompt if provided
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
 
-        # Add chat history (including latest user message as the last element)
         if chat_history:
-            for i, message in enumerate(chat_history):
-                if message is None:
-                    continue
-                # Alternate between user and assistant roles
-                role = "user" if i % 2 == 0 else "assistant"
-                messages.append({"role": role, "content": message})
+            for step in chat_history:
+                if step.code:
+                    messages.append({"role": "assistant", "content": step.code})
+                if step.console_output:
+                    messages.append({"role": "user", "content": step.console_output})
 
         return messages
 
@@ -316,7 +361,7 @@ class OpenRouter_API(LLM_API):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
-        chat_history: Optional[Iterable[str]] = None,
+        chat_history: Optional[Iterable[ChatStepData]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
         """Process a request to the OpenRouter API.
@@ -459,15 +504,19 @@ class Claude_API(LLM_API):
     def build_messages(
         self,
         system_prompt: Optional[str] = None,
-        chat_history: Optional[Iterable[str]] = None
+        chat_history: Optional[Iterable[ChatStepData]] = None
     ) -> List[Dict]:
         """Build the messages list for the Claude API request.
+
+        Each ChatStepData expands to an optional assistant message (code) followed
+        by an optional user message (console_output). When prompt caching is enabled,
+        cache_control is added to the last step's assistant message.
 
         Args:
             system_prompt: Optional system prompt (included for display/logging only;
                           the actual API call passes it as a top-level 'system' field)
-            chat_history: Conversation history including the latest user message as
-                         the final element
+            chat_history: Conversation history as ChatStepData objects. The final
+                         element's console_output is the current user message.
 
         Returns:
             List of message dictionaries with 'role' and 'content' fields
@@ -477,28 +526,28 @@ class Claude_API(LLM_API):
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
 
-        # Add chat history (including latest user message as the last element)
-        if chat_history:
-            history_list = list(chat_history)
-            for i, message in enumerate(history_list):
-                if message is None:
-                    continue
-                # Alternate between user and assistant roles
-                role = "user" if i % 2 == 0 else "assistant"
-                msg = {"role": role, "content": message}
+        if not chat_history:
+            return messages
 
-                # Add cache_control to the last assistant message (second-to-last element)
-                # to cache the conversation history without caching the current user prompt
-                if self.use_prompt_caching and i == len(history_list) - 2:
-                    msg["content"] = [
+        history_list = list(chat_history)
+        for i, step in enumerate(history_list):
+            is_last = i == len(history_list) - 1
+
+            if step.code:
+                if self.use_prompt_caching and is_last:
+                    content = [
                         {
                             "type": "text",
-                            "text": message,
+                            "text": step.code,
                             "cache_control": {"type": "ephemeral"}
                         }
                     ]
+                else:
+                    content = step.code
+                messages.append({"role": "assistant", "content": content})
 
-                messages.append(msg)
+            if step.console_output:
+                messages.append({"role": "user", "content": step.console_output})
 
         return messages
 
@@ -543,7 +592,7 @@ class Claude_API(LLM_API):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
-        chat_history: Optional[Iterable[str]] = None,
+        chat_history: Optional[Iterable[ChatStepData]] = None,
         session_id: Optional[str] = None
     ) -> LLM_Response:
         """Process a request to the Claude API using the Messages API.

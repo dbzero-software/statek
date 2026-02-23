@@ -1,9 +1,11 @@
 """Tests for Job class."""
 
 import types
+from unittest.mock import patch
 import dbzero as db0
 from tests.conftest import create_chat_log_item
 from statek.executors.job import Job, JobStatus
+from statek.llm_api import ChatStepData
 
 
 class TestJobDef:
@@ -212,7 +214,8 @@ class TestJobGetNextRequest:
 
         # Verify chat_history contains only the current prompt (no prior history)
         history = list(request["chat_history"])
-        assert history == ["Test task\n> Output 1\n> Output 2"]
+        expected = ChatStepData(code="", console_output="Test task\n> Output 1\n> Output 2")
+        assert history == [expected]
 
         # Verify system_prompt is from agent
         assert request["system_prompt"] == "Test agent"
@@ -247,14 +250,12 @@ class TestJobGetNextRequest:
         # Verify no separate 'prompt' key — it's the last element of chat_history
         assert "prompt" not in request
 
-        # Verify chat_history contains alternating messages ending with the current prompt
+        # Verify chat_history contains ChatStepData objects ending with the current prompt
         history = list(request["chat_history"])
-        assert len(history) == 5
-        assert history[0] == "Test task\n> Out1\n> Out2"
-        assert history[1] == "Response 1"
-        assert history[2] == "> Out3\n> Out4"
-        assert history[3] == "Response 2"
-        assert history[4] == ""  # No new console after position 4
+        assert len(history) == 3
+        assert history[0] == ChatStepData(code="", console_output="Test task\n> Out1\n> Out2")
+        assert history[1] == ChatStepData(code="Response 1", console_output="> Out3\n> Out4")
+        assert history[2] == ChatStepData(code="Response 2", console_output="")  # no new console
 
     def test_get_next_request_structure(self, job_factory):
         """Test that get_next_request returns a proper dictionary structure."""
@@ -281,7 +282,7 @@ class TestJobGetNextRequest:
         # chat_history should contain only the current prompt (just the description)
         assert "prompt" not in request
         history = list(request["chat_history"])
-        assert history == ["Test task"]
+        assert history == [ChatStepData(code="", console_output="Test task")]
         assert "session_id" not in request
 
     def test_last_response_empty_chat_log(self, job_factory):
@@ -552,3 +553,57 @@ class TestJobAppendChatLog:
 
         assert job.chat_log[2].console_pos == 4
         assert job.chat_log[2].llm_resp == "code_block_3"
+
+
+class TestJobDefUpdateWarmupCode:
+    """Tests for JobDef.update_warmup_code."""
+
+    def test_update_applies_new_value(self, job_def_factory):
+        """warmup_code is updated when the parsed new value differs from current."""
+        job_def = job_def_factory(warmup_code=None)
+        job_def.update_warmup_code("x = 1")
+        assert job_def.warmup_code == "x = 1"
+
+    def test_update_none_clears_existing(self, job_def_factory):
+        """Passing None clears an existing warmup_code value."""
+        job_def = job_def_factory(warmup_code="x = 1")
+        job_def.update_warmup_code(None)
+        assert job_def.warmup_code is None
+
+    def test_no_update_when_value_identical(self, job_def_factory):
+        """warmup_code is not reassigned when the parsed value equals the current one."""
+        job_def = job_def_factory(warmup_code="x = 1")
+        with patch('statek.executors.job.statek_log') as mock_log:
+            job_def.update_warmup_code("x = 1")
+        update_calls = [c for c in mock_log.call_args_list
+                        if "updating warmup code" in str(c)]
+        assert update_calls == []
+        assert job_def.warmup_code == "x = 1"
+
+    def test_no_update_when_none_stays_none(self, job_def_factory):
+        """Calling update_warmup_code(None) on a None field does nothing."""
+        job_def = job_def_factory(warmup_code=None)
+        with patch('statek.executors.job.statek_log') as mock_log:
+            job_def.update_warmup_code(None)
+        update_calls = [c for c in mock_log.call_args_list
+                        if "updating warmup code" in str(c)]
+        assert update_calls == []
+        assert job_def.warmup_code is None
+
+    def test_update_logs_debug_when_changed(self, job_def_factory):
+        """A debug log is emitted exactly once when the value actually changes."""
+        job_def = job_def_factory(warmup_code=None)
+        with patch('statek.executors.job.statek_log') as mock_log:
+            job_def.update_warmup_code("x = 1")
+        update_calls = [c for c in mock_log.call_args_list
+                        if "updating warmup code" in str(c)]
+        assert len(update_calls) == 1
+
+    def test_update_sequence_to_list(self, job_def_factory):
+        """A sequence of two blocks is stored as a two-element sequence."""
+        job_def = job_def_factory(warmup_code=None)
+        job_def.update_warmup_code(["a = 1", "b = 2"])
+        warmup = job_def.warmup_code
+        assert len(warmup) == 2
+        assert warmup[0] == "a = 1"
+        assert warmup[1] == "b = 2"

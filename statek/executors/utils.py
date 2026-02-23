@@ -19,7 +19,7 @@ from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
-from statek.utils import strip_markup
+from statek.utils import strip_markup, CodeBlock
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -341,16 +341,19 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         elif job.status == JobStatus.SUSPENDED:
             job.set_status(JobStatus.STARTED)
 
+        # Extract the code string (CodeBlock stores code + tool_calls; exec needs the string)
+        code_str = code.code if isinstance(code, CodeBlock) else code
+
         # Log warmup block before execution
         if job.status == JobStatus.WARMING_UP:
             chat_style = get_statek_settings().chat_style
-            log_code = f"```python\n{code}\n```" if chat_style == ChatStyle.MARKDOWN else code  # pylint: disable=no-member
+            log_code = f"```python\n{code_str}\n```" if chat_style == ChatStyle.MARKDOWN else code_str  # pylint: disable=no-member
             job._log(log_code)  # pylint: disable=protected-access
 
         # Step 5: Execute the code using exec_step
         # Pass next_instr_num if resuming from SUSPENDED
         try:
-            not_exited = await exec_step(code, job, job.next_instr_num )
+            not_exited = await exec_step(code_str, job, job.next_instr_num)
             # Clear continuation state after successful execution
             job.awaited_result = None
             job.next_instr_num = None

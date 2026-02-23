@@ -5,9 +5,10 @@ import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem
-from statek.utils import prompt_append_console
+from statek.llm_api import ChatStepData
+from statek.utils import prompt_append_console, CodeBlock, parse_warmup_block, build_warmup_code
 from statek.future import FutureResult
-from statek.settings import get_statek_settings, ChatStyle
+from statek.settings import get_statek_settings, ChatStyle, statek_log
 
 """
 READY: a fresh job instance ready for execution
@@ -21,39 +22,42 @@ class JobStatus:
     pass
 
 
-def parse_warmup_code(warmup_code: Optional[Union[str, Sequence[str]]]) -> Optional[Union[str, List[str]]]:
-    """Parse warmup_code, splitting on separator lines if present.
+def parse_warmup_code(
+    warmup_code: Optional[Union[str, Sequence[str]]],
+) -> Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]:
+    """Parse warmup_code through parse_warmup_block and build_warmup_code.
 
     If warmup_code is a string containing comment lines with 10+ dashes
-    (e.g. # ----------), it will be split into multiple blocks.
+    (e.g. # ----------), it will be split into multiple blocks first.
+    Each block is then parsed for tool-call annotations and converted into
+    a plain string (no tool calls) or a CodeBlock (tool calls present).
 
     Args:
         warmup_code: Single string, sequence of strings, or None
 
     Returns:
-        None if input is None
-        Single string if no separators found
-        List of strings if separators found or input was already a sequence
+        None if input is None or results in no blocks
+        Single str or CodeBlock if only one block
+        List of str and/or CodeBlock if multiple blocks
     """
     if warmup_code is None:
         return None
 
-    if not isinstance(warmup_code, str):
-        # Already a sequence, return as list
-        return list(warmup_code)
-
-    # Split on comment lines containing 10 or more dashes (e.g. # ----------)
-    blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
+    if isinstance(warmup_code, str):
+        # Split on comment lines containing 10 or more dashes (e.g. # ----------)
+        raw_blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
+    else:
+        # Already a sequence — each item is a separate block
+        raw_blocks = list(warmup_code)
 
     # Strip each block and filter empty ones
-    blocks = [block.strip() for block in blocks if block.strip()]
+    raw_blocks = [block.strip() for block in raw_blocks if block.strip()]
 
-    if len(blocks) == 0:
+    if not raw_blocks:
         return None
-    elif len(blocks) == 1:
-        return blocks[0]
-    else:
-        return blocks
+
+    parsed_blocks = [parse_warmup_block(block) for block in raw_blocks]
+    return build_warmup_code(parsed_blocks)
 
 
 @memo
@@ -67,7 +71,24 @@ class JobDef:
     # Job params to be fed into the agent's prompt template
     job_params: Optional[Dict[str, Any]] = None
     # Optional warmup code (single block or sequence of blocks) executed before the first prompt
-    warmup_code: Optional[Union[str, Sequence[str]]] = None
+    warmup_code: Optional[Union[str, CodeBlock, Sequence[Union[str, CodeBlock]]]] = None
+
+    def update_warmup_code(
+        self,
+        warmup_code: Optional[Union[str, Sequence[str]]],
+    ) -> None:
+        """Update warmup_code only when the parsed new value differs from the current one.
+
+        Parses the input through parse_warmup_code before comparing. A debug
+        message is logged only when an actual change is applied.
+
+        Args:
+            warmup_code: New warmup code (raw string, sequence of strings, or None).
+        """
+        new_value = parse_warmup_code(warmup_code)
+        if new_value != self.warmup_code:
+            statek_log(f"updating warmup code: {new_value!r}", level='debug')
+            self.warmup_code = new_value
 
     def prompt(self) -> str:
         """
@@ -282,7 +303,7 @@ class Job:
                 # alternating assistant/user pairs.  The prompt (current user message)
                 # is the console output OF the last warmup block, spanning from the
                 # end of the previous block to the end of the last block.
-                warmup_blocks = [warmup] if isinstance(warmup, str) else list(warmup)
+                warmup_blocks = [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
                 n = len(warmup_blocks)
                 last_end = (
                     self.warmup_console_positions[n - 1]
@@ -352,7 +373,7 @@ class Job:
             return code
 
         warmup = self.job_def.warmup_code
-        warmup_blocks = ([warmup] if isinstance(warmup, str) else list(warmup)) if warmup else []
+        warmup_blocks = ([warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)) if warmup else []
 
         if not self.chat_log:
             if not warmup_blocks:
@@ -363,7 +384,8 @@ class Job:
             yield self.job_def.prompt()  # user: template
             prev_pos = 0
             for i, block in enumerate(warmup_blocks):
-                yield _wrap_code(block)  # assistant: warmup code
+                block_code = block.code if isinstance(block, CodeBlock) else block
+                yield _wrap_code(block_code)  # assistant: warmup code
                 is_last = (i == len(warmup_blocks) - 1)
                 if not is_last:
                     # Yield console between this block and the next as a user message
@@ -399,7 +421,8 @@ class Job:
             yield self.job_def.prompt()  # user: template
             prev_pos = 0
             for i, block in enumerate(warmup_blocks):
-                yield _wrap_code(block)  # assistant: warmup code
+                block_code = block.code if isinstance(block, CodeBlock) else block
+                yield _wrap_code(block_code)  # assistant: warmup code
                 is_last = (i == len(warmup_blocks) - 1)
                 if is_last:
                     block_end = first_chat_item.console_pos  # extend to cover remaining console
@@ -441,8 +464,8 @@ class Job:
 
         Returns:
             Dict[str, Any]: A dictionary with the following keys:
-                - chat_history (Iterable[str]): Generator of alternating user/assistant messages
-                  ending with the next user prompt (from get_chat_history + get_next_prompt)
+                - chat_history (Iterable[ChatStepData]): Generator of ChatStepData objects
+                  where each step pairs the LLM code response with the resulting console output
                 - system_prompt (str): The agent's system prompt
                 - metadata (Dict[str, str]): The agent's metadata (may be None)
                 - session_id (str, optional): The session ID if available
@@ -456,8 +479,25 @@ class Job:
             }
         """
         def _full_history():
-            yield from self.get_chat_history()
-            yield self.get_next_prompt()
+            history_strings = list(self.get_chat_history())
+            current_prompt = self.get_next_prompt()
+
+            if not history_strings:
+                # No prior history: current prompt is the only message
+                yield ChatStepData(code="", console_output=current_prompt)
+                return
+
+            # First string is always a user message with no preceding assistant
+            yield ChatStepData(code="", console_output=history_strings[0])
+
+            # Pair up remaining (assistant, user) strings, skipping the last asst
+            i = 1
+            while i < len(history_strings) - 1:
+                yield ChatStepData(code=history_strings[i], console_output=history_strings[i + 1])
+                i += 2
+
+            # Last string is always an assistant message; pair with current prompt
+            yield ChatStepData(code=history_strings[-1], console_output=current_prompt)
 
         request_params = {
             "chat_history": _full_history(),
@@ -517,7 +557,7 @@ class Job:
         warmup = self.job_def.warmup_code
         if warmup is None:
             return 0
-        if isinstance(warmup, str):
+        if isinstance(warmup, (str, CodeBlock)):
             return 1
         return len(warmup)
 
@@ -563,7 +603,7 @@ class Job:
             warmup = self.job_def.warmup_code
             if warmup is None:
                 return None
-            if isinstance(warmup, str):
+            if isinstance(warmup, (str, CodeBlock)):
                 return warmup
             # warmup is a sequence of blocks
             block_num = self.warmup_block_num if self.warmup_block_num is not None else 0

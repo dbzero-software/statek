@@ -1,10 +1,132 @@
 """Utility functions for statek package."""
 
+import ast
 import re
 import inspect
-from typing import (Callable, Iterable, List, Dict, Optional, Type, Any,
+from collections import namedtuple
+from dataclasses import dataclass
+from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Type, Any,
                     get_type_hints, get_origin, get_args, Union, ForwardRef)
 import dbzero as db0
+
+
+ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
+ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
+
+
+@db0.memo
+@dataclass
+class CallSpec:
+    """LLM or system-assigned tool call specification."""
+    id: str
+    func_name: str
+    args: Optional[List[Any]] = None
+    kwargs: Optional[Dict[str, Any]] = None
+
+
+@db0.memo
+@dataclass
+class CodeBlock:
+    """A block of executable Python code with optional tool-call requests."""
+    code: Optional[str] = None
+    tool_calls: Optional[Sequence[CallSpec]] = None
+
+_STATEK_TOOL_MARKER = "#STATEK: as tool"
+
+
+def parse_func_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-builtin
+    """Parse a string representation of a function call into a structured result.
+
+    Args:
+        input: the input function call string
+
+    Returns:
+        ParsedFuncCall with name, args (list), and kwargs (dict or None)
+
+    Raises:
+        ValueError: if the input is not a valid function call expression
+        SyntaxError: if the input is not valid Python syntax
+    """
+    tree = ast.parse(input, mode='eval')
+    if not isinstance(tree.body, ast.Call):
+        raise ValueError(f"Not a function call: {input!r}")
+    call = tree.body
+    if isinstance(call.func, ast.Name):
+        name = call.func.id
+    elif isinstance(call.func, ast.Attribute):
+        name = call.func.attr
+    else:
+        raise ValueError(f"Unsupported function expression: {input!r}")
+    args = [ast.literal_eval(arg) for arg in call.args]
+    kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords} or None
+    return ParsedFuncCall(name=name, args=args, kwargs=kwargs)
+
+
+def parse_warmup_block(code: str) -> ParsedWarmupBlock:
+    """Parse a single warmup block into code and tool call definitions.
+
+    Lines annotated with ``#STATEK: as tool`` are extracted as tool calls
+    and removed from the returned code field.
+
+    Args:
+        code: Python code block to be parsed
+
+    Returns:
+        ParsedWarmupBlock with clean code and a list of ParsedFuncCall tool calls
+
+    Raises:
+        ValueError: if an annotated line is not a valid function call
+        SyntaxError: if an annotated line contains invalid Python syntax
+    """
+    clean_lines = []
+    tool_calls = []
+    for line in code.splitlines():
+        marker_pos = line.find(_STATEK_TOOL_MARKER)
+        if marker_pos != -1:
+            call_str = line[:marker_pos].rstrip()
+            tool_calls.append(parse_func_call(call_str))
+        else:
+            clean_lines.append(line)
+    return ParsedWarmupBlock(code="\n".join(clean_lines), tool_calls=tool_calls)
+
+
+def build_warmup_code(
+    parsed_warmup_code: List["ParsedWarmupBlock"],
+) -> "str | CodeBlock | List[str | CodeBlock]":
+    """Build warmup code items from parsed warmup blocks.
+
+    Converts each ParsedWarmupBlock into either a plain string (when the block
+    has no tool calls) or a CodeBlock (when tool calls are present). Tool calls
+    receive unique call IDs in the ``STATEK-NNN`` format, numbered sequentially
+    starting from 1 across all blocks in the list.
+
+    Args:
+        parsed_warmup_code: list of parsed warmup blocks to convert
+
+    Returns:
+        A single str or CodeBlock when the list contains exactly one item,
+        otherwise a list of str and/or CodeBlock values.
+    """
+    counter = 0
+    blocks = []
+    for parsed_block in parsed_warmup_code:
+        if not parsed_block.tool_calls:
+            blocks.append(parsed_block.code)
+        else:
+            tool_calls = []
+            for tc in parsed_block.tool_calls:
+                counter += 1
+                tool_calls.append(CallSpec(
+                    id=f"STATEK-{counter:03d}",
+                    func_name=tc.name,
+                    args=tc.args if tc.args else [],
+                    kwargs=tc.kwargs if tc.kwargs is not None else {},
+                ))
+            blocks.append(CodeBlock(code=parsed_block.code, tool_calls=tool_calls))
+
+    if len(blocks) == 1:
+        return blocks[0]
+    return blocks
 
 
 _NONE_TYPE = type(None)
