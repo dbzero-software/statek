@@ -6,6 +6,10 @@ class LLM_HarnessError(Exception):
     """Raised when an LLM harness limit has been exceeded."""
 
 
+class InvalidFormat(Exception):
+    """Raised when an input cannot be parsed due to an unexpected or unsupported format."""
+
+
 @dataclass
 class FutureError(Exception):
     """

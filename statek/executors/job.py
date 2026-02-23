@@ -462,7 +462,8 @@ class Job:
         request_params = {
             "chat_history": _full_history(),
             "system_prompt": self.job_def.agent.system_prompt(job_params=self.job_def.job_params),
-            "metadata": self.job_def.agent._metadata  # pylint: disable=protected-access
+            "metadata": self.job_def.agent._metadata,  # pylint: disable=protected-access
+            "available_tools": self.job_def.agent.all_tools,
         }
 
         # Only include session_id if it's not None

@@ -407,7 +407,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Log full messages being sent to LLM
     messages = llm_api.build_messages(**{
-        k: v for k, v in request.items() if k not in ('session_id', 'metadata')
+        k: v for k, v in request.items() if k not in ('session_id', 'metadata', 'available_tools')
     })
     messages_str = "LLM Request messages:\n"
     for msg in messages:
