@@ -3,7 +3,7 @@
 import re
 from collections import namedtuple
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict
 
 
 # system = the system prompt
@@ -11,7 +11,7 @@ from typing import Optional, Dict
 PromptDef = namedtuple("PromptDef", ["system", "metadata"])
 
 
-def parse_prompt_file(file_path: Path) -> Optional[PromptDef]:
+def parse_prompt_file(file_path: Path) -> PromptDef:
     """Parse a single prompt definition file.
 
     The file format uses # KEY: value comment lines for metadata and a
@@ -21,7 +21,10 @@ def parse_prompt_file(file_path: Path) -> Optional[PromptDef]:
         file_path: Path to the .md file
 
     Returns:
-        PromptDef with system and metadata, or None if parsing fails
+        PromptDef with system and metadata
+
+    Raises:
+        ValueError: If the file does not contain a '# System Prompt' section
     """
     content = file_path.read_text(encoding='utf-8')
 
@@ -42,12 +45,13 @@ def parse_prompt_file(file_path: Path) -> Optional[PromptDef]:
                 if meta_match:
                     metadata[meta_match.group(1)] = meta_match.group(2).strip()
 
-    system_prompt = '\n'.join(system_lines).strip() if system_lines else None
+    if not in_system:
+        raise ValueError(
+            f"Prompt file '{file_path}' is missing the '# System Prompt' section."
+        )
 
-    if system_prompt:
-        return PromptDef(system=system_prompt, metadata=metadata)
-
-    return None
+    system_prompt = '\n'.join(system_lines).strip()
+    return PromptDef(system=system_prompt, metadata=metadata)
 
 
 def load_prompt_files(prompt_files_dir: str) -> Dict[str, PromptDef]:
@@ -69,9 +73,7 @@ def load_prompt_files(prompt_files_dir: str) -> Dict[str, PromptDef]:
     prompt_defs = {}
     for file_path in prompt_dir.glob('*.md'):
         role = file_path.stem
-        prompt_def = parse_prompt_file(file_path)
-        if prompt_def:
-            prompt_defs[role] = prompt_def
+        prompt_defs[role] = parse_prompt_file(file_path)
 
     return prompt_defs
 
