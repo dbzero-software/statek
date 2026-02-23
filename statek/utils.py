@@ -7,6 +7,8 @@ from typing import (Callable, Iterable, List, Dict, Optional, Type, Any,
 import dbzero as db0
 
 
+_NONE_TYPE = type(None)
+
 _JSON_SCHEMA_TYPE_MAP = {
     str: "string",
     int: "integer",
@@ -205,7 +207,7 @@ def _type_to_json_schema(type_hint) -> str:
 
     # Optional[X] = Union[X, None] and other Union types
     if origin is Union:
-        non_none = [a for a in args if a is not type(None)]
+        non_none = [a for a in args if a is not _NONE_TYPE]
         return _type_to_json_schema(non_none[0]) if non_none else "null"
 
     # Generic collection types: infer from origin
@@ -215,7 +217,7 @@ def _type_to_json_schema(type_hint) -> str:
         return "array"
 
     # NoneType and primitive types
-    return _JSON_SCHEMA_TYPE_MAP.get(type_hint, "null" if type_hint is type(None) else "string")
+    return _JSON_SCHEMA_TYPE_MAP.get(type_hint, "null" if type_hint is _NONE_TYPE else "string")
 
 
 def _get_type_hints(func: Callable) -> dict:
