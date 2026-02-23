@@ -4,6 +4,7 @@ import types
 import dbzero as db0
 from tests.conftest import create_chat_log_item
 from statek.executors.job import Job, JobStatus
+from statek.llm_api import ChatStepData
 
 
 class TestJobDef:
@@ -212,7 +213,8 @@ class TestJobGetNextRequest:
 
         # Verify chat_history contains only the current prompt (no prior history)
         history = list(request["chat_history"])
-        assert history == ["Test task\n> Output 1\n> Output 2"]
+        expected = ChatStepData(code="", console_output="Test task\n> Output 1\n> Output 2")
+        assert history == [expected]
 
         # Verify system_prompt is from agent
         assert request["system_prompt"] == "Test agent"
@@ -247,14 +249,12 @@ class TestJobGetNextRequest:
         # Verify no separate 'prompt' key — it's the last element of chat_history
         assert "prompt" not in request
 
-        # Verify chat_history contains alternating messages ending with the current prompt
+        # Verify chat_history contains ChatStepData objects ending with the current prompt
         history = list(request["chat_history"])
-        assert len(history) == 5
-        assert history[0] == "Test task\n> Out1\n> Out2"
-        assert history[1] == "Response 1"
-        assert history[2] == "> Out3\n> Out4"
-        assert history[3] == "Response 2"
-        assert history[4] == ""  # No new console after position 4
+        assert len(history) == 3
+        assert history[0] == ChatStepData(code="", console_output="Test task\n> Out1\n> Out2")
+        assert history[1] == ChatStepData(code="Response 1", console_output="> Out3\n> Out4")
+        assert history[2] == ChatStepData(code="Response 2", console_output="")  # no new console
 
     def test_get_next_request_structure(self, job_factory):
         """Test that get_next_request returns a proper dictionary structure."""
@@ -281,7 +281,7 @@ class TestJobGetNextRequest:
         # chat_history should contain only the current prompt (just the description)
         assert "prompt" not in request
         history = list(request["chat_history"])
-        assert history == ["Test task"]
+        assert history == [ChatStepData(code="", console_output="Test task")]
         assert "session_id" not in request
 
     def test_last_response_empty_chat_log(self, job_factory):

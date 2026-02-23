@@ -7,7 +7,8 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from statek.llm_api import (
-    LLM_Response, LLM_Stats, OpenRouter_API, Claude_API, CallParams, extract_call_params
+    LLM_Response, LLM_Stats, OpenRouter_API, Claude_API, CallParams, extract_call_params,
+    ChatStepData
 )
 from statek.exceptions import InvalidFormat
 from statek.system import tool
@@ -662,7 +663,7 @@ class TestExtractCallParams:  # pylint: disable=too-many-public-methods
         }
 
     def test_returns_call_params_namedtuple(self):
-        """Return value is a CallParams namedtuple."""
+        """Return value is a CallParams instance."""
         result = extract_call_params(self._valid_call())
         assert isinstance(result, CallParams)
 
@@ -795,3 +796,196 @@ class TestExtractCallParams:  # pylint: disable=too-many-public-methods
         block = {"type": "tool_use", "id": "t1", "name": "configure", "input": nested}
         result = extract_call_params(block)
         assert result.kwargs == nested
+
+    def test_can_be_used_as_dict_key(self):
+        """CallParams instances can be stored and retrieved as dict keys."""
+        cp = extract_call_params(self._valid_call(call_id="call_1"))
+        d = {cp: "result_1"}
+        assert d[cp] == "result_1"
+
+    def test_dict_lookup_by_equal_id(self):
+        """Two CallParams with the same id resolve to the same dict entry."""
+        cp1 = extract_call_params(self._valid_call(call_id="call_1", name="tool_a"))
+        cp2 = extract_call_params(self._valid_call(call_id="call_1", name="tool_b"))
+        d = {cp1: "result_1"}
+        assert d[cp2] == "result_1"
+
+    def test_dict_keys_distinct_for_different_ids(self):
+        """CallParams with different ids are treated as distinct dict keys."""
+        cp1 = extract_call_params(self._valid_call(call_id="call_1"))
+        cp2 = extract_call_params(self._valid_call(call_id="call_2"))
+        d = {cp1: "result_1", cp2: "result_2"}
+        assert d[cp1] == "result_1"
+        assert d[cp2] == "result_2"
+
+
+# ---------------------------------------------------------------------------
+# ChatStepData
+# ---------------------------------------------------------------------------
+
+class TestChatStepData:
+    """Tests for the ChatStepData dataclass."""
+
+    def test_create_with_required_fields(self):
+        """ChatStepData can be created with code and console_output."""
+        step = ChatStepData(code="x = 1", console_output="> ok")
+        assert step.code == "x = 1"
+        assert step.console_output == "> ok"
+
+    def test_tool_calls_defaults_to_none(self):
+        """tool_calls defaults to None."""
+        step = ChatStepData(code="x = 1", console_output="> ok")
+        assert step.tool_calls is None
+
+    def test_create_with_tool_calls(self):
+        """ChatStepData can be created with tool_calls dict."""
+        cp = CallParams(call_id="c1", name="foo", args=[], kwargs={})
+        step = ChatStepData(code="x = 1", console_output="> ok", tool_calls={cp: "result"})
+        assert step.tool_calls == {cp: "result"}
+
+    def test_empty_code_and_console_output(self):
+        """ChatStepData allows empty strings for code and console_output."""
+        step = ChatStepData(code="", console_output="")
+        assert step.code == ""
+        assert step.console_output == ""
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter_API.build_messages with ChatStepData
+# ---------------------------------------------------------------------------
+
+class TestOpenRouterBuildMessages:
+    """Tests for OpenRouter_API.build_messages accepting ChatStepData objects."""
+
+    def test_none_chat_history_returns_empty(self, openrouter_api):
+        """With no chat_history, build_messages returns empty list."""
+        msgs = openrouter_api.build_messages(chat_history=None)
+        assert msgs == []
+
+    def test_system_prompt_only(self, openrouter_api):
+        """System prompt alone produces a single system message."""
+        msgs = openrouter_api.build_messages(system_prompt="sys", chat_history=None)
+        assert msgs == [{"role": "system", "content": "sys"}]
+
+    def test_step_code_empty_emits_only_user_message(self, openrouter_api):
+        """A step with code='' only produces a user message (no assistant message)."""
+        step = ChatStepData(code="", console_output="hello")
+        msgs = openrouter_api.build_messages(chat_history=[step])
+        assert msgs == [{"role": "user", "content": "hello"}]
+
+    def test_step_with_code_and_console_output(self, openrouter_api):
+        """A step with both fields produces an assistant then a user message."""
+        step = ChatStepData(code="x = 1", console_output="> ok")
+        msgs = openrouter_api.build_messages(chat_history=[step])
+        assert len(msgs) == 2
+        assert msgs[0] == {"role": "assistant", "content": "x = 1"}
+        assert msgs[1] == {"role": "user", "content": "> ok"}
+
+    def test_multiple_steps_ordered_correctly(self, openrouter_api):
+        """Multiple steps produce messages in the correct alternating order."""
+        history = [
+            ChatStepData(code="", console_output="initial"),
+            ChatStepData(code="code1", console_output="console1"),
+            ChatStepData(code="code2", console_output="current"),
+        ]
+        msgs = openrouter_api.build_messages(chat_history=history)
+        assert len(msgs) == 5
+        assert msgs[0] == {"role": "user", "content": "initial"}
+        assert msgs[1] == {"role": "assistant", "content": "code1"}
+        assert msgs[2] == {"role": "user", "content": "console1"}
+        assert msgs[3] == {"role": "assistant", "content": "code2"}
+        assert msgs[4] == {"role": "user", "content": "current"}
+
+    def test_system_prompt_appears_before_chat_history(self, openrouter_api):
+        """System prompt is prepended before all chat history messages."""
+        step = ChatStepData(code="", console_output="hello")
+        msgs = openrouter_api.build_messages(system_prompt="sys", chat_history=[step])
+        assert msgs[0] == {"role": "system", "content": "sys"}
+        assert msgs[1] == {"role": "user", "content": "hello"}
+
+    def test_empty_console_output_skipped(self, openrouter_api):
+        """A step with console_output='' does not add a user message."""
+        step = ChatStepData(code="x = 1", console_output="")
+        msgs = openrouter_api.build_messages(chat_history=[step])
+        assert len(msgs) == 1
+        assert msgs[0] == {"role": "assistant", "content": "x = 1"}
+
+    def test_tool_calls_ignored(self, openrouter_api):
+        """tool_calls field is not yet reflected in messages (plain code blocks only)."""
+        cp = CallParams(call_id="c1", name="foo", args=[], kwargs={})
+        step = ChatStepData(code="x = 1", console_output="> ok", tool_calls={cp: "result"})
+        msgs = openrouter_api.build_messages(chat_history=[step])
+        assert len(msgs) == 2  # only assistant + user, no tool messages
+
+
+# ---------------------------------------------------------------------------
+# Claude_API.build_messages with ChatStepData
+# ---------------------------------------------------------------------------
+
+class TestClaudeBuildMessages:
+    """Tests for Claude_API.build_messages accepting ChatStepData objects."""
+
+    def test_step_produces_assistant_then_user(self, claude_api):
+        """A full step produces assistant (code) then user (console_output)."""
+        step = ChatStepData(code="x = 1", console_output="> ok")
+        msgs = claude_api.build_messages(chat_history=[step])
+        assert len(msgs) == 2
+        assert msgs[0] == {"role": "assistant", "content": "x = 1"}
+        assert msgs[1] == {"role": "user", "content": "> ok"}
+
+    def test_multiple_steps_correct_order(self, claude_api):
+        """Multiple steps expand into the correct alternating sequence."""
+        history = [
+            ChatStepData(code="", console_output="initial"),
+            ChatStepData(code="code1", console_output="current"),
+        ]
+        msgs = claude_api.build_messages(chat_history=history)
+        assert len(msgs) == 3
+        assert msgs[0] == {"role": "user", "content": "initial"}
+        assert msgs[1] == {"role": "assistant", "content": "code1"}
+        assert msgs[2] == {"role": "user", "content": "current"}
+
+    def test_prompt_caching_adds_cache_control_to_last_code(self):
+        """With prompt caching enabled, cache_control is on the last step's code."""
+        settings = LLM_API_Settings(
+            api_url="https://api.anthropic.com/v1/messages",
+            api_key="test-key",
+            default_model="claude-3-5-sonnet-20241022",
+            use_prompt_caching=True,
+        )
+        api = Claude_API(settings=settings, model="claude-3-5-sonnet-20241022")
+        history = [
+            ChatStepData(code="", console_output="initial"),
+            ChatStepData(code="code1", console_output="current"),
+        ]
+        msgs = api.build_messages(chat_history=history)
+        # msgs: [user: initial, asst: code1 (with cache), user: current]
+        asst_msg = msgs[1]
+        assert asst_msg["role"] == "assistant"
+        assert isinstance(asst_msg["content"], list)
+        assert asst_msg["content"][0]["type"] == "text"
+        assert asst_msg["content"][0]["text"] == "code1"
+        assert asst_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_no_cache_control_when_prompt_caching_disabled(self, claude_api):
+        """Without prompt caching, assistant content is a plain string."""
+        step = ChatStepData(code="code1", console_output="current")
+        msgs = claude_api.build_messages(chat_history=[step])
+        asst_msg = msgs[0]
+        assert asst_msg["role"] == "assistant"
+        assert isinstance(asst_msg["content"], str)
+
+    def test_cache_control_not_added_when_last_step_has_no_code(self):
+        """Cache control is not added if the last step has no code."""
+        settings = LLM_API_Settings(
+            api_url="https://api.anthropic.com/v1/messages",
+            api_key="test-key",
+            default_model="claude-3-5-sonnet-20241022",
+            use_prompt_caching=True,
+        )
+        api = Claude_API(settings=settings, model="claude-3-5-sonnet-20241022")
+        # Last step has no code — no assistant message should be emitted at all
+        history = [ChatStepData(code="", console_output="only user")]
+        msgs = api.build_messages(chat_history=history)
+        assert len(msgs) == 1
+        assert msgs[0] == {"role": "user", "content": "only user"}

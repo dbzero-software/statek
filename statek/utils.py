@@ -1,10 +1,75 @@
 """Utility functions for statek package."""
 
+import ast
 import re
 import inspect
+from collections import namedtuple
 from typing import (Callable, Iterable, List, Dict, Optional, Type, Any,
                     get_type_hints, get_origin, get_args, Union, ForwardRef)
 import dbzero as db0
+
+
+ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
+ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
+
+_STATEK_TOOL_MARKER = "#STATEK: as tool"
+
+
+def parse_func_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-builtin
+    """Parse a string representation of a function call into a structured result.
+
+    Args:
+        input: the input function call string
+
+    Returns:
+        ParsedFuncCall with name, args (list), and kwargs (dict or None)
+
+    Raises:
+        ValueError: if the input is not a valid function call expression
+        SyntaxError: if the input is not valid Python syntax
+    """
+    tree = ast.parse(input, mode='eval')
+    if not isinstance(tree.body, ast.Call):
+        raise ValueError(f"Not a function call: {input!r}")
+    call = tree.body
+    if isinstance(call.func, ast.Name):
+        name = call.func.id
+    elif isinstance(call.func, ast.Attribute):
+        name = call.func.attr
+    else:
+        raise ValueError(f"Unsupported function expression: {input!r}")
+    args = [ast.literal_eval(arg) for arg in call.args]
+    kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords} or None
+    return ParsedFuncCall(name=name, args=args, kwargs=kwargs)
+
+
+def parse_warmup_block(code: str) -> ParsedWarmupBlock:
+    """Parse a single warmup block into code and tool call definitions.
+
+    Lines annotated with ``#STATEK: as tool`` are extracted as tool calls.
+    The marker is stripped from those lines in the returned code field.
+
+    Args:
+        code: Python code block to be parsed
+
+    Returns:
+        ParsedWarmupBlock with clean code and a list of ParsedFuncCall tool calls
+
+    Raises:
+        ValueError: if an annotated line is not a valid function call
+        SyntaxError: if an annotated line contains invalid Python syntax
+    """
+    clean_lines = []
+    tool_calls = []
+    for line in code.splitlines():
+        marker_pos = line.find(_STATEK_TOOL_MARKER)
+        if marker_pos != -1:
+            call_str = line[:marker_pos].rstrip()
+            tool_calls.append(parse_func_call(call_str))
+            clean_lines.append(call_str)
+        else:
+            clean_lines.append(line)
+    return ParsedWarmupBlock(code="\n".join(clean_lines), tool_calls=tool_calls)
 
 
 _NONE_TYPE = type(None)

@@ -5,6 +5,7 @@ import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem
+from statek.llm_api import ChatStepData
 from statek.utils import prompt_append_console
 from statek.future import FutureResult
 from statek.settings import get_statek_settings, ChatStyle
@@ -441,8 +442,8 @@ class Job:
 
         Returns:
             Dict[str, Any]: A dictionary with the following keys:
-                - chat_history (Iterable[str]): Generator of alternating user/assistant messages
-                  ending with the next user prompt (from get_chat_history + get_next_prompt)
+                - chat_history (Iterable[ChatStepData]): Generator of ChatStepData objects
+                  where each step pairs the LLM code response with the resulting console output
                 - system_prompt (str): The agent's system prompt
                 - metadata (Dict[str, str]): The agent's metadata (may be None)
                 - session_id (str, optional): The session ID if available
@@ -456,8 +457,25 @@ class Job:
             }
         """
         def _full_history():
-            yield from self.get_chat_history()
-            yield self.get_next_prompt()
+            history_strings = list(self.get_chat_history())
+            current_prompt = self.get_next_prompt()
+
+            if not history_strings:
+                # No prior history: current prompt is the only message
+                yield ChatStepData(code="", console_output=current_prompt)
+                return
+
+            # First string is always a user message with no preceding assistant
+            yield ChatStepData(code="", console_output=history_strings[0])
+
+            # Pair up remaining (assistant, user) strings, skipping the last asst
+            i = 1
+            while i < len(history_strings) - 1:
+                yield ChatStepData(code=history_strings[i], console_output=history_strings[i + 1])
+                i += 2
+
+            # Last string is always an assistant message; pair with current prompt
+            yield ChatStepData(code=history_strings[-1], console_output=current_prompt)
 
         request_params = {
             "chat_history": _full_history(),
