@@ -5,8 +5,8 @@ import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem
-from statek.llm_api import ChatStepData
-from statek.utils import prompt_append_console, CodeBlock, parse_warmup_block, build_warmup_code
+from statek.llm_api import ChatStepData, LLM_Response
+from statek.utils import prompt_append_console, CodeBlock, CallSpec, strip_markup, parse_warmup_block, build_warmup_code
 from statek.future import FutureResult
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 
@@ -367,7 +367,10 @@ class Job:
         chat_style = settings.chat_style
         xml_tags = settings.get_xml_box_tags()
 
-        def _wrap_code(code: str) -> str:
+        def _wrap_code(resp: Union[str, CodeBlock]) -> str:
+            code = resp.code if isinstance(resp, CodeBlock) else resp
+            if code is None:
+                code = ""
             if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
                 return f"```python\n{code}\n```"
             return code
@@ -512,36 +515,52 @@ class Job:
 
         return request_params
 
-    def append_chat_log(self, request: Dict, llm_resp: str):
+    def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
         """
         Register the LLM response in the Job's chat_log container.
 
         This method appends a new ChatLogItem to the chat_log, recording the LLM's
-        response and the current console position.
+        response and the current console position. When the LLM_Response contains
+        tool call requests, the response is stored as a CodeBlock; otherwise it is
+        stored as a plain string.
 
         Args:
             request: The original request parameters (compatible with LLM_API.process_request)
-            llm_resp: The LLM's response (Python code to be executed)
+            llm_resp: The LLM's response as an LLM_Response object
 
         The console_pos is set to len(console), marking the position past the end
         of the current console output.
         """
+        chat_style = get_statek_settings().chat_style
+        response_code = strip_markup(llm_resp.text, strict=(chat_style == ChatStyle.MARKDOWN))  # pylint: disable=no-member
+
+        if llm_resp.call_requests:
+            tool_calls = [
+                CallSpec(id=cp.id, func_name=cp.name, args=cp.args or [], kwargs=cp.kwargs or {})
+                for cp in llm_resp.call_requests
+            ]
+            stored_resp = CodeBlock(code=response_code or None, tool_calls=tool_calls)
+        else:
+            stored_resp = response_code
+
         chat_item = ChatLogItem(
             console_pos=len(self.py_env.console) if self.py_env.console else 0,
-            llm_resp=llm_resp
+            llm_resp=stored_resp
         )
         self.chat_log.append(chat_item)
 
         # Log the LLM response in the same format sent back as history
-        chat_style = get_statek_settings().chat_style
-        log_resp = f"```python\n{llm_resp}\n```" if chat_style == ChatStyle.MARKDOWN else llm_resp  # pylint: disable=no-member
+        resp_code = stored_resp.code if isinstance(stored_resp, CodeBlock) else stored_resp
+        if resp_code is None:
+            resp_code = ""
+        log_resp = f"```python\n{resp_code}\n```" if chat_style == ChatStyle.MARKDOWN else resp_code  # pylint: disable=no-member
         self._log(log_resp)
 
     @property
-    def last_response(self) -> str | None:
+    def last_response(self) -> Union[str, CodeBlock, None]:
         """
-        Retrieves the last response received from the LLM (i.e. the Python code to be executed)
-        or None if the last chat entry remains unanswered.
+        Retrieves the last response received from the LLM (i.e. the Python code to be executed,
+        or a CodeBlock when the LLM requested tool calls) or None if chat_log is empty.
         """
         if not self.chat_log:
             return None
@@ -588,14 +607,14 @@ class Job:
         """Record the current console length after a warmup block completes."""
         self.warmup_console_positions.append(len(self.py_env.console) if self.py_env.console else 0)
 
-    def get_next_code_block(self) -> str | None:
+    def get_next_code_block(self) -> Union[str, CodeBlock, None]:
         """
         Retrieves the Python code block pending execution (or execution continuation).
 
         Returns:
             - None if status is DONE
-            - Current warmup block if status is READY or WARMING_UP (based on warmup_block_num)
-            - last_response in all other cases
+            - Current warmup block (str or CodeBlock) if status is READY or WARMING_UP
+            - last_response (str or CodeBlock) in all other cases
         """
         if self.status == JobStatus.DONE:
             return None
