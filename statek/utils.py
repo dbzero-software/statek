@@ -11,6 +11,8 @@ import dbzero as db0
 
 ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
 ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
+WarmupCallRequest = namedtuple("WarmupCallRequest", ["id", "name", "args", "kwargs"])
+CodeBlock = namedtuple("CodeBlock", ["code", "call_requests"])
 
 _STATEK_TOOL_MARKER = "#STATEK: as tool"
 
@@ -70,6 +72,45 @@ def parse_warmup_block(code: str) -> ParsedWarmupBlock:
         else:
             clean_lines.append(line)
     return ParsedWarmupBlock(code="\n".join(clean_lines), tool_calls=tool_calls)
+
+
+def build_warmup_code(
+    parsed_warmup_code: List["ParsedWarmupBlock"],
+) -> "str | CodeBlock | List[str | CodeBlock]":
+    """Build warmup code items from parsed warmup blocks.
+
+    Converts each ParsedWarmupBlock into either a plain string (when the block
+    has no tool calls) or a CodeBlock (when tool calls are present). Tool calls
+    receive unique call IDs in the ``STATEK-NNN`` format, numbered sequentially
+    starting from 1 across all blocks in the list.
+
+    Args:
+        parsed_warmup_code: list of parsed warmup blocks to convert
+
+    Returns:
+        A single str or CodeBlock when the list contains exactly one item,
+        otherwise a list of str and/or CodeBlock values.
+    """
+    counter = 0
+    blocks = []
+    for parsed_block in parsed_warmup_code:
+        if not parsed_block.tool_calls:
+            blocks.append(parsed_block.code)
+        else:
+            call_requests = []
+            for tc in parsed_block.tool_calls:
+                counter += 1
+                call_requests.append(WarmupCallRequest(
+                    id=f"STATEK-{counter:03d}",
+                    name=tc.name,
+                    args=tc.args if tc.args else [],
+                    kwargs=tc.kwargs if tc.kwargs is not None else {},
+                ))
+            blocks.append(CodeBlock(code=parsed_block.code, call_requests=call_requests))
+
+    if len(blocks) == 1:
+        return blocks[0]
+    return blocks
 
 
 _NONE_TYPE = type(None)
