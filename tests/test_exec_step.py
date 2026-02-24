@@ -7,6 +7,9 @@ import dbzero as db0
 from statek.executors.utils import exec_step
 from statek.future import FutureResult, temporal
 from statek.exceptions import FutureError
+from statek.system import tool
+from statek.agents.agent import Agent
+from statek.executors.job import Job, JobDef, JobStatus
 
 
 @db0.memo
@@ -753,9 +756,6 @@ print(f"Result: {result}")
     @pytest.mark.asyncio
     async def test_exec_step_with_agent_context(self, db0_fixture):  # pylint: disable=unused-argument
         """Test that agent's private context is merged into global execution context."""
-        from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel
-        from statek.executors.job import Job, JobDef, JobStatus  # pylint: disable=import-outside-toplevel
-
         # Define a custom function to be available in agent's context
         def custom_tool():
             return "agent_context_value"
@@ -900,3 +900,98 @@ matches = [(kw, text_a, text_b) for kw in keywords if kw in text_a or kw in text
         assert len(matches) == 2
         assert matches[0][0] == 'world'
         assert matches[1][0] == 'peace'
+
+
+# ---------------------------------------------------------------------------
+# Module-level async @tool functions for async-tool-in-exec_step tests.
+# Must be at module level: @tool requires **kwargs and db0 disallows decorated
+# nested functions.
+# ---------------------------------------------------------------------------
+
+@tool
+async def _async_exec_tool_return(value: str, **kwargs):  # pylint: disable=unused-argument
+    """Async tool that returns a value based on its input."""
+    return f"async_result: {value}"
+
+
+@tool
+async def _async_exec_tool_print_and_return(x: int, **kwargs):  # pylint: disable=unused-argument
+    """Async tool that prints a message and returns double the input."""
+    print(f"async_print: {x}")
+    return x * 2
+
+
+@tool
+async def _async_exec_tool_error(**kwargs):  # pylint: disable=unused-argument
+    """Async tool that always raises a RuntimeError."""
+    raise RuntimeError("async tool error")
+
+
+class TestExecStepWithAsyncTools:
+    """Tests for exec_step executing code that calls async @tool functions.
+
+    When a tool is decorated with @tool and its underlying function is async,
+    the decorator wraps it with nest_asyncio so it can be called synchronously
+    from within exec()-executed code even though exec_step itself runs inside
+    a running event loop.
+    """
+
+    def _make_job(self, tools):
+        """Create a minimal job whose agent has the given tools registered."""
+        agent = Agent(
+            role="async_tools_exec_test",
+            _system_prompt="Test",
+            _tools=tools,
+        )
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        return Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_tool_return_value_assigned_in_local_state(self, db0_fixture):  # pylint: disable=unused-argument
+        """Return value of an async @tool is correctly assigned via exec_step."""
+        job = self._make_job([_async_exec_tool_return])
+
+        await exec_step('result = _async_exec_tool_return("world")', job)
+
+        assert job.py_env.local_state.get("result") == "async_result: world"
+
+    @pytest.mark.asyncio
+    async def test_async_tool_print_captured_in_job_console(self, db0_fixture):  # pylint: disable=unused-argument
+        """Print calls inside an async @tool are routed to the job console."""
+        job = self._make_job([_async_exec_tool_print_and_return])
+
+        await exec_step("value = _async_exec_tool_print_and_return(21)", job)
+
+        assert job.py_env.local_state.get("value") == 42
+        assert job.py_env.console is not None
+        assert any("async_print: 21" in line for line in job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_async_tool_exception_written_to_console_and_reraised(self, db0_fixture):  # pylint: disable=unused-argument
+        """An exception from an async @tool is logged to the job console and re-raised."""
+        job = self._make_job([_async_exec_tool_error])
+
+        with pytest.raises(RuntimeError, match="async tool error"):
+            await exec_step("_async_exec_tool_error()", job)
+
+        assert job.py_env.console is not None
+        assert any("RuntimeError" in line for line in job.py_env.console)
+        assert any("async tool error" in line for line in job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_multiple_async_tool_calls_in_one_exec_step(self, db0_fixture):  # pylint: disable=unused-argument
+        """Multiple async @tool calls within a single code block are all executed."""
+        job = self._make_job([_async_exec_tool_return])
+        code = (
+            '_async_exec_tool_return("first")\n'
+            'b = _async_exec_tool_return("second")'
+        )
+
+        await exec_step(code, job)
+
+        assert job.py_env.local_state.get("b") == "async_result: second"

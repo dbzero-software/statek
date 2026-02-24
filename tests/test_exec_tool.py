@@ -32,6 +32,19 @@ def _lookup_target(**kwargs):  # pylint: disable=unused-argument
     return "target"
 
 
+# Async @tool functions — wrapped by @tool via nest_asyncio (NOT via exec_tool's iscoroutine check)
+@tool
+async def _async_agent_tool(value: str, **kwargs):  # pylint: disable=unused-argument
+    """Async agent tool that returns a value."""
+    return f"async_tool: {value}"
+
+
+@tool
+async def _async_agent_tool_error(**kwargs):  # pylint: disable=unused-argument
+    """Async agent tool that raises an exception."""
+    raise ValueError("async agent tool error")
+
+
 def _call_spec(func_name, args=None, kwargs=None):
     return CallSpec(id="TEST-001", func_name=func_name, args=args or [], kwargs=kwargs or {})
 
@@ -213,3 +226,29 @@ class TestExecTool:
         )
         assert "resolved:" in result
         assert "_lookup_target" in result
+
+    @pytest.mark.asyncio
+    async def test_async_agent_tool_return_value_captured(self, db0_fixture):  # pylint: disable=unused-argument
+        """Async @tool in agent._tools is resolved and its return value captured.
+
+        The @tool decorator wraps async functions via nest_asyncio/run_until_complete,
+        so the result is already resolved when exec_tool receives it — the
+        asyncio.iscoroutine branch is NOT exercised here.
+        """
+        job = _make_job("role_async_agent_tool", tools=[_async_agent_tool])
+        result = await exec_tool(
+            _call_spec("_async_agent_tool", kwargs={"value": "ok"}), job
+        )
+
+        assert "'async_tool: ok'" in result
+        assert job.py_env.console is None
+
+    @pytest.mark.asyncio
+    async def test_async_agent_tool_exception_captured(self, db0_fixture):  # pylint: disable=unused-argument
+        """Exception from async @tool in agent._tools is caught and returned as a string."""
+        job = _make_job("role_async_agent_tool_err", tools=[_async_agent_tool_error])
+        result = await exec_tool(_call_spec("_async_agent_tool_error"), job)
+
+        assert "ValueError" in result
+        assert "async agent tool error" in result
+        assert job.py_env.console is None
