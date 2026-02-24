@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Union
 import dbzero as db0
 
 @db0.memo
@@ -18,6 +18,8 @@ class PyEnv:
     console: List[str] = None
     # Optional error message by chat_log item ID
     exceptions: Dict[int, str] = None
+    # Optional log of tool results by console log-ID
+    tool_log: Dict[int, Union[str, List[str]]] = None
     # The next instruction ID for continuation
     next_instr_id: int = None
     # The warmup block number for continuation (for multi-block warmup_code)

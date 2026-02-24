@@ -68,7 +68,7 @@ class ChatStepData:
     console_output: str
     """The console output from code execution (user feedback message)."""
     tool_calls: Optional[Dict] = None
-    """Tool call requests and their results: Dict[CallParams, str]. Not yet used."""
+    """Tool call requests and their results: Dict[CallParams, str]."""
 
 
 def extract_call_params(tool_call_req: Dict) -> CallParams:
@@ -332,7 +332,9 @@ class OpenRouter_API(LLM_API):
         """Build the messages list for the OpenRouter API request.
 
         Each ChatStepData expands to an optional assistant message (code) followed
-        by an optional user message (console_output). Empty strings are skipped.
+        by an optional user message (console_output). When the step has tool_calls,
+        the assistant message uses the OpenAI tool_calls format and each tool result
+        is emitted as a separate ``role: tool`` message before the user message.
 
         Args:
             system_prompt: Optional system prompt
@@ -349,7 +351,24 @@ class OpenRouter_API(LLM_API):
 
         if chat_history:
             for step in chat_history:
-                if step.code:
+                if step.tool_calls:
+                    tool_call_list = [
+                        {
+                            "id": cp.id,
+                            "type": "function",
+                            "function": {
+                                "name": cp.name,
+                                "arguments": json.dumps(cp.kwargs or {})
+                            }
+                        }
+                        for cp in step.tool_calls
+                    ]
+                    asst_msg = {"role": "assistant", "tool_calls": tool_call_list,
+                                "content": step.code or None}
+                    messages.append(asst_msg)
+                    for cp, result in step.tool_calls.items():
+                        messages.append({"role": "tool", "tool_call_id": cp.id, "content": result})
+                elif step.code:
                     messages.append({"role": "assistant", "content": step.code})
                 if step.console_output:
                     messages.append({"role": "user", "content": step.console_output})
@@ -408,7 +427,8 @@ class OpenRouter_API(LLM_API):
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
         self.total_bytes_sent += len(payload_bytes)
-        STATEK_LOGGER.debug("OpenRouter payload: %s", json.dumps(payload))
+        if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
+            STATEK_LOGGER.debug("OpenRouter payload: %s", json.dumps(payload, indent=2))
 
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -501,6 +521,46 @@ class Claude_API(LLM_API):
         self.total_bytes_sent = 0
         self.total_bytes_received = 0
 
+    def _step_with_tool_calls(self, step: "ChatStepData", is_last: bool) -> List[Dict]:
+        """Return the (assistant, user) message pair for a step that has tool calls."""
+        asst_content = []
+        if step.code:
+            text_block = {"type": "text", "text": step.code}
+            if self.use_prompt_caching and is_last:
+                text_block["cache_control"] = {"type": "ephemeral"}
+            asst_content.append(text_block)
+        for cp in step.tool_calls:
+            asst_content.append({
+                "type": "tool_use", "id": cp.id,
+                "name": cp.name, "input": dict(cp.kwargs) if cp.kwargs else {}
+            })
+
+        user_content = [
+            {"type": "tool_result", "tool_use_id": cp.id, "content": result}
+            for cp, result in step.tool_calls.items()
+        ]
+        if step.console_output:
+            user_content.append({"type": "text", "text": step.console_output})
+
+        msgs = [{"role": "assistant", "content": asst_content}]
+        if user_content:
+            msgs.append({"role": "user", "content": user_content})
+        return msgs
+
+    def _step_without_tool_calls(self, step: "ChatStepData", is_last: bool) -> List[Dict]:
+        """Return the (assistant, user) message pair for a plain code step."""
+        msgs = []
+        if step.code:
+            if self.use_prompt_caching and is_last:
+                content = [{"type": "text", "text": step.code,
+                            "cache_control": {"type": "ephemeral"}}]
+            else:
+                content = step.code
+            msgs.append({"role": "assistant", "content": content})
+        if step.console_output:
+            msgs.append({"role": "user", "content": step.console_output})
+        return msgs
+
     def build_messages(
         self,
         system_prompt: Optional[str] = None,
@@ -510,7 +570,8 @@ class Claude_API(LLM_API):
 
         Each ChatStepData expands to an optional assistant message (code) followed
         by an optional user message (console_output). When prompt caching is enabled,
-        cache_control is added to the last step's assistant message.
+        cache_control is added to the last step's assistant message. When the step
+        has tool_calls the messages use Anthropic's tool_use / tool_result format.
 
         Args:
             system_prompt: Optional system prompt (included for display/logging only;
@@ -532,22 +593,10 @@ class Claude_API(LLM_API):
         history_list = list(chat_history)
         for i, step in enumerate(history_list):
             is_last = i == len(history_list) - 1
-
-            if step.code:
-                if self.use_prompt_caching and is_last:
-                    content = [
-                        {
-                            "type": "text",
-                            "text": step.code,
-                            "cache_control": {"type": "ephemeral"}
-                        }
-                    ]
-                else:
-                    content = step.code
-                messages.append({"role": "assistant", "content": content})
-
-            if step.console_output:
-                messages.append({"role": "user", "content": step.console_output})
+            if step.tool_calls:
+                messages.extend(self._step_with_tool_calls(step, is_last))
+            else:
+                messages.extend(self._step_without_tool_calls(step, is_last))
 
         return messages
 
@@ -650,7 +699,8 @@ class Claude_API(LLM_API):
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
         self.total_bytes_sent += len(payload_bytes)
-        STATEK_LOGGER.debug("Claude payload: %s", json.dumps(payload))
+        if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
+            STATEK_LOGGER.debug("Claude payload: %s", json.dumps(payload, indent=2))
 
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:

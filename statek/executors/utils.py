@@ -19,7 +19,7 @@ from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
-from statek.utils import strip_markup, CodeBlock
+from statek.utils import CodeBlock, CallSpec
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -114,15 +114,16 @@ def custom_exit(job, status=None):
 
 
 @contextmanager
-def _setup_execution_context(job: Job, global_context: dict, local_context: dict):
+def _setup_execution_context(job: Job, global_context: dict, local_context: dict, print_fn=None):
     """
     Context manager to setup and cleanup execution environment.
-    
+
     Args:
         job: The Job instance
         global_context: The global execution context dictionary
         local_context: The local execution context dictionary
-    
+        print_fn: Optional custom print function; defaults to writing to job console
+
     Yields:
         tuple: (custom_print_fn, custom_exit_fn) for reference
     """
@@ -131,9 +132,9 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
         global_context.update(job.job_def.agent.context)
     for tool in job.job_def.agent._tools:
         global_context[tool.__name__] = inject_context(tool, local_context)
-    
+
     # Create custom functions
-    custom_print_fn = lambda *args, **kwargs: custom_print(job, *args, **kwargs)
+    custom_print_fn = print_fn if print_fn is not None else (lambda *args, **kwargs: custom_print(job, *args, **kwargs))
     custom_exit_fn = lambda status=None: custom_exit(job, status)
     
     # Save original built-ins to restore later
@@ -280,6 +281,88 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
     return job.py_env.exit_status is None
 
 
+async def exec_tool(call_spec: CallSpec, job: Job) -> str:
+    """Execute a single non-temporal tool invocation within the job's local context.
+
+    Uses _setup_execution_context to inject the same global_context / local_context
+    as exec_step (full job state, all tools injected, agent context merged) so that
+    tools can freely call other tools. Print output is captured into a private console
+    rather than written to the job's console.
+
+    Exceptions are caught, formatted as error messages, and returned — never re-raised.
+
+    Args:
+        call_spec: the function call specification
+        job: the associated job for context
+
+    Returns:
+        The invocation result as console output (newline-joined lines).
+        When the return value is not None its repr is included; on error the
+        exception type and message are included.
+    """
+    STATEK_LOGGER.debug(
+        "exec_tool: %s args=%r kwargs=%r",
+        call_spec.func_name,
+        list(call_spec.args) if call_spec.args else [],
+        dict(call_spec.kwargs) if call_spec.kwargs else {},
+    )
+
+    private_console = []
+
+    def _private_print(*args, sep=' ', end='\n', **kwargs):
+        output = sep.join(str(arg) for arg in args) + end
+        private_console.append(output.rstrip('\n'))
+
+    # Build global and local contexts — mirrors exec_step
+    if job.py_env.global_state is None:
+        global_context = globals()
+    else:
+        global_context = {key: value for key, value in job.py_env.global_state.items()}
+    if job.py_env.local_state is None:
+        local_context = {}
+    else:
+        local_context = {key: value for key, value in job.py_env.local_state.items()}
+
+    with _setup_execution_context(job, global_context, local_context, print_fn=_private_print):
+        # Re-wrap the original tool with a combined context (global + local) so that
+        # _bind_by_name / find_locals can resolve string arguments to actual objects
+        # (e.g. docs(what='some_tool') → the actual callable, not the string).
+        agent = job.job_def.agent
+        original_tool = None
+        if agent:
+            for t in agent._tools:  # pylint: disable=protected-access
+                if t.__name__ == call_spec.func_name:
+                    original_tool = t
+                    break
+
+        if original_tool is not None:
+            combined_ctx = {**global_context, **local_context}
+            func = inject_context(original_tool, combined_ctx)
+        else:
+            func = global_context.get(call_spec.func_name) or local_context.get(call_spec.func_name)
+
+        if func is None:
+            return f"NameError: tool '{call_spec.func_name}' not found"
+
+        try:
+            args = list(call_spec.args) if call_spec.args else []
+            kwargs = dict(call_spec.kwargs) if call_spec.kwargs else {}
+            if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
+                call_repr = ", ".join(
+                    [repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()]
+                )
+                STATEK_LOGGER.debug("exec_tool calling: %s(%s)", call_spec.func_name, call_repr)
+            result = func(*args, **kwargs)
+            if asyncio.iscoroutine(result):
+                result = await result
+            if result is not None:
+                private_console.append(repr(result))
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            private_console.append(f"{type(e).__name__}: {e}")
+
+    return "\n".join(private_console)
+
+
 def _log_pending_console(job: Job):
     """Log console output accumulated since the last logged boundary.
 
@@ -345,15 +428,30 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         code_str = code.code if isinstance(code, CodeBlock) else code
 
         # Log warmup block before execution
-        if job.status == JobStatus.WARMING_UP:
+        if job.status == JobStatus.WARMING_UP and code_str:
             chat_style = get_statek_settings().chat_style
             log_code = f"```python\n{code_str}\n```" if chat_style == ChatStyle.MARKDOWN else code_str  # pylint: disable=no-member
             job._log(log_code)  # pylint: disable=protected-access
 
-        # Step 5: Execute the code using exec_step
+        # Step 5: Execute tool calls if code block contains them and it's not a continuation
+        if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
+            tool_results = []
+            for call_spec in code.tool_calls:
+                result = await exec_tool(call_spec, job)
+                tool_results.append(result)
+            key = len(job.chat_log)
+            if job.py_env.tool_log is None:
+                job.py_env.tool_log = {}
+            job.py_env.tool_log[key] = tool_results[0] if len(tool_results) == 1 else tool_results
+            for call_spec, result in zip(code.tool_calls, tool_results):
+                job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
+
+        # Step 6: Execute the code using exec_step
         # Pass next_instr_num if resuming from SUSPENDED
+        # Skip execution entirely when code is None/empty (tool-calls-only block)
         try:
-            not_exited = await exec_step(code_str, job, job.next_instr_num)
+            if code_str:
+                await exec_step(code_str, job, job.next_instr_num)
             # Clear continuation state after successful execution
             job.awaited_result = None
             job.next_instr_num = None
@@ -404,20 +502,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 10: Get next request parameters — log pending console batch first
     _log_pending_console(job)
     request = job.get_next_request()
-    # Materialize chat_history generator so it can be consumed by both debug logging and process_request
+    # Materialize chat_history generator so it can be consumed by process_request
     if 'chat_history' in request:
         request['chat_history'] = list(request['chat_history'])
-
-    # Log full messages being sent to LLM
-    messages = llm_api.build_messages(**{
-        k: v for k, v in request.items() if k not in ('session_id', 'metadata', 'available_tools')
-    })
-    messages_str = "LLM Request messages:\n"
-    for msg in messages:
-        if msg['content'] is None:
-            continue
-        messages_str += f"[{msg['role']}]: {msg['content']}\n"
-    job._debug_log(messages_str)  # pylint: disable=protected-access
 
     # Step 11: Run the request with LLM API - await response
     response = await llm_api.process_request(**request)
@@ -434,9 +521,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         job.session_id = response.session_id
 
     # Step 12: Add new log item using append_chat_log
-    job._debug_log(f"LLM Response:\n{response.text}")  # pylint: disable=protected-access
-    chat_style = get_statek_settings().chat_style
-    job.append_chat_log(request, strip_markup(response.text, strict=(chat_style == ChatStyle.MARKDOWN)))
+    job.append_chat_log(request, response)
 
     # Step 13: Check harness constraints after step
     harness.check_after_step(job)

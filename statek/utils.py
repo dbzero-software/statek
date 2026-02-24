@@ -23,6 +23,19 @@ class CallSpec:
     args: Optional[List[Any]] = None
     kwargs: Optional[Dict[str, Any]] = None
 
+    def format(self) -> str:  # pylint: disable=redefined-builtin
+        """Format this call spec as a Python-style function call string.
+
+        Returns:
+            A string like ``func_name(arg1, key='val')``
+        """
+        parts = []
+        if self.args:
+            parts.extend(repr(a) for a in self.args)
+        if self.kwargs:
+            parts.extend(f"{k}={v!r}" for k, v in self.kwargs.items())
+        return f"{self.func_name}({', '.join(parts)})"
+
 
 @db0.memo
 @dataclass
