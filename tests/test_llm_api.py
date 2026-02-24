@@ -1,5 +1,5 @@
 # pylint: disable=unused-argument,redefined-outer-name,protected-access
-# pylint: disable=too-many-arguments,too-many-positional-arguments
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-lines
 """Tests for LLM_API process_request available_tools / LLM_TOOLS_SCOPE integration."""
 
 from unittest.mock import patch, MagicMock
@@ -910,12 +910,52 @@ class TestOpenRouterBuildMessages:
         assert len(msgs) == 1
         assert msgs[0] == {"role": "assistant", "content": "x = 1"}
 
-    def test_tool_calls_ignored(self, openrouter_api):
-        """tool_calls field is not yet reflected in messages (plain code blocks only)."""
-        cp = CallParams(call_id="c1", name="foo", args=[], kwargs={})
-        step = ChatStepData(code="x = 1", console_output="> ok", tool_calls={cp: "result"})
+    def test_step_with_tool_calls_emits_openai_format(self, openrouter_api):
+        """A step with tool_calls emits an assistant message with tool_calls and tool messages."""
+        cp = CallParams(call_id="c1", name="foo", args=[], kwargs={"x": 1})
+        step = ChatStepData(code="", console_output="> ok", tool_calls={cp: "tool_output"})
         msgs = openrouter_api.build_messages(chat_history=[step])
-        assert len(msgs) == 2  # only assistant + user, no tool messages
+        # assistant (with tool_calls), tool result, user (console)
+        assert len(msgs) == 3
+        assert msgs[0]["role"] == "assistant"
+        assert msgs[0]["tool_calls"] == [
+            {"id": "c1", "type": "function", "function": {"name": "foo", "arguments": '{"x": 1}'}}
+        ]
+        assert msgs[1] == {"role": "tool", "tool_call_id": "c1", "content": "tool_output"}
+        assert msgs[2] == {"role": "user", "content": "> ok"}
+
+    def test_step_with_tool_calls_and_code(self, openrouter_api):
+        """A step with both code and tool_calls includes code as content."""
+        cp = CallParams(call_id="c1", name="bar", args=[], kwargs={})
+        step = ChatStepData(code="x = 1", console_output="> ok", tool_calls={cp: "res"})
+        msgs = openrouter_api.build_messages(chat_history=[step])
+        assert msgs[0]["role"] == "assistant"
+        assert msgs[0]["content"] == "x = 1"
+        assert "tool_calls" in msgs[0]
+
+    def test_step_with_multiple_tool_calls(self, openrouter_api):
+        """Multiple tool calls emit multiple tool messages in order."""
+        cp1 = CallParams(call_id="c1", name="tool_a", args=[], kwargs={})
+        cp2 = CallParams(call_id="c2", name="tool_b", args=[], kwargs={"y": 2})
+        step = ChatStepData(code="", console_output="> out",
+                            tool_calls={cp1: "alpha", cp2: "beta"})
+        msgs = openrouter_api.build_messages(chat_history=[step])
+        # assistant + 2 tool messages + user
+        assert len(msgs) == 4
+        tool_msgs = [m for m in msgs if m["role"] == "tool"]
+        assert len(tool_msgs) == 2
+        assert tool_msgs[0] == {"role": "tool", "tool_call_id": "c1", "content": "alpha"}
+        assert tool_msgs[1] == {"role": "tool", "tool_call_id": "c2", "content": "beta"}
+
+    def test_step_with_tool_calls_no_console_output(self, openrouter_api):
+        """A step with tool_calls but no console_output does not emit a trailing user message."""
+        cp = CallParams(call_id="c1", name="foo", args=[], kwargs={})
+        step = ChatStepData(code="", console_output="", tool_calls={cp: "res"})
+        msgs = openrouter_api.build_messages(chat_history=[step])
+        # only assistant + tool message, no user message
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "assistant"
+        assert msgs[1]["role"] == "tool"
 
 
 # ---------------------------------------------------------------------------
@@ -989,3 +1029,47 @@ class TestClaudeBuildMessages:
         msgs = api.build_messages(chat_history=history)
         assert len(msgs) == 1
         assert msgs[0] == {"role": "user", "content": "only user"}
+
+    def test_step_with_tool_calls_emits_anthropic_format(self, claude_api):
+        """A step with tool_calls emits assistant tool_use block and user tool_result block."""
+        cp = CallParams(call_id="c1", name="foo", args=[], kwargs={"x": 1})
+        step = ChatStepData(code="", console_output="> ok", tool_calls={cp: "tool_output"})
+        msgs = claude_api.build_messages(chat_history=[step])
+        # assistant (tool_use) + user (tool_result + text)
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "assistant"
+        assert msgs[0]["content"] == [
+            {"type": "tool_use", "id": "c1", "name": "foo", "input": {"x": 1}}
+        ]
+        assert msgs[1]["role"] == "user"
+        assert {"type": "tool_result", "tool_use_id": "c1", "content": "tool_output"} \
+            in msgs[1]["content"]
+        assert {"type": "text", "text": "> ok"} in msgs[1]["content"]
+
+    def test_step_with_tool_calls_and_code_claude(self, claude_api):
+        """A step with both code and tool_calls includes a text block in assistant content."""
+        cp = CallParams(call_id="c1", name="bar", args=[], kwargs={})
+        step = ChatStepData(code="x = 1", console_output="", tool_calls={cp: "res"})
+        msgs = claude_api.build_messages(chat_history=[step])
+        assert msgs[0]["role"] == "assistant"
+        types_in_content = [b["type"] for b in msgs[0]["content"]]
+        assert "text" in types_in_content
+        assert "tool_use" in types_in_content
+        text_block = next(b for b in msgs[0]["content"] if b["type"] == "text")
+        assert text_block["text"] == "x = 1"
+
+    def test_step_with_multiple_tool_calls_claude(self, claude_api):
+        """Multiple tool calls emit multiple tool_use blocks and tool_result blocks."""
+        cp1 = CallParams(call_id="c1", name="tool_a", args=[], kwargs={})
+        cp2 = CallParams(call_id="c2", name="tool_b", args=[], kwargs={"n": 3})
+        step = ChatStepData(code="", console_output="", tool_calls={cp1: "alpha", cp2: "beta"})
+        msgs = claude_api.build_messages(chat_history=[step])
+        # assistant content: 2 tool_use blocks
+        tool_use_blocks = [b for b in msgs[0]["content"] if b["type"] == "tool_use"]
+        assert len(tool_use_blocks) == 2
+        # user content: 2 tool_result blocks
+        tool_result_blocks = [b for b in msgs[1]["content"] if b["type"] == "tool_result"]
+        assert len(tool_result_blocks) == 2
+        results_by_id = {b["tool_use_id"]: b["content"] for b in tool_result_blocks}
+        assert results_by_id["c1"] == "alpha"
+        assert results_by_id["c2"] == "beta"

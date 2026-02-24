@@ -1,5 +1,6 @@
 """Tests for exec_tool function."""
 
+from typing import Any, Callable
 import pytest
 
 from statek.executors.utils import exec_tool
@@ -14,6 +15,21 @@ from statek.system import tool
 def _module_agent_tool(value: str, **kwargs):  # pylint: disable=unused-argument
     """A simple agent tool used in tests."""
     return f"tool: {value}"
+
+
+# Tools for string-name resolution tests (union type annotation like docs/brief)
+@tool
+def _resolver_tool(what: type | Callable | Any, **kwargs):  # pylint: disable=unused-argument
+    """Accepts a callable or type; returns its name if resolved, else the raw string."""
+    if callable(what):
+        return f"resolved: {what.__name__}"
+    return f"string: {what}"
+
+
+@tool
+def _lookup_target(**kwargs):  # pylint: disable=unused-argument
+    """Target tool used as a name-resolution lookup target."""
+    return "target"
 
 
 def _call_spec(func_name, args=None, kwargs=None):
@@ -182,3 +198,18 @@ class TestExecTool:
         assert "RuntimeError" in result
         assert "async error" in result
         assert job.py_env.console is None
+
+    @pytest.mark.asyncio
+    async def test_string_tool_name_resolved_to_callable(self, db0_fixture):  # pylint: disable=unused-argument
+        """String tool name resolved to callable when annotation is a non-str union type.
+
+        Reproduces the bug where docs(what='get_user_calendar') returns str's docstring
+        because _bind_by_name skips union-type annotations and docs falls back to
+        type(what)=str.
+        """
+        job = _make_job("role_resolve", tools=[_resolver_tool, _lookup_target])
+        result = await exec_tool(
+            _call_spec("_resolver_tool", kwargs={"what": "_lookup_target"}), job
+        )
+        assert "resolved:" in result
+        assert "_lookup_target" in result

@@ -5,8 +5,9 @@ import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem
-from statek.llm_api import ChatStepData, LLM_Response
-from statek.utils import prompt_append_console, CodeBlock, CallSpec, strip_markup, parse_warmup_block, build_warmup_code
+from statek.llm_api import ChatStepData, LLM_Response, CallParams
+from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_markup,
+                          parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 
@@ -199,29 +200,6 @@ class Job:
         logger = get_statek_logger()
         logger.info("%s", content)
 
-    def _debug_log(self, content: str):
-        """
-        Write content to the debug log file.
-
-        Writes to a separate file named <agent_name>_<uuid>-debug.log
-        for detailed LLM request/response logging.
-
-        Args:
-            content: The content to log
-        """
-        if not self.logs_path:
-            return
-
-        import os  # pylint: disable=import-outside-toplevel
-
-        agent_name = self.job_def.agent.role if self.job_def.agent else "unknown"
-        job_uuid = db0.uuid(db0.materialized(self))
-        log_filename = f"{agent_name}_{job_uuid}-debug.log"
-        log_filepath = os.path.join(self.logs_path, log_filename)
-        os.makedirs(self.logs_path, exist_ok=True)
-        with open(log_filepath, 'a', encoding='utf-8') as f:
-            f.write(f"{content}\n\n")
-
     def _log_console_batch(self, from_pos: int, to_pos: int):
         """Log a slice of the console as a single batch with XML tags if configured.
 
@@ -241,6 +219,38 @@ class Job:
         )
         if text:
             self._log(text)
+
+    def _log_tool_call_result(self, call_spec, result: str):
+        """Log a tool call and its result.
+
+        The call line is annotated with the STATEK tool marker.
+        The result is formatted like console output (``> ``-prefixed in CONSOLE
+        style, plain in MARKDOWN style) and wrapped in XML console tags when
+        configured.
+
+        Args:
+            call_spec: The CallSpec describing the tool call
+            result: The tool execution result string
+        """
+        settings = get_statek_settings()
+        raw_call = f"{call_spec.format()}  {_STATEK_TOOL_MARKER}"
+        if settings.chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+            call_line = f"```python\n{raw_call}\n```"
+        else:
+            call_line = raw_call
+        if result:
+            result_lines = result.split('\n')
+            if settings.chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+                result_text = '\n'.join(result_lines)
+            else:
+                result_text = '\n'.join(f"> {line}" for line in result_lines)
+            xml_tags = settings.get_xml_box_tags()
+            tag = xml_tags and xml_tags.get("console")
+            if tag:
+                result_text = f"<{tag}>\n{result_text}\n</{tag}>"
+            self._log(f"{call_line}\n{result_text}")
+        else:
+            self._log(call_line)
 
     def console_append(self, output: str, error_message: str = None):
         """
@@ -369,8 +379,8 @@ class Job:
 
         def _wrap_code(resp: Union[str, CodeBlock]) -> str:
             code = resp.code if isinstance(resp, CodeBlock) else resp
-            if code is None:
-                code = ""
+            if not code:
+                return ""
             if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
                 return f"```python\n{code}\n```"
             return code
@@ -485,6 +495,44 @@ class Job:
             history_strings = list(self.get_chat_history())
             current_prompt = self.get_next_prompt()
 
+            warmup = self.job_def.warmup_code
+            warmup_blocks = (
+                [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
+            ) if warmup else []
+            num_warmup = len(warmup_blocks)
+
+            def _make_tool_calls(code_block, log_key):
+                """Build Dict[CallParams, str] from a CodeBlock and its tool_log entry."""
+                if not isinstance(code_block, CodeBlock) or not code_block.tool_calls:
+                    return None
+                if self.py_env.tool_log is None or log_key not in self.py_env.tool_log:
+                    return None
+                call_specs = list(code_block.tool_calls)
+                raw = self.py_env.tool_log[log_key]
+                results = [raw] if isinstance(raw, str) else list(raw)
+                tool_calls_dict = {}
+                for i, cs in enumerate(call_specs):
+                    cp = CallParams(
+                        call_id=cs.id, name=cs.func_name,
+                        args=list(cs.args) if cs.args else [],
+                        kwargs=dict(cs.kwargs) if cs.kwargs else {}
+                    )
+                    tool_calls_dict[cp] = results[i] if i < len(results) else ""
+                return tool_calls_dict if tool_calls_dict else None
+
+            def _get_step_tool_calls(k):
+                """Return tool_calls for the k-th ChatStepData (k=0 = first user-only step)."""
+                if k == 0:
+                    return None
+                if k <= num_warmup:
+                    # Warmup block at index k-1; all warmup tool results share tool_log key 0
+                    return _make_tool_calls(warmup_blocks[k - 1], 0)
+                # LLM turn: (k - num_warmup - 1)-th chat_log item, tool_log key = k - num_warmup
+                turn_idx = k - num_warmup - 1
+                if turn_idx < len(self.chat_log):
+                    return _make_tool_calls(self.chat_log[turn_idx].llm_resp, k - num_warmup)
+                return None
+
             if not history_strings:
                 # No prior history: current prompt is the only message
                 yield ChatStepData(code="", console_output=current_prompt)
@@ -495,12 +543,20 @@ class Job:
 
             # Pair up remaining (assistant, user) strings, skipping the last asst
             i = 1
+            k = 1
             while i < len(history_strings) - 1:
-                yield ChatStepData(code=history_strings[i], console_output=history_strings[i + 1])
+                yield ChatStepData(
+                    code=history_strings[i], console_output=history_strings[i + 1],
+                    tool_calls=_get_step_tool_calls(k)
+                )
                 i += 2
+                k += 1
 
             # Last string is always an assistant message; pair with current prompt
-            yield ChatStepData(code=history_strings[-1], console_output=current_prompt)
+            yield ChatStepData(
+                code=history_strings[-1], console_output=current_prompt,
+                tool_calls=_get_step_tool_calls(k)
+            )
 
         request_params = {
             "chat_history": _full_history(),

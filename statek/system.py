@@ -1,7 +1,8 @@
-from typing import Any, Callable, Iterable, Optional, Tuple, Dict
+from typing import Any, Callable, Iterable, Optional, Tuple, Dict, Union
 import asyncio
 import functools
 import inspect
+import types as _types_module
 from functools import wraps
 from copy import copy
 import nest_asyncio
@@ -29,6 +30,27 @@ def inject_context(func, __local_context):
 
 _SKIP_KINDS = {inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL}
 _POSITIONAL_KINDS = {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+
+# Python 3.10+ introduces types.UnionType for X | Y syntax; guard for older versions.
+_UnionType = getattr(_types_module, 'UnionType', None)
+
+
+def _expects_non_string_type(annotation) -> bool:
+    """Return True if annotation implies a non-string value is expected.
+
+    Handles plain types, Python 3.10+ union syntax (X | Y | Z) and typing.Union.
+    """
+    if annotation is None:
+        return False
+    if isinstance(annotation, type):
+        return not issubclass(str, annotation)
+    # Python 3.10+: X | Y | Z  →  types.UnionType
+    if _UnionType is not None and isinstance(annotation, _UnionType):
+        return any(isinstance(a, type) and not issubclass(str, a) for a in annotation.__args__)
+    # typing.Union[X, Y, Z]
+    if getattr(annotation, '__origin__', None) is Union:
+        return any(isinstance(a, type) and not issubclass(str, a) for a in annotation.__args__)
+    return False
 
 
 def _rebuild_args(sig, converted):
@@ -75,8 +97,7 @@ def _bind_by_name(f, args, kwargs):
         if name.startswith("_") or param.kind in _SKIP_KINDS or annotation is None:
             continue
         if (isinstance(value, str)
-                and isinstance(annotation, type)
-                and not issubclass(str, annotation)
+                and _expects_non_string_type(annotation)
                 and not db0.is_enum(annotation)):  # pylint: disable=no-member
             matches = list(find_locals(var_name=value))
             if matches:

@@ -1,13 +1,14 @@
 """Tests for Job class."""
 
 import types
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import dbzero as db0
 from tests.conftest import create_chat_log_item
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import ChatLogItem
 from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats, CallParams
 from statek.utils import CodeBlock, CallSpec
+from statek.settings import ChatStyle
 
 
 class TestJobDef:
@@ -738,6 +739,21 @@ class TestGetChatHistoryCodeBlock:
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
 
         history = list(job.get_chat_history())
+
+        assert history[1] == ""
+
+    def test_code_block_none_code_yields_empty_in_markdown_mode(self, job_factory):
+        """In MARKDOWN mode, CodeBlock.code=None yields '' not an empty fence."""
+        job = job_factory()
+        block = CodeBlock(code=None, tool_calls=[])
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
+
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.MARKDOWN  # pylint: disable=no-member
+        mock_settings.get_xml_box_tags.return_value = None
+
+        with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
+            history = list(job.get_chat_history())
 
         assert history[1] == ""
 
