@@ -6,6 +6,7 @@ from .llm_api import LLM_API, OpenRouter_API, Claude_API, LLM_Response, LLM_Stat
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
 from .system import tool, docs, get_any, get_all
+from .utils import statek_print
 
 __version__ = "0.1.0"
 
@@ -22,4 +23,5 @@ __all__ = [
     "LLM_Harness",
     "LLM_HarnessError",
     "get_llm_harness",
+    "statek_print",
 ]

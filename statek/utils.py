@@ -144,6 +144,10 @@ def build_warmup_code(
     return blocks
 
 
+_STATEK_PRINT_SCALAR_TYPES = (
+    bool, int, float, Decimal, str, datetime, list, tuple, set, frozenset, dict
+)
+
 _NONE_TYPE = type(None)
 
 _JSON_SCHEMA_TYPE_MAP = {
@@ -740,6 +744,41 @@ def _get_object_members(value: Any) -> Optional[Dict[str, Any]]:
     if hasattr(value, '__dict__'):
         return dict(vars(value))
     return None
+
+
+def _format_for_print(obj: Any) -> str:
+    """Format a single object for statek_print.
+
+    Resolution order for non-scalar/non-collection types:
+    1. __llm_repr__ if defined
+    2. __str__ if explicitly defined (not just inherited from object)
+    3. format_llm_repr with default arguments
+    """
+    if isinstance(obj, _STATEK_PRINT_SCALAR_TYPES):
+        return format_llm_repr(obj)
+    if hasattr(obj, '__llm_repr__'):
+        return obj.__llm_repr__()
+    if type(obj).__str__ is not object.__str__:
+        return str(obj)
+    return format_llm_repr(obj)
+
+
+def statek_print(*objects, sep=' ', end='\n', file=None, flush=False):
+    """LLM-friendly replacement for Python's built-in print.
+
+    Prints collections or simple types using format_llm_repr. For objects
+    (including memo objects), uses __llm_repr__ if defined, __str__ if
+    explicitly defined, or format_llm_repr with default arguments otherwise.
+
+    Args:
+        *objects: Objects to print.
+        sep: String inserted between values. Defaults to ' '.
+        end: String appended after the last value. Defaults to '\\n'.
+        file: File-like object to write to. Defaults to sys.stdout.
+        flush: Whether to forcibly flush the stream. Defaults to False.
+    """
+    text = sep.join(_format_for_print(obj) for obj in objects)
+    print(text, end=end, file=file, flush=flush)
 
 
 def _format_object_llm(class_name: str, members: Dict[str, Any],
