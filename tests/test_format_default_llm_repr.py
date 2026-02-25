@@ -150,6 +150,85 @@ def test_db0_memo_without_custom_methods(db0_fixture):  # pylint: disable=unused
     assert format_default_llm_repr(Config(name="alpha", value=7)) == 'Config(name="alpha",value=7)'
 
 
+# --- kwargs are forwarded to format_llm_repr ---
+
+def test_plain_object_kwargs_hide():
+    """kwargs like hide= are forwarded to format_llm_repr for plain objects."""
+    class User:
+        def __init__(self, name, age):
+            self.name = name
+            self.age = age
+
+    assert format_default_llm_repr(User("alice", 30), hide=["age"]) == 'User(name="alice")'
+
+
+def test_plain_object_kwargs_show_only():
+    """kwargs like show_only= are forwarded to format_llm_repr for plain objects."""
+    class User:
+        def __init__(self, name, age):
+            self.name = name
+            self.age = age
+
+    assert format_default_llm_repr(User("alice", 30), show_only=["name"]) == 'User(name="alice")'
+
+
+def test_collection_kwargs_max_len():
+    """max_len= is forwarded for collection types."""
+    assert format_default_llm_repr([1, 2, 3, 4, 5], max_len=2) == "[1,2, ...] (5 items total)"
+
+
+def test_kwargs_not_passed_to_llm_repr_without_var_kw():
+    """kwargs are not forwarded to __llm_repr__ if it doesn't accept **kwargs."""
+    class Widget:
+        def __llm_repr__(self):
+            return "Widget(custom)"
+
+    assert format_default_llm_repr(Widget(), hide=["x"]) == "Widget(custom)"
+
+
+def test_unknown_kwargs_ignored():
+    """Unknown kwargs are silently ignored (forwarded to format_llm_repr which ignores them)."""
+    class Point:
+        def __init__(self, x):
+            self.x = x
+
+    assert format_default_llm_repr(Point(1), unknown_kwarg=True) == "Point(x=1)"
+
+
+# --- Recursion guard: __llm_repr__ delegating back to format_default_llm_repr ---
+
+def test_llm_repr_delegates_to_format_default_no_recursion():
+    """__llm_repr__ that calls format_default_llm_repr(self, ...) must not recurse infinitely."""
+    class TimeSlot:
+        def __init__(self, hour):
+            self.hour = hour
+
+    class Event:
+        def __init__(self, name, time_slot):
+            self.name = name
+            self.time_slot = time_slot
+
+        def __llm_repr__(self, **kwargs):
+            return format_default_llm_repr(self, expand=["time_slot"], **kwargs)
+
+    result = format_default_llm_repr(Event("standup", TimeSlot(9)))
+    assert result == 'Event(name="standup",time_slot=TimeSlot(hour=9))'
+
+
+def test_llm_repr_recursion_guard_kwargs_forwarded():
+    """kwargs passed to format_default_llm_repr propagate into the recursive fallback."""
+    class Event:
+        def __init__(self, name, internal):
+            self.name = name
+            self.internal = internal
+
+        def __llm_repr__(self, **kwargs):
+            return format_default_llm_repr(self, **kwargs)
+
+    result = format_default_llm_repr(Event("x", "secret"), hide=["internal"])
+    assert result == 'Event(name="x")'
+
+
 # --- Exported from statek package ---
 
 def test_exported_from_statek_package():

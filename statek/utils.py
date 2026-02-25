@@ -3,6 +3,7 @@
 import ast
 import re
 import inspect
+import sys
 from collections import namedtuple
 from dataclasses import dataclass, is_dataclass, fields as dataclass_fields
 from datetime import datetime
@@ -698,6 +699,21 @@ def format_llm_repr(value: Any, hide: List[str] = None,
     return format_value_repr(value)
 
 
+def _format_element(item: Any, max_len: int, repeated: bool) -> str:
+    """Format a single element within a collection.
+
+    Applies the same dispatch as format_default_llm_repr, threading max_len and
+    repeated through to the fallback format_llm_repr call for plain objects.
+    """
+    if isinstance(item, _STATEK_PRINT_SCALAR_TYPES):
+        return format_llm_repr(item, max_len=max_len)
+    if hasattr(item, '__llm_repr__'):
+        return item.__llm_repr__()
+    if type(item).__str__ is not object.__str__:
+        return str(item)
+    return format_llm_repr(item, max_len=max_len, repeated=repeated)
+
+
 def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
     """Format a sequence with optional truncation."""
     all_items = list(items)
@@ -709,7 +725,7 @@ def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
         item_type = type(item)
         is_repeated = item_type in seen_types
         seen_types.add(item_type)
-        parts.append(format_llm_repr(item, max_len=max_len, repeated=is_repeated))
+        parts.append(_format_element(item, max_len=max_len, repeated=is_repeated))
     formatted = ",".join(parts)
     if total > max_len:
         return f"{open_br}{formatted}, ...{close_br} ({total} items total)"
@@ -728,7 +744,7 @@ def _format_dict_llm(value: dict, max_len: int) -> str:
         is_repeated = v_type in seen_types
         seen_types.add(v_type)
         parts.append(
-            f"{format_value_repr(k)}:{format_llm_repr(v, max_len=max_len, repeated=is_repeated)}")
+            f"{format_value_repr(k)}:{_format_element(v, max_len=max_len, repeated=is_repeated)}")
     formatted = ",".join(parts)
     if total > max_len:
         return "{" + formatted + ", ...} (" + str(total) + " items total)"
@@ -760,7 +776,7 @@ def _get_object_members(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def format_default_llm_repr(obj: Any) -> str:
+def format_default_llm_repr(obj: Any, **kwargs) -> str:
     """Format the default LLM-friendly representation of a value.
 
     Applies the following resolution order:
@@ -772,19 +788,46 @@ def format_default_llm_repr(obj: Any) -> str:
     always use format_llm_repr, preserving LLM-friendly formatting (e.g.
     strings are quoted, datetimes use the compact format).
 
+    kwargs (e.g. hide, expand, show_only, max_len) are forwarded to
+    format_llm_repr and also to __llm_repr__ if it accepts **kwargs.
+    __str__ never receives kwargs.
+
+    If __llm_repr__ calls format_default_llm_repr(self, ...) for the same
+    type, the recursion is detected via the call stack and the call falls
+    through directly to format_llm_repr, preventing infinite recursion.
+
     Args:
         obj: The object to format.
+        **kwargs: Forwarded to format_llm_repr; also forwarded to __llm_repr__
+            if its signature accepts **kwargs.
 
     Returns:
         LLM-friendly string representation.
     """
     if isinstance(obj, _STATEK_PRINT_SCALAR_TYPES):
-        return format_llm_repr(obj)
+        return format_llm_repr(obj, **kwargs)
+
     if hasattr(obj, '__llm_repr__'):
-        return obj.__llm_repr__()
+        obj_type = type(obj)
+        frame = sys._getframe(1)  # pylint: disable=protected-access
+        while frame is not None:
+            if (frame.f_code.co_name == '__llm_repr__' and
+                    type(frame.f_locals.get('self')) is obj_type):  # pylint: disable=unidiomatic-typecheck
+                break
+            frame = frame.f_back
+        else:
+            method = obj.__llm_repr__
+            sig = inspect.signature(method)
+            accepts_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in sig.parameters.values()
+            )
+            return method(**kwargs) if accepts_kwargs else method()
+        return format_llm_repr(obj, **kwargs)
+
     if type(obj).__str__ is not object.__str__:
         return str(obj)
-    return format_llm_repr(obj)
+    return format_llm_repr(obj, **kwargs)
 
 
 def statek_print(*objects, sep=' ', end='\n', file=None, flush=False):

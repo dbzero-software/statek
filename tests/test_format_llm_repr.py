@@ -528,3 +528,70 @@ def test_dict_same_type_values_uses_repeated():
     d = {"a": User("Adam", Role()), "b": User("Ela", Role())}
     result = format_llm_repr(d)
     assert result == '{"a":User(name="Adam",role=<Object>),"b":User(name="Ela",...)}'
+
+
+# --- __llm_repr__ and __str__ are respected for collection elements ---
+
+def test_list_items_call_llm_repr():
+    """Items inside a list call __llm_repr__ if defined."""
+    class User:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self):
+            return f"user:{self.name}"
+
+    result = format_llm_repr([User("Alice"), User("Bob")])
+    assert result == "[user:Alice,user:Bob]"
+
+
+def test_tuple_items_call_llm_repr():
+    """Items inside a tuple call __llm_repr__ if defined."""
+    class User:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self):
+            return f"user:{self.name}"
+
+    result = format_llm_repr((User("Alice"), User("Bob")))
+    assert result == "(user:Alice,user:Bob)"
+
+
+def test_dict_values_call_llm_repr():
+    """Dict values call __llm_repr__ if defined."""
+    class User:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self):
+            return f"user:{self.name}"
+
+    result = format_llm_repr({"a": User("Alice"), "b": User("Bob")})
+    assert result == '{"a":user:Alice,"b":user:Bob}'
+
+
+def test_list_items_call_explicit_str():
+    """Items inside a list call explicit __str__ if defined and no __llm_repr__."""
+    class Tag:
+        def __init__(self, name):
+            self.name = name
+
+        def __str__(self):
+            return f"#{self.name}"
+
+    result = format_llm_repr([Tag("python"), Tag("dev")])
+    assert result == "[#python,#dev]"
+
+
+def test_list_items_llm_repr_takes_precedence_over_str():
+    """__llm_repr__ is preferred over __str__ for collection elements."""
+    class Item:
+        def __llm_repr__(self):
+            return "llm"
+
+        def __str__(self):
+            return "str"
+
+    result = format_llm_repr([Item()])
+    assert result == "[llm]"
