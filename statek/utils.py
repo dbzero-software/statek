@@ -662,7 +662,7 @@ def format_value_repr(value: Any) -> str:
 
 def format_llm_repr(value: Any, hide: List[str] = None,
                     expand: List[str] = None, show_only: List[str] = None,
-                    max_len: int = 25) -> str:
+                    max_len: int = 25, **kwargs) -> str:
     """Format the LLM-friendly representation of a Python object.
 
     For simple scalar values, forwards to format_value_repr.
@@ -692,7 +692,8 @@ def format_llm_repr(value: Any, hide: List[str] = None,
 
     members = _get_object_members(value)
     if members is not None:
-        return _format_object_llm(_get_class_name(value), members, hide, expand, show_only)
+        return _format_object_llm(
+            _get_class_name(value), members, hide, expand, show_only, **kwargs)
 
     return format_value_repr(value)
 
@@ -702,7 +703,14 @@ def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
     all_items = list(items)
     total = len(all_items)
     shown = all_items[:max_len]
-    formatted = ",".join(format_llm_repr(item, max_len=max_len) for item in shown)
+    seen_types: set = set()
+    parts = []
+    for item in shown:
+        item_type = type(item)
+        is_repeated = item_type in seen_types
+        seen_types.add(item_type)
+        parts.append(format_llm_repr(item, max_len=max_len, repeated=is_repeated))
+    formatted = ",".join(parts)
     if total > max_len:
         return f"{open_br}{formatted}, ...{close_br} ({total} items total)"
     return f"{open_br}{formatted}{close_br}"
@@ -713,9 +721,15 @@ def _format_dict_llm(value: dict, max_len: int) -> str:
     items = list(value.items())
     total = len(items)
     shown = items[:max_len]
-    formatted = ",".join(
-        f"{format_value_repr(k)}:{format_llm_repr(v, max_len=max_len)}" for k, v in shown
-    )
+    seen_types: set = set()
+    parts = []
+    for k, v in shown:
+        v_type = type(v)
+        is_repeated = v_type in seen_types
+        seen_types.add(v_type)
+        parts.append(
+            f"{format_value_repr(k)}:{format_llm_repr(v, max_len=max_len, repeated=is_repeated)}")
+    formatted = ",".join(parts)
     if total > max_len:
         return "{" + formatted + ", ...} (" + str(total) + " items total)"
     return "{" + formatted + "}"
@@ -746,13 +760,23 @@ def _get_object_members(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _format_for_print(obj: Any) -> str:
-    """Format a single object for statek_print.
+def format_default_llm_repr(obj: Any) -> str:
+    """Format the default LLM-friendly representation of a value.
 
-    Resolution order for non-scalar/non-collection types:
-    1. __llm_repr__ if defined
+    Applies the following resolution order:
+    1. __llm_repr__ if defined on the object
     2. __str__ if explicitly defined (not just inherited from object)
     3. format_llm_repr with default arguments
+
+    Simple values (bool, int, float, Decimal, str, datetime) and collections
+    always use format_llm_repr, preserving LLM-friendly formatting (e.g.
+    strings are quoted, datetimes use the compact format).
+
+    Args:
+        obj: The object to format.
+
+    Returns:
+        LLM-friendly string representation.
     """
     if isinstance(obj, _STATEK_PRINT_SCALAR_TYPES):
         return format_llm_repr(obj)
@@ -766,9 +790,7 @@ def _format_for_print(obj: Any) -> str:
 def statek_print(*objects, sep=' ', end='\n', file=None, flush=False):
     """LLM-friendly replacement for Python's built-in print.
 
-    Prints collections or simple types using format_llm_repr. For objects
-    (including memo objects), uses __llm_repr__ if defined, __str__ if
-    explicitly defined, or format_llm_repr with default arguments otherwise.
+    Prints each object using format_default_llm_repr.
 
     Args:
         *objects: Objects to print.
@@ -777,14 +799,16 @@ def statek_print(*objects, sep=' ', end='\n', file=None, flush=False):
         file: File-like object to write to. Defaults to sys.stdout.
         flush: Whether to forcibly flush the stream. Defaults to False.
     """
-    text = sep.join(_format_for_print(obj) for obj in objects)
+    text = sep.join(format_default_llm_repr(obj) for obj in objects)
     print(text, end=end, file=file, flush=flush)
 
 
 def _format_object_llm(class_name: str, members: Dict[str, Any],
                         hide: List[str], expand: List[str],
-                        show_only: List[str]) -> str:
+                        show_only: List[str], **kwargs) -> str:
     """Format an object representation as ClassName(member=value, ...)."""
+    repeated = kwargs.get('repeated', False)
+
     if show_only is not None:
         shown = {k: v for k, v in members.items() if k in show_only}
     else:
@@ -794,11 +818,18 @@ def _format_object_llm(class_name: str, members: Dict[str, Any],
         shown = {k: v for k, v in shown.items() if k not in hide}
 
     parts = []
+    has_omitted = False
     for name, val in shown.items():
         if expand and name in expand:
             formatted_val = format_llm_repr(val)
         else:
             formatted_val = format_value_repr(val)
+            if repeated and formatted_val == '<Object>':
+                has_omitted = True
+                continue
         parts.append(f"{name}={formatted_val}")
+
+    if has_omitted:
+        parts.append('...')
 
     return f"{class_name}({','.join(parts)})"

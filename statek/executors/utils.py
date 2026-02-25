@@ -19,7 +19,7 @@ from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
-from statek.utils import CodeBlock, CallSpec, _format_for_print
+from statek.utils import CodeBlock, CallSpec, format_default_llm_repr
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -105,7 +105,7 @@ class _ResilientTransformer(ast.NodeTransformer):
 """Execute a single AST node with custom print function."""
 def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
-    output = sep.join(_format_for_print(arg) for arg in args) + end
+    output = sep.join(format_default_llm_repr(arg) for arg in args) + end
     job.console_append(output.rstrip('\n'))
 
 def custom_exit(job, status=None):
@@ -310,7 +310,7 @@ async def exec_tool(call_spec: CallSpec, job: Job) -> str:
     private_console = []
 
     def _private_print(*args, sep=' ', end='\n', **kwargs):
-        output = sep.join(_format_for_print(arg) for arg in args) + end
+        output = sep.join(format_default_llm_repr(arg) for arg in args) + end
         private_console.append(output.rstrip('\n'))
 
     # Build global and local contexts — mirrors exec_step

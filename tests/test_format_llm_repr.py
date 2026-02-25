@@ -368,3 +368,163 @@ def test_dict_with_object_values_expanded():
     d = {"a": Val(1)}
     result = format_llm_repr(d)
     assert result == '{"a":Val(n=1)}'
+
+
+# --- repeated=True kwarg ---
+
+def test_repeated_no_object_fields():
+    """repeated=True has no effect when no fields resolve to <Object>."""
+    class User:
+        def __init__(self, name, age):
+            self.name = name
+            self.age = age
+
+    u = User("alice", 30)
+    result = format_llm_repr(u, repeated=True)
+    assert result == 'User(name="alice",age=30)'
+
+
+def test_repeated_with_object_field():
+    """repeated=True skips <Object> fields and appends ... instead."""
+    class Role:
+        pass
+
+    class User:
+        def __init__(self, name, role):
+            self.name = name
+            self.role = role
+
+    u = User("alice", Role())
+    result = format_llm_repr(u, repeated=True)
+    assert result == 'User(name="alice",...)'
+
+
+def test_repeated_all_object_fields():
+    """repeated=True with all fields as <Object> produces ClassName(...)."""
+    class Inner:
+        pass
+
+    class Outer:
+        def __init__(self, a, b):
+            self.a = a
+            self.b = b
+
+    o = Outer(Inner(), Inner())
+    result = format_llm_repr(o, repeated=True)
+    assert result == 'Outer(...)'
+
+
+def test_repeated_false_same_as_default():
+    """repeated=False is the same as not passing repeated."""
+    class Role:
+        pass
+
+    class User:
+        def __init__(self, name, role):
+            self.name = name
+            self.role = role
+
+    u = User("alice", Role())
+    assert format_llm_repr(u, repeated=False) == format_llm_repr(u)
+
+
+def test_repeated_scalar_is_no_op():
+    """repeated=True on a scalar value has no effect."""
+    assert format_llm_repr(42, repeated=True) == "42"
+    assert format_llm_repr("hi", repeated=True) == '"hi"'
+
+
+def test_repeated_unknown_kwargs_ignored():
+    """Unknown kwargs are silently ignored."""
+    class User:
+        def __init__(self, name):
+            self.name = name
+
+    u = User("bob")
+    result = format_llm_repr(u, unknown_kwarg=True, another=42)
+    assert result == 'User(name="bob")'
+
+
+# --- Collection repeated-type logic ---
+
+def test_list_same_type_second_element_uses_repeated():
+    """In a list of same-type objects, the second element is formatted with repeated=True."""
+    class Role:
+        pass
+
+    class User:
+        def __init__(self, name, role):
+            self.name = name
+            self.role = role
+
+    users = [User("Adam", Role()), User("Ela", Role())]
+    result = format_llm_repr(users)
+    assert result == '[User(name="Adam",role=<Object>),User(name="Ela",...)]'
+
+
+def test_list_different_types_no_repeated():
+    """In a list of different-type objects, each is shown in full."""
+    class A:
+        def __init__(self, inner):
+            self.inner = inner
+
+    class B:
+        def __init__(self, inner):
+            self.inner = inner
+
+    class Inner:
+        pass
+
+    result = format_llm_repr([A(Inner()), B(Inner())])
+    assert result == '[A(inner=<Object>),B(inner=<Object>)]'
+
+
+def test_list_three_same_type_only_first_full():
+    """Only the first occurrence of a type is shown in full; the rest use repeated=True."""
+    class Role:
+        pass
+
+    class User:
+        def __init__(self, name, role):
+            self.name = name
+            self.role = role
+
+    users = [User("Adam", Role()), User("Ela", Role()), User("Bob", Role())]
+    result = format_llm_repr(users)
+    assert result == '[User(name="Adam",role=<Object>),User(name="Ela",...),User(name="Bob",...)]'
+
+
+def test_tuple_same_type_uses_repeated():
+    """Tuples also apply repeated=True for repeated types."""
+    class Meta:
+        pass
+
+    class Item:
+        def __init__(self, val, meta):
+            self.val = val
+            self.meta = meta
+
+    items = (Item(1, Meta()), Item(2, Meta()))
+    result = format_llm_repr(items)
+    assert result == '(Item(val=1,meta=<Object>),Item(val=2,...))'
+
+
+def test_list_scalars_repeated_is_no_op():
+    """For scalars, repeated-type tracking doesn't change the output."""
+    result = format_llm_repr([1, 2, 3])
+    assert result == '[1,2,3]'
+
+
+def test_dict_same_type_values_uses_repeated():
+    """Dict values of the same type use repeated=True from the second occurrence."""
+    class Role:
+        pass
+
+    class User:
+        def __init__(self, name, role):
+            self.name = name
+            self.role = role
+
+    d = {"a": User("Adam", Role()), "b": User("Ela", Role())}
+    result = format_llm_repr(d)
+    assert result == '{"a":User(name="Adam",role=<Object>),"b":User(name="Ela",...)}'
