@@ -4,7 +4,7 @@ import ast
 import re
 import inspect
 from collections import namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass, fields as dataclass_fields
 from datetime import datetime
 from decimal import Decimal
 from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Type, Any,
@@ -654,3 +654,112 @@ def format_value_repr(value: Any) -> str:
         type_name = type(value).__name__.capitalize()
         return f"<{type_name} of {len(value)} items>"
     return "<Object>"
+
+
+def format_llm_repr(value: Any, hide: List[str] = None,
+                    expand: List[str] = None, show_only: List[str] = None,
+                    max_len: int = 25) -> str:
+    """Format the LLM-friendly representation of a Python object.
+
+    For simple scalar values, forwards to format_value_repr.
+    For collections, shows up to max_len items with a truncation notice.
+    For objects (including db0.memo objects), shows ClassName(member=value, ...).
+
+    Args:
+        value: the value to be formatted
+        hide: list of members to be hidden in the result
+        expand: list of members to be shown expanded (using format_llm_repr recursively)
+        show_only: if defined, only these members are shown (hide still takes precedence)
+        max_len: maximum number of collection items to display
+
+    Returns:
+        LLM-friendly string representation.
+    """
+    if isinstance(value, (bool, int, float, Decimal, str, datetime)):
+        return format_value_repr(value)
+
+    if isinstance(value, (list, tuple)):
+        brackets = ('[', ']') if isinstance(value, list) else ('(', ')')
+        return _format_sequence(list(value), *brackets, max_len)
+    if isinstance(value, (set, frozenset)):
+        return _format_sequence(sorted(value, key=repr), '{', '}', max_len)
+    if isinstance(value, dict):
+        return _format_dict_llm(value, max_len)
+
+    members = _get_object_members(value)
+    if members is not None:
+        return _format_object_llm(_get_class_name(value), members, hide, expand, show_only)
+
+    return format_value_repr(value)
+
+
+def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
+    """Format a sequence with optional truncation."""
+    all_items = list(items)
+    total = len(all_items)
+    shown = all_items[:max_len]
+    formatted = ",".join(format_value_repr(item) for item in shown)
+    if total > max_len:
+        return f"{open_br}{formatted}, ...{close_br} ({total} items total)"
+    return f"{open_br}{formatted}{close_br}"
+
+
+def _format_dict_llm(value: dict, max_len: int) -> str:
+    """Format a dict with optional truncation."""
+    items = list(value.items())
+    total = len(items)
+    shown = items[:max_len]
+    formatted = ",".join(
+        f"{format_value_repr(k)}:{format_value_repr(v)}" for k, v in shown
+    )
+    if total > max_len:
+        return "{" + formatted + ", ...} (" + str(total) + " items total)"
+    return "{" + formatted + "}"
+
+
+def _get_class_name(value: Any) -> str:
+    """Return the display class name, stripping db0.memo's 'Memo_' prefix if present."""
+    cls = type(value)
+    name = cls.__name__
+    if not name.startswith('Memo_'):
+        return name
+    # db0.memo wraps classes with a 'Memo_' prefix; find original name via MRO
+    for base in cls.__mro__[1:]:
+        base_name = base.__name__
+        if base_name and base_name != 'object' and not base_name.startswith('Memo_'):
+            return base_name
+    return name[5:]  # fallback: strip prefix
+
+
+def _get_object_members(value: Any) -> Optional[Dict[str, Any]]:
+    """Return an ordered dict of an object's members, or None if not applicable."""
+    if isinstance(value, type):
+        return None
+    if is_dataclass(value):
+        return {f.name: getattr(value, f.name) for f in dataclass_fields(value)}
+    if hasattr(value, '__dict__'):
+        return dict(vars(value))
+    return None
+
+
+def _format_object_llm(class_name: str, members: Dict[str, Any],
+                        hide: List[str], expand: List[str],
+                        show_only: List[str]) -> str:
+    """Format an object representation as ClassName(member=value, ...)."""
+    if show_only is not None:
+        shown = {k: v for k, v in members.items() if k in show_only}
+    else:
+        shown = dict(members)
+
+    if hide:
+        shown = {k: v for k, v in shown.items() if k not in hide}
+
+    parts = []
+    for name, val in shown.items():
+        if expand and name in expand:
+            formatted_val = format_llm_repr(val)
+        else:
+            formatted_val = format_value_repr(val)
+        parts.append(f"{name}={formatted_val}")
+
+    return f"{class_name}({','.join(parts)})"
