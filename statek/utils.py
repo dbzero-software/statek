@@ -5,6 +5,8 @@ import re
 import inspect
 from collections import namedtuple
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Type, Any,
                     get_type_hints, get_origin, get_args, Union, ForwardRef)
 import dbzero as db0
@@ -631,3 +633,24 @@ def find_locals(var_type: Optional[Type] = None,
 
             if type_match and name_match:
                 yield value
+
+
+def format_value_repr(value: Any) -> str:
+    """Format a single value for LLM representation.
+
+    Args:
+        value: the value to be formatted
+
+    Returns:
+        A string representation suitable for LLM consumption.
+    """
+    if isinstance(value, (bool, int, float, Decimal)):
+        return str(value)
+    if isinstance(value, str):
+        return f'"{value}"'
+    if isinstance(value, datetime):
+        return f'datetime("{value.strftime("%Y-%m-%d %H:%M")}")'
+    if isinstance(value, (list, tuple, set, frozenset, dict)):
+        type_name = type(value).__name__.capitalize()
+        return f"<{type_name} of {len(value)} items>"
+    return "<Object>"
