@@ -702,7 +702,7 @@ def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
     all_items = list(items)
     total = len(all_items)
     shown = all_items[:max_len]
-    formatted = ",".join(format_value_repr(item) for item in shown)
+    formatted = ",".join(format_llm_repr(item, max_len=max_len) for item in shown)
     if total > max_len:
         return f"{open_br}{formatted}, ...{close_br} ({total} items total)"
     return f"{open_br}{formatted}{close_br}"
@@ -714,7 +714,7 @@ def _format_dict_llm(value: dict, max_len: int) -> str:
     total = len(items)
     shown = items[:max_len]
     formatted = ",".join(
-        f"{format_value_repr(k)}:{format_value_repr(v)}" for k, v in shown
+        f"{format_value_repr(k)}:{format_llm_repr(v, max_len=max_len)}" for k, v in shown
     )
     if total > max_len:
         return "{" + formatted + ", ...} (" + str(total) + " items total)"

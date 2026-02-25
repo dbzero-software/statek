@@ -471,7 +471,7 @@ class TestRunJobStepToolCallLogging:
 
         content = self._read_logs(tmp_path)
         statek_pos = content.find('#STATEK: as tool')
-        console_pos = content.find('> printed_output')  # console output has '> ' prefix
+        console_pos = content.find('> "printed_output"')  # strings in console are quoted
         assert statek_pos != -1
         assert console_pos != -1
         assert statek_pos < console_pos

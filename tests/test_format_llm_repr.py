@@ -336,3 +336,35 @@ def test_db0_memo_dataclass_expand(db0_fixture):  # pylint: disable=unused-argum
     o = Outer(label="test", inner=Inner(x=42))
     result = format_llm_repr(o, expand=["inner"])
     assert result == 'Outer(label="test",inner=Inner(x=42))'
+
+
+# --- Inner objects in collections are expanded ---
+
+def test_list_with_objects_expanded():
+    class Item:
+        def __init__(self, x):
+            self.x = x
+
+    items = [Item(1), Item(2)]
+    result = format_llm_repr(items)
+    assert result == "[Item(x=1),Item(x=2)]"
+
+
+def test_tuple_with_objects_expanded():
+    class Item:
+        def __init__(self, x):
+            self.x = x
+
+    items = (Item(1), Item(2))
+    result = format_llm_repr(items)
+    assert result == "(Item(x=1),Item(x=2))"
+
+
+def test_dict_with_object_values_expanded():
+    class Val:
+        def __init__(self, n):
+            self.n = n
+
+    d = {"a": Val(1)}
+    result = format_llm_repr(d)
+    assert result == '{"a":Val(n=1)}'

@@ -262,7 +262,7 @@ print(f"Result: {z}")
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert "a-b-c" in simple_job.py_env.console[0]
+        assert simple_job.py_env.console[0] == '"a"-"b"-"c"'
 
     @pytest.mark.asyncio
     async def test_exec_with_db0_objects(self, job_factory):
