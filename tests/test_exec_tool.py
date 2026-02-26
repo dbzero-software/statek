@@ -283,31 +283,21 @@ class TestExecToolStatekCtx:  # pylint: disable=too-few-public-methods
         assert result == "True"
 
 
-class _SimpleDocClass:
+class _SimpleDocClass:  # pylint: disable=too-few-public-methods
     """A simple class for docstring testing."""
 
 
 class TestDocsAgentIntegration:
     """Tests that docs and brief pass the current agent name to format_docstring."""
 
-    def _make_job(self, tools):
-        """Create a minimal job with the given tools."""
-        agent = Agent(role="doc_test_agent", _system_prompt="Test", _tools=tools)
-        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
-        return Job(
-            job_def=job_def,
-            model_family="test",
-            model="test-model",
-            job_status=JobStatus.READY,  # pylint: disable=no-member
-        )
-
     @pytest.mark.asyncio
     async def test_docs_passes_agent_type_name_to_format_docstring(self, db0_fixture):  # pylint: disable=unused-argument
         """docs tool passes current agent's type name as agent= to format_docstring."""
-        job = self._make_job([docs_tool])
+        job = _make_job("doc_test_agent", tools=[docs_tool],
+                        context_extras={"_SimpleDocClass": _SimpleDocClass})
 
         with patch('statek.system.format_docstring', return_value="") as mock_fmt:
-            await exec_tool(_call_spec("docs", kwargs={"what": _SimpleDocClass}), job)
+            await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
 
         assert mock_fmt.called
         _, call_kwargs = mock_fmt.call_args
@@ -316,10 +306,11 @@ class TestDocsAgentIntegration:
     @pytest.mark.asyncio
     async def test_brief_passes_agent_type_name_to_format_docstring(self, db0_fixture):  # pylint: disable=unused-argument
         """brief tool passes current agent's type name as agent= to format_docstring."""
-        job = self._make_job([brief_tool])
+        job = _make_job("doc_test_agent", tools=[brief_tool],
+                        context_extras={"_SimpleDocClass": _SimpleDocClass})
 
         with patch('statek.system.format_docstring', return_value="") as mock_fmt:
-            await exec_tool(_call_spec("brief", kwargs={"what": _SimpleDocClass}), job)
+            await exec_tool(_call_spec("brief", kwargs={"what": "_SimpleDocClass"}), job)
 
         assert mock_fmt.called
         _, call_kwargs = mock_fmt.call_args

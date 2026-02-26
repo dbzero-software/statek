@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import re
 from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
-from statek.utils import block_comment, find_locals
+from statek.utils import block_comment, find_locals, _get_class_name
 from statek.system import tool
 from statek.docstring import parse_docstring, format_docstring
 from statek.executors.job import JobDef, parse_warmup_code
@@ -153,10 +153,12 @@ class Agent:
 
     def _format_tools(self, brief: bool, py_syntax: bool) -> str:
         """Format all tools with the specified settings."""
+        agent_name = _get_class_name(self)
         formatted = []
         def inner_format_tool(fn: Callable) -> str:
             parsed = parse_docstring(fn)
-            return format_docstring(parsed, brief=brief, py_syntax=py_syntax)
+            return format_docstring(parsed, brief=brief, py_syntax=py_syntax,
+                                    agent=agent_name)
 
         formatted = [inner_format_tool(fn) for fn in self._tools]
         # also process tools specified by name
