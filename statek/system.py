@@ -291,32 +291,36 @@ def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pyl
     """
     # A string passed to docs is almost certainly an unresolved name
     if isinstance(what, str):
-        raise NameError(f"name '{what}' is not defined")
+        print(f"NameError: name '{what}' is not defined")
+        return
 
-    # Handle object instances - get their class
-    target_type = what
-    if not isinstance(what, type) and not callable(what):
-        target_type = type(what)
+    try:
+        # Handle object instances - get their class
+        target_type = what
+        if not isinstance(what, type) and not callable(what):
+            target_type = type(what)
 
-    # If method_name is provided, get the method from the class/type
-    if method_name is not None:
-        if not isinstance(target_type, type):
-            print(f"Error: {target_type} is not a class")
-            return
+        # If method_name is provided, get the method from the class/type
+        if method_name is not None:
+            if not isinstance(target_type, type):
+                print(f"Error: {target_type} is not a class")
+                return
 
-        # Get the method from the class
-        if not hasattr(target_type, method_name):
-            print(f"Error: {target_type.__name__} has no method '{method_name}'")
-            return
+            # Get the method from the class
+            if not hasattr(target_type, method_name):
+                print(f"Error: {target_type.__name__} has no method '{method_name}'")
+                return
 
-        target = getattr(target_type, method_name)
-    else:
-        target = target_type
+            target = getattr(target_type, method_name)
+        else:
+            target = target_type
 
-    # Use format_docstring for all tools (including temporal)
-    parsed = parse_docstring(target)
-    formatted = format_docstring(parsed, brief=False, py_syntax=True)
-    print(formatted)
+        # Use format_docstring for all tools (including temporal)
+        parsed = parse_docstring(target)
+        formatted = format_docstring(parsed, brief=False, py_syntax=True)
+        print(formatted)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"{type(e).__name__}: {e}")
 
 
 @tool(system=True)
@@ -337,30 +341,34 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
     """
     # A string passed to brief is almost certainly an unresolved name
     if isinstance(what, str):
-        raise NameError(f"name '{what}' is not defined")
+        print(f"NameError: name '{what}' is not defined")
+        return
 
-    # Handle object instances - get their class
-    target_type = what
-    if not isinstance(what, type) and not callable(what):
-        target_type = type(what)
+    try:
+        # Handle object instances - get their class
+        target_type = what
+        if not isinstance(what, type) and not callable(what):
+            target_type = type(what)
 
-    # If method_name is provided, get the method from the class/type
-    if method_name is not None:
-        if not isinstance(target_type, type):
-            print(f"Error: {target_type} is not a class")
-            return
+        # If method_name is provided, get the method from the class/type
+        if method_name is not None:
+            if not isinstance(target_type, type):
+                print(f"Error: {target_type} is not a class")
+                return
 
-        if not hasattr(target_type, method_name):
-            print(f"Error: {target_type.__name__} has no method '{method_name}'")
-            return
+            if not hasattr(target_type, method_name):
+                print(f"Error: {target_type.__name__} has no method '{method_name}'")
+                return
 
-        target = getattr(target_type, method_name)
-    else:
-        target = target_type
+            target = getattr(target_type, method_name)
+        else:
+            target = target_type
 
-    parsed = parse_docstring(target)
-    formatted = format_docstring(parsed, brief=True, py_syntax=False)
-    print(formatted)
+        parsed = parse_docstring(target)
+        formatted = format_docstring(parsed, brief=True, py_syntax=False)
+        print(formatted)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"{type(e).__name__}: {e}")
 
 
 @tool
