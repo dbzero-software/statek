@@ -1068,3 +1068,120 @@ class TestFormatDocstringACL:
         doc2 = parse_docstring(NoAclClass)
         result2 = format_docstring(doc2, brief=False, py_syntax=True, default_acl=deny_all)
         assert "Attributes:" not in result2
+
+
+# --- Fixtures for property extraction tests ---
+
+class ShapeWithProperties:
+    """A shape with computed properties.
+
+    STATEK-ACL:
+        +*
+    """
+
+    @property
+    def area(self) -> float:
+        """Computed area of the shape.
+
+        Returns:
+            float: The area in square units.
+        """
+        return 0.0
+
+    @property
+    def perimeter(self) -> float:
+        """Computed perimeter of the shape.
+
+        Returns:
+            float: The perimeter in units.
+        """
+        return 0.0
+
+
+class PropertyWithACL:
+    """A class with ACL-controlled properties.
+
+    STATEK-ACL:
+        +*
+        -hidden_prop
+    """
+
+    @property
+    def visible_prop(self) -> str:
+        """Visible property.
+
+        Returns:
+            str: The visible value.
+        """
+        return ""
+
+    @property
+    def hidden_prop(self) -> str:
+        """Hidden property.
+
+        Returns:
+            str: The hidden value.
+        """
+        return ""
+
+
+class TestParseClassProperties:
+    """Test cases for extracting class properties."""
+
+    def test_parse_properties_found(self):
+        """Test that properties are extracted from a class."""
+        result = parse_docstring(ShapeWithProperties)
+
+        assert result.props is not None
+        prop_names = {p.name for p in result.props}
+        assert prop_names == {"area", "perimeter"}
+
+    def test_parse_property_type(self):
+        """Test that property return type is extracted correctly."""
+        result = parse_docstring(ShapeWithProperties)
+
+        area_prop = next(p for p in result.props if p.name == "area")
+        assert area_prop.type == "float"
+
+    def test_parse_property_description(self):
+        """Test that property description is extracted from Returns section."""
+        result = parse_docstring(ShapeWithProperties)
+
+        area_prop = next(p for p in result.props if p.name == "area")
+        assert "square units" in area_prop.desc
+
+    def test_props_are_attr_docstring_instances(self):
+        """Test that property entries are AttrDocString namedtuples."""
+        result = parse_docstring(ShapeWithProperties)
+
+        for p in result.props:
+            assert isinstance(p, AttrDocString)
+
+    def test_no_props_for_plain_class(self):
+        """Test that a class without properties has props=None."""
+        result = parse_docstring(ParticleSimulator)
+
+        assert result.props is None
+
+    def test_format_class_shows_properties_as_attributes(self):
+        """Test that properties appear in the Attributes section."""
+        result = format_docstring(parse_docstring(ShapeWithProperties), brief=False, py_syntax=True)
+
+        assert "Attributes:" in result
+        assert "area (float):" in result
+        assert "perimeter (float):" in result
+
+    def test_acl_filters_properties(self):
+        """Test that ACL filtering applies to properties."""
+        doc = parse_docstring(PropertyWithACL)
+        result = format_docstring(doc, brief=False, py_syntax=True)
+
+        assert "visible_prop" in result
+        assert "hidden_prop" not in result
+
+    def test_brief_mode_hides_properties(self):
+        """Test that brief mode does not include properties."""
+        result = format_docstring(parse_docstring(ShapeWithProperties), brief=True, py_syntax=True)
+
+        assert "Attributes:" not in result
+        assert "area" not in result

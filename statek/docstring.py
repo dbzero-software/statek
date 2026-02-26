@@ -38,6 +38,7 @@ class ClassDocString:
     full_desc: str
     fields: Optional[List[AttrDocString]] = None
     attrs: Optional[List[AttrDocString]] = None
+    props: Optional[List[AttrDocString]] = None
     statek_acl: Optional['Statek_ACL'] = None
 
 
@@ -79,6 +80,7 @@ def _parse_class_docstring(cls: type) -> ClassDocString:
         attrs = _parse_typed_items(sections["Attributes"], AttrDocString)
 
     fields = _extract_dataclass_fields(cls)
+    props = _extract_class_properties(cls)
 
     statek_acl = None
     if "STATEK-ACL" in sections:
@@ -91,6 +93,7 @@ def _parse_class_docstring(cls: type) -> ClassDocString:
         full_desc=full_desc,
         fields=fields,
         attrs=attrs,
+        props=props,
         statek_acl=statek_acl
     )
 
@@ -118,6 +121,52 @@ def _extract_dataclass_fields(cls: type) -> Optional[List[AttrDocString]]:
         type_str = _format_type_hint(type_hint) if type_hint else None
         doc = f.metadata.get("doc") if f.metadata else None
         result.append(AttrDocString(name=f.name, type=type_str, desc=doc))
+
+    return result if result else None
+
+
+def _extract_class_properties(cls: type) -> Optional[List[AttrDocString]]:
+    """Extract @property members from a class.
+
+    For each property, extracts the name, return type from the getter's type
+    hints, and description from the getter's Returns docstring section.
+
+    Returns:
+        List of AttrDocString for each non-private property, or None if none found.
+    """
+    result = []
+    seen: set = set()
+    # Walk MRO using vars() to avoid triggering descriptors (e.g. db0.memo attributes)
+    for klass in reversed(cls.__mro__):
+        for name, value in vars(klass).items():
+            if name.startswith('_') or name in seen:
+                continue
+            seen.add(name)
+            if not isinstance(value, property):
+                continue
+
+            getter = value.fget
+            if getter is None:
+                continue
+
+            type_str = None
+            try:
+                hints = get_type_hints(getter)
+                if 'return' in hints:
+                    type_str = _format_type_hint(hints['return'])
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+            desc = None
+            prop_docstring = inspect.getdoc(getter)
+            if prop_docstring:
+                _, _, sections = _parse_docstring_sections(prop_docstring)
+                if 'Returns' in sections:
+                    ret = _parse_return_section(sections['Returns'])
+                    if ret:
+                        desc = ret.desc
+
+            result.append(AttrDocString(name=name, type=type_str, desc=desc))
 
     return result if result else None
 
@@ -330,35 +379,44 @@ def _validate_args_documented(func: Callable, documented_args: Optional[List[Arg
 
 
 def _get_merged_attributes(docstring: ClassDocString) -> Optional[List[AttrDocString]]:
-    """Merge dataclass fields and docstring attrs into a single attributes list.
+    """Merge dataclass fields, properties, and docstring attrs into a single attributes list.
 
-    Attrs take precedence over fields for entries with the same name.
+    Attrs take precedence over both fields and props for entries with the same name.
+    Fields come first, then props not already in fields, then attrs-only entries.
 
     Args:
-        docstring: The class docstring containing fields and attrs
+        docstring: The class docstring containing fields, props, and attrs
 
     Returns:
         Merged list of AttrDocString, or None if empty
     """
-    if not docstring.fields and not docstring.attrs:
+    # Build ordered list of all introspected items (fields then props)
+    introspected: List[AttrDocString] = []
+    if docstring.fields:
+        introspected.extend(docstring.fields)
+    if docstring.props:
+        seen = {f.name for f in introspected}
+        introspected.extend(p for p in docstring.props if p.name not in seen)
+
+    if not introspected and not docstring.attrs:
         return None
 
-    if not docstring.fields:
+    if not introspected:
         return docstring.attrs
 
     if not docstring.attrs:
-        return docstring.fields
+        return introspected
 
-    # Start with fields as base, then let attrs override by name
-    merged = {f.name: f for f in docstring.fields}
+    # attrs take precedence by name over introspected items
+    merged = {item.name: item for item in introspected}
     for attr in docstring.attrs:
         merged[attr.name] = attr
 
-    # Preserve field order, appending any attrs-only entries at the end
-    field_names = [f.name for f in docstring.fields]
-    result = [merged[name] for name in field_names if name in merged]
+    # Preserve introspected order, appending attrs-only entries at the end
+    introspected_names = [item.name for item in introspected]
+    result = [merged[name] for name in introspected_names if name in merged]
     for attr in docstring.attrs:
-        if attr.name not in field_names:
+        if attr.name not in {item.name for item in introspected}:
             result.append(attr)
 
     return result if result else None
