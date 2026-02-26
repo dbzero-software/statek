@@ -103,6 +103,5 @@ class TestTemporalExtends:
         assert "Chained extension that takes str" in result
 
         # Base function should also report the complement's return type
-        # Note: dbzero wraps the class name with "Memo_" prefix
         result = format_callable_decl(base_simple_func)
-        assert result.startswith("def base_simple_func(data: Memo_SimpleData) -> int")
+        assert result.startswith("def base_simple_func(data: SimpleData) -> int")
