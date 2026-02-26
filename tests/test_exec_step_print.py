@@ -26,11 +26,11 @@ class TestExecStepPrint:
         return job_factory(job_params=DEFAULT_JOB_PARAMS)
 
     @pytest.mark.asyncio
-    async def test_print_string_uses_statek_format(self, job_factory):
-        """print() quotes strings the same way statek_print does."""
+    async def test_print_string_outputs_raw(self, job_factory):
+        """print() outputs strings as-is, without wrapping quotes."""
         job = self._make_job(job_factory)
         await exec_step('print("hello")', job)
-        assert job.py_env.console[0] == '"hello"'
+        assert job.py_env.console[0] == 'hello'
 
     @pytest.mark.asyncio
     async def test_print_object_uses_llm_repr(self, job_factory):

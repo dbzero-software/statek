@@ -4,6 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 from statek.settings import StatekSettings, get_provider_settings
+from statek.docstring import ACL_Item, Statek_ACL
 
 
 def test_statek_settings_parses_environment_variables():
@@ -176,3 +177,31 @@ def test_get_xml_box_tags_from_environment_variables():
     assert settings.xml_box_example == 'env_example_tag'
     tags = settings.get_xml_box_tags()
     assert tags == {"console": "env_console_tag", "example": "env_example_tag"}
+
+
+def test_default_acl_returns_deny_statek_acl_by_default():
+    """Test that default_acl property returns a DENY Statek_ACL by default."""
+    settings = StatekSettings()
+    acl = settings.default_acl
+    assert isinstance(acl, Statek_ACL)
+    assert acl.acl == [ACL_Item(access=False, name="", is_prefix=True, scope=[])]
+
+
+def test_default_acl_returns_grant_statek_acl_when_configured():
+    """Test that default_acl property returns a GRANT Statek_ACL when set to GRANT."""
+    settings = StatekSettings(default_acl_str="GRANT")
+    acl = settings.default_acl
+    assert isinstance(acl, Statek_ACL)
+    assert acl.acl == [ACL_Item(access=True, name="", is_prefix=True, scope=[])]
+
+
+def test_default_acl_loaded_from_environment_variable():
+    """Test that STATEK_DEFAULT_ACL env var configures the default_acl property."""
+    os.environ['STATEK_DEFAULT_ACL'] = 'GRANT'
+    try:
+        settings = StatekSettings()
+    finally:
+        del os.environ['STATEK_DEFAULT_ACL']
+    acl = settings.default_acl
+    assert isinstance(acl, Statek_ACL)
+    assert acl.acl == [ACL_Item(access=True, name="", is_prefix=True, scope=[])]

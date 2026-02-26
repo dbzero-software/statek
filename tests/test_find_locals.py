@@ -1,6 +1,11 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable
-from statek.utils import find_locals
+from statek.utils import find_locals, get_current_agent, get_current_agent_name
 from statek.system import inject_context
+
+
+# Module-level class used for clean class-name assertions
+class _FakeAgentClass:
+    pass
 
 
 class TestFindLocals:
@@ -148,3 +153,61 @@ class TestFindLocals:
 
         assert 10 in results  # x from local scope
         assert 42 in results  # context_var from __local_context
+
+
+class TestGetCurrentAgent:
+    """Tests for get_current_agent() helper."""
+
+    def test_returns_none_without_context(self):
+        """get_current_agent returns None when no _STATEK_CTX is available."""
+        assert get_current_agent() is None
+
+    def test_returns_agent_via_local_context(self):
+        """get_current_agent retrieves the agent object from _STATEK_CTX."""
+        mock_agent = object()
+        ctx = {"agent": mock_agent}
+
+        def fn(**kwargs):  # pylint: disable=unused-argument
+            return get_current_agent()
+
+        result = inject_context(fn, {"_STATEK_CTX": ctx})()
+        assert result is mock_agent
+
+    def test_returns_none_when_ctx_has_no_agent_key(self):
+        """get_current_agent returns None when _STATEK_CTX exists but has no 'agent' key."""
+        ctx = {}
+
+        def fn(**kwargs):  # pylint: disable=unused-argument
+            return get_current_agent()
+
+        result = inject_context(fn, {"_STATEK_CTX": ctx})()
+        assert result is None
+
+
+class TestGetCurrentAgentName:
+    """Tests for get_current_agent_name() helper."""
+
+    def test_returns_none_without_context(self):
+        """get_current_agent_name returns None when no _STATEK_CTX is available."""
+        assert get_current_agent_name() is None
+
+    def test_returns_class_name_via_local_context(self):
+        """get_current_agent_name returns the class name without module qualifiers."""
+        agent = _FakeAgentClass()
+        ctx = {"agent": agent}
+
+        def fn(**kwargs):  # pylint: disable=unused-argument
+            return get_current_agent_name()
+
+        result = inject_context(fn, {"_STATEK_CTX": ctx})()
+        assert result == "_FakeAgentClass"
+
+    def test_returns_none_when_no_agent_in_ctx(self):
+        """get_current_agent_name returns None when _STATEK_CTX has no agent."""
+        ctx = {}
+
+        def fn(**kwargs):  # pylint: disable=unused-argument
+            return get_current_agent_name()
+
+        result = inject_context(fn, {"_STATEK_CTX": ctx})()
+        assert result is None

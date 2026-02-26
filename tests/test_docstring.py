@@ -1,4 +1,4 @@
-"""Tests for docstring parsing utilities."""
+"""Tests for docstring parsing utilities."""  # pylint: disable=too-many-lines
 
 import math
 from dataclasses import dataclass, field
@@ -829,3 +829,242 @@ class TestParseClassStatekACL:
         assert result.statek_acl is None
         assert result.attrs is not None
         assert len(result.attrs) == 3
+
+
+class TestStatekACLHasAccess:
+    """Test cases for Statek_ACL.has_access."""
+
+    def test_empty_acl_denies_by_default(self):
+        """Empty ACL returns False (default deny)."""
+        acl = Statek_ACL(acl=[])
+        assert acl.has_access("any_resource") is False
+
+    def test_grant_all_grants_any_resource(self):
+        """+* grants access to any resource."""
+        acl = parse_statek_acl("+*")
+        assert acl.has_access("any_resource") is True
+
+    def test_deny_all_denies_any_resource(self):
+        """-* denies access to any resource."""
+        acl = parse_statek_acl("-*")
+        assert acl.has_access("any_resource") is False
+
+    def test_exact_match_grant(self):
+        """Exact name grant matches only that name."""
+        acl = parse_statek_acl("+get_slots")
+        assert acl.has_access("get_slots") is True
+        assert acl.has_access("other") is False
+
+    def test_exact_match_deny(self):
+        """Exact name deny matches only that name."""
+        acl = parse_statek_acl("+*\n-get_slots")
+        assert acl.has_access("get_slots") is False
+
+    def test_prefix_match_grant(self):
+        """Prefix pattern grants names starting with the prefix."""
+        acl = parse_statek_acl("+read_*")
+        assert acl.has_access("read_data") is True
+        assert acl.has_access("write_data") is False
+
+    def test_prefix_match_deny(self):
+        """Prefix pattern deny covers all names with that prefix."""
+        acl = parse_statek_acl("+*\n-update_*")
+        assert acl.has_access("update_slot") is False
+        assert acl.has_access("read_slot") is True
+
+    def test_last_matching_rule_wins(self):
+        """Later rules override earlier ones (last match wins)."""
+        acl = parse_statek_acl("+*\n-get_slots\n+get_slots")
+        assert acl.has_access("get_slots") is True
+
+    def test_scoped_rule_applies_when_agent_matches(self):
+        """Scoped rule applies when the agent is in the scope list."""
+        acl = parse_statek_acl("+*\n-update_*: MessageDispatcher")
+        assert acl.has_access("update_slot", agent="MessageDispatcher") is False
+
+    def test_scoped_rule_skipped_when_agent_not_in_scope(self):
+        """Scoped rule is skipped when the agent is not in the scope list."""
+        acl = parse_statek_acl("+*\n-update_*: MessageDispatcher")
+        assert acl.has_access("update_slot", agent="Researcher") is True
+
+    def test_no_agent_skips_scoped_rules(self):
+        """Without an agent, scoped rules are not applied."""
+        acl = parse_statek_acl("+*\n-update_*: MessageDispatcher")
+        assert acl.has_access("update_slot") is True
+
+    def test_full_spec_example_no_agent(self):
+        """Full spec example without agent: general rules only."""
+        acl = parse_statek_acl("+*\n-get_slots\n-update_*: MessageDispatcher")
+        assert acl.has_access("read_data") is True
+        assert acl.has_access("get_slots") is False
+        assert acl.has_access("update_slot") is True
+
+    def test_full_spec_example_with_agent(self):
+        """Full spec example with MessageDispatcher agent."""
+        acl = parse_statek_acl("+*\n-get_slots\n-update_*: MessageDispatcher")
+        assert acl.has_access("read_data", agent="MessageDispatcher") is True
+        assert acl.has_access("get_slots", agent="MessageDispatcher") is False
+        assert acl.has_access("update_slot", agent="MessageDispatcher") is False
+
+    def test_multiple_scopes_any_match_applies(self):
+        """Rule with multiple scopes applies when agent matches any of them."""
+        acl = parse_statek_acl("+*\n-secret: AgentA, AgentB")
+        assert acl.has_access("secret", agent="AgentA") is False
+        assert acl.has_access("secret", agent="AgentB") is False
+        assert acl.has_access("secret", agent="AgentC") is True
+
+
+# --- Fixtures for format_docstring ACL tests ---
+
+class FieldAccessClass:  # pylint: disable=too-few-public-methods
+    """A class with field access control.
+
+    Attributes:
+        public_field (str): Public field.
+        secret_field (str): Secret field.
+
+    STATEK-ACL:
+        +*
+        -secret_field
+    """
+
+
+class ScopedFieldClass:  # pylint: disable=too-few-public-methods
+    """A class with scoped field access control.
+
+    Attributes:
+        public_field (str): Public field.
+        restricted_field (str): Restricted to specific agents.
+
+    STATEK-ACL:
+        +*
+        -restricted_field: RestrictedAgent
+    """
+
+
+class MethodAccessClass:  # pylint: disable=too-few-public-methods
+    """A class with method access control.
+
+    STATEK-ACL:
+        +*
+        -hidden_method
+    """
+
+    def visible_method(self, x: int) -> int:
+        """A visible method.
+
+        Args:
+            x (int): Input value.
+
+        Returns:
+            int: Output value.
+        """
+        return x
+
+    def hidden_method(self, x: int) -> int:
+        """A hidden method.
+
+        Args:
+            x (int): Input value.
+
+        Returns:
+            int: Output value.
+        """
+        return x
+
+
+class TestFormatDocstringACL:
+    """Test ACL-based filtering in format_docstring."""
+
+    def test_class_acl_excludes_denied_field(self):
+        """Fields denied by class STATEK-ACL are excluded from output."""
+        doc = parse_docstring(FieldAccessClass)
+        result = format_docstring(doc, brief=False, py_syntax=True)
+
+        assert "secret_field" not in result
+
+    def test_class_acl_includes_granted_field(self):
+        """Fields granted by class STATEK-ACL are included in output."""
+        doc = parse_docstring(FieldAccessClass)
+        result = format_docstring(doc, brief=False, py_syntax=True)
+
+        assert "public_field" in result
+
+    def test_class_acl_excludes_denied_method(self):
+        """Methods denied by STATEK-ACL are excluded from output."""
+        doc = parse_docstring(MethodAccessClass)
+        result = format_docstring(doc, brief=False, py_syntax=True)
+
+        assert "visible_method" in result
+        assert "hidden_method" not in result
+
+    def test_no_acl_no_default_shows_all_fields(self):
+        """Without ACL and no default_acl, all fields are shown."""
+        doc = parse_docstring(NoAclClass)
+        result = format_docstring(doc, brief=False, py_syntax=True)
+
+        assert "value" in result
+
+    def test_default_acl_deny_all_hides_all_fields(self):
+        """default_acl DENY-all hides all fields when no class ACL defined."""
+        deny_all = Statek_ACL(acl=[ACL_Item(access=False, name="", is_prefix=True, scope=[])])
+        doc = parse_docstring(NoAclClass)
+        result = format_docstring(doc, brief=False, py_syntax=True, default_acl=deny_all)
+
+        assert "Attributes:" not in result
+        assert "value" not in result
+
+    def test_default_acl_grant_all_shows_all_fields(self):
+        """default_acl GRANT-all shows all fields when no class ACL defined."""
+        grant_all = Statek_ACL(acl=[ACL_Item(access=True, name="", is_prefix=True, scope=[])])
+        doc = parse_docstring(NoAclClass)
+        result = format_docstring(doc, brief=False, py_syntax=True, default_acl=grant_all)
+
+        assert "value" in result
+
+    def test_class_acl_overrides_default_acl(self):
+        """Class-level STATEK-ACL takes precedence over default_acl."""
+        grant_all = Statek_ACL(acl=[ACL_Item(access=True, name="", is_prefix=True, scope=[])])
+        doc = parse_docstring(FieldAccessClass)
+        result = format_docstring(doc, brief=False, py_syntax=True, default_acl=grant_all)
+
+        assert "public_field" in result
+        assert "secret_field" not in result
+
+    def test_agent_scoped_deny_applies_for_matching_agent(self):
+        """Scoped deny applies when the agent matches."""
+        doc = parse_docstring(ScopedFieldClass)
+        result = format_docstring(doc, brief=False, py_syntax=True, agent="RestrictedAgent")
+
+        assert "public_field" in result
+        assert "restricted_field" not in result
+
+    def test_agent_scoped_deny_skipped_for_other_agent(self):
+        """Scoped deny is skipped when the agent does not match."""
+        doc = parse_docstring(ScopedFieldClass)
+        result = format_docstring(doc, brief=False, py_syntax=True, agent="OtherAgent")
+
+        assert "public_field" in result
+        assert "restricted_field" in result
+
+    def test_brief_mode_no_fields_regardless_of_acl(self):
+        """Brief mode never shows attributes; ACL does not change that."""
+        deny_all = Statek_ACL(acl=[ACL_Item(access=False, name="", is_prefix=True, scope=[])])
+        doc = parse_docstring(FieldAccessClass)
+        result = format_docstring(doc, brief=True, py_syntax=True, default_acl=deny_all)
+
+        assert "Attributes:" not in result
+
+    def test_attributes_header_absent_when_all_denied(self):
+        """Attributes: header is omitted when every field is denied."""
+        doc = parse_docstring(FieldAccessClass)
+        result = format_docstring(doc, brief=False, py_syntax=True)
+
+        # secret_field is denied, public_field is granted → header still present
+        assert "Attributes:" in result
+
+        # Deny everything with a custom ACL
+        deny_all = Statek_ACL(acl=[ACL_Item(access=False, name="", is_prefix=True, scope=[])])
+        doc2 = parse_docstring(NoAclClass)
+        result2 = format_docstring(doc2, brief=False, py_syntax=True, default_acl=deny_all)
+        assert "Attributes:" not in result2

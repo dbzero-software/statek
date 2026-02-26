@@ -578,6 +578,30 @@ def prompt_append_console(  # pylint: disable=too-many-arguments,too-many-positi
     return result
 
 
+def get_current_agent():
+    """Retrieve the Agent from the current execution context (_STATEK_CTX).
+
+    Returns:
+        The Agent object from _STATEK_CTX, or None if not available.
+    """
+    ctx = next(iter(find_locals(var_name='_STATEK_CTX')), None)
+    if not isinstance(ctx, dict):
+        return None
+    return ctx.get('agent')
+
+
+def get_current_agent_name() -> Optional[str]:
+    """Get the current agent's type name without module qualifiers.
+
+    Returns:
+        The agent's type name (e.g. 'MessageDispatcher'), or None if not available.
+    """
+    agent = get_current_agent()
+    if agent is None:
+        return None
+    return _get_class_name(agent)
+
+
 def find_locals(var_type: Optional[Type] = None,
                 var_name: Optional[str] = None) -> Iterable[Any]:
     """

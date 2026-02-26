@@ -1,5 +1,6 @@
 """Tests for Agent class."""
 
+from unittest.mock import patch
 from statek.agents.agent import Agent
 from tests.conftest import clock, docs, exit_tool
 
@@ -87,3 +88,15 @@ class TestAgent:
         # detailed_tools uses py_syntax=True
         assert "def clock()" in agent.system_prompt()
         assert '"""Get the current time.' in agent.system_prompt()
+
+    def test_format_tools_passes_agent_name(self, db0_fixture):  # pylint: disable=unused-argument
+        """_format_tools passes the agent's type name to format_docstring."""
+        agent = Agent(role="test", _system_prompt="{tools}", _tools=[clock])
+
+        with patch('statek.agents.agent.format_docstring', wraps=__import__(
+                'statek.docstring', fromlist=['format_docstring']).format_docstring) as mock_fmt:
+            agent._format_tools(brief=True, py_syntax=False)  # pylint: disable=protected-access
+
+        assert mock_fmt.called
+        _, call_kwargs = mock_fmt.call_args
+        assert call_kwargs.get('agent') == 'Agent'

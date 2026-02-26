@@ -103,9 +103,20 @@ class _ResilientTransformer(ast.NodeTransformer):
         return node
 
 """Execute a single AST node with custom print function."""
+def _fmt_print_arg(arg) -> str:
+    """Format a single print() argument.
+
+    Strings are emitted as-is (matching Python's built-in print behaviour).
+    All other types use the LLM-friendly representation.
+    """
+    if isinstance(arg, str):
+        return arg
+    return format_default_llm_repr(arg)
+
+
 def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
-    output = sep.join(format_default_llm_repr(arg) for arg in args) + end
+    output = sep.join(_fmt_print_arg(arg) for arg in args) + end
     job.console_append(output.rstrip('\n'))
 
 def custom_exit(job, status=None):
@@ -152,16 +163,23 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['exit'] = custom_exit_fn
     global_context['_smart_call'] = _smart_call
     global_context['_wrap_param'] = _wrap_param
-    
+
+    # Inject _STATEK_CTX with job-level context (agent, etc.)
+    statek_ctx = {}
+    if job.job_def.agent is not None:
+        statek_ctx['agent'] = job.job_def.agent
+    local_context['_STATEK_CTX'] = statek_ctx
+    global_context['_STATEK_CTX'] = statek_ctx
+
     try:
         yield custom_print_fn, custom_exit_fn
     finally:
         # Restore original built-ins
         builtins.print = original_print
         builtins.exit = original_exit
-        
+
         # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', '_wrap_param']:
+        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_STATEK_CTX']:
             if key in local_context:
                 del local_context[key]
 
@@ -310,7 +328,7 @@ async def exec_tool(call_spec: CallSpec, job: Job) -> str:
     private_console = []
 
     def _private_print(*args, sep=' ', end='\n', **kwargs):
-        output = sep.join(format_default_llm_repr(arg) for arg in args) + end
+        output = sep.join(_fmt_print_arg(arg) for arg in args) + end
         private_console.append(output.rstrip('\n'))
 
     # Build global and local contexts — mirrors exec_step
