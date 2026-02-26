@@ -196,6 +196,19 @@ class TestDocs:
         assert "kwargs" not in captured.out
 
 
+    def test_docs_with_string_raises_name_error(self):
+        """Test docs with a string raises NameError (likely unresolved name)."""
+        with pytest.raises(NameError) as exc_info:
+            docs("unknown_tool")
+        assert "unknown_tool" in str(exc_info.value)
+
+    def test_docs_with_int_instance(self, capsys):
+        """Test docs with an int instance shows int class docs."""
+        docs(42)
+        captured = capsys.readouterr()
+        assert "int" in captured.out
+
+
 class TestBrief:
     """Test cases for brief function."""
 
@@ -259,6 +272,13 @@ class TestBrief:
         assert "add(a, b)" in captured.out
         assert "Add two numbers." in captured.out
         assert "def " not in captured.out
+
+
+    def test_brief_with_string_raises_name_error(self):
+        """Test brief with a string raises NameError (likely unresolved name)."""
+        with pytest.raises(NameError) as exc_info:
+            brief("unknown_tool")
+        assert "unknown_tool" in str(exc_info.value)
 
 
 class TestCreateTool:
