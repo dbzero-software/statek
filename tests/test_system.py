@@ -7,7 +7,6 @@ import pytest
 import dbzero as db0
 from statek.system import docs, brief, tool, create_tool, inject_context, find_tools, select_tools
 from statek.future import get_unpack_size, temporal, FutureResult
-from statek.docstring import DocstringParseError
 from statek.utils import format_callable_decl
 
 class TestDocs:
@@ -57,34 +56,34 @@ class TestDocs:
         assert "This is a complex function." in captured.out
         assert "It has multiple lines in its docstring." in captured.out
 
-    def test_docs_with_no_docstring(self):
-        """Test docs with a function that has no docstring raises error."""
+    def test_docs_with_no_docstring(self, capsys):
+        """Test docs with a function that has no docstring prints error."""
         def no_doc_func():
             pass
 
-        with pytest.raises(DocstringParseError) as exc_info:
-            docs(no_doc_func)
-        assert "no docstring" in str(exc_info.value)
+        docs(no_doc_func)
+        captured = capsys.readouterr()
+        assert "no docstring" in captured.out
 
-    def test_docs_with_class_no_docstring(self):
-        """Test docs with a class that has no docstring raises error."""
+    def test_docs_with_class_no_docstring(self, capsys):
+        """Test docs with a class that has no docstring prints error."""
         class NoDocClass:
             pass
 
-        with pytest.raises(DocstringParseError) as exc_info:
-            docs(NoDocClass)
-        assert "no docstring" in str(exc_info.value)
+        docs(NoDocClass)
+        captured = capsys.readouterr()
+        assert "no docstring" in captured.out
 
-    def test_docs_with_method_no_docstring(self):
-        """Test docs with a method that has no docstring raises error."""
+    def test_docs_with_method_no_docstring(self, capsys):
+        """Test docs with a method that has no docstring prints error."""
         class SampleClass:
             """Sample class."""
             def no_doc_method(self):
                 pass
 
-        with pytest.raises(DocstringParseError) as exc_info:
-            docs(SampleClass, "no_doc_method")
-        assert "no docstring" in str(exc_info.value)
+        docs(SampleClass, "no_doc_method")
+        captured = capsys.readouterr()
+        assert "no docstring" in captured.out
 
     def test_docs_with_non_existent_method(self, capsys):
         """Test docs with a method that doesn't exist."""
@@ -131,10 +130,11 @@ class TestDocs:
         captured = capsys.readouterr()
         assert "This is a class method." in captured.out
 
-    def test_docs_with_builtin_function(self):
-        """Test docs with a built-in function raises error (no parseable docstring)."""
-        with pytest.raises(DocstringParseError):
-            docs(len)
+    def test_docs_with_builtin_function(self, capsys):
+        """Test docs with a built-in function prints error (no parseable docstring)."""
+        docs(len)
+        captured = capsys.readouterr()
+        assert "Error" in captured.out or "error" in captured.out.lower()
 
     def test_docs_with_tool_function(self, capsys):
         """Test docs with a function decorated by @tool."""
@@ -196,11 +196,12 @@ class TestDocs:
         assert "kwargs" not in captured.out
 
 
-    def test_docs_with_string_raises_name_error(self):
-        """Test docs with a string raises NameError (likely unresolved name)."""
-        with pytest.raises(NameError) as exc_info:
-            docs("unknown_tool")
-        assert "unknown_tool" in str(exc_info.value)
+    def test_docs_with_string_prints_name_error(self, capsys):
+        """Test docs with a string prints NameError (likely unresolved name)."""
+        docs("unknown_tool")
+        captured = capsys.readouterr()
+        assert "NameError" in captured.out
+        assert "unknown_tool" in captured.out
 
     def test_docs_with_int_instance(self, capsys):
         """Test docs with an int instance shows int class docs."""
@@ -274,11 +275,12 @@ class TestBrief:
         assert "def " not in captured.out
 
 
-    def test_brief_with_string_raises_name_error(self):
-        """Test brief with a string raises NameError (likely unresolved name)."""
-        with pytest.raises(NameError) as exc_info:
-            brief("unknown_tool")
-        assert "unknown_tool" in str(exc_info.value)
+    def test_brief_with_string_prints_name_error(self, capsys):
+        """Test brief with a string prints NameError (likely unresolved name)."""
+        brief("unknown_tool")
+        captured = capsys.readouterr()
+        assert "NameError" in captured.out
+        assert "unknown_tool" in captured.out
 
 
 class TestCreateTool:

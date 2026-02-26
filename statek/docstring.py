@@ -1,13 +1,15 @@
 """Docstring parsing utilities for statek package."""
 
+import dataclasses
 import inspect
 import re
 from collections import namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as dataclass_fields
 from typing import Callable, List, Optional, Any, get_type_hints, Union
 
 
 # Docstring parsing structures
+ACL_Item = namedtuple("ACL_Item", ["access", "name", "is_prefix", "scope"])
 ArgDocString = namedtuple("ArgDocString", ["name", "type", "desc"])
 AttrDocString = namedtuple("AttrDocString", ["name", "type", "desc"])
 RetDocString = namedtuple("RetDocString", ["type", "desc"])
@@ -34,7 +36,9 @@ class ClassDocString:
     name: str
     brief_desc: str
     full_desc: str
+    fields: Optional[List[AttrDocString]] = None
     attrs: Optional[List[AttrDocString]] = None
+    statek_acl: Optional['Statek_ACL'] = None
 
 
 class DocstringParseError(Exception):
@@ -74,13 +78,48 @@ def _parse_class_docstring(cls: type) -> ClassDocString:
     if "Attributes" in sections:
         attrs = _parse_typed_items(sections["Attributes"], AttrDocString)
 
+    fields = _extract_dataclass_fields(cls)
+
+    statek_acl = None
+    if "STATEK-ACL" in sections:
+        statek_acl = parse_statek_acl(sections["STATEK-ACL"])
+
     return ClassDocString(
         source=cls,
         name=cls.__name__,
         brief_desc=brief_desc,
         full_desc=full_desc,
-        attrs=attrs
+        fields=fields,
+        attrs=attrs,
+        statek_acl=statek_acl
     )
+
+
+def _extract_dataclass_fields(cls: type) -> Optional[List[AttrDocString]]:
+    """Extract fields from a dataclass (including db0.memo-wrapped dataclasses).
+
+    Uses dataclasses.fields() for field names/metadata and get_type_hints()
+    for resolved type information.
+
+    Returns:
+        List of AttrDocString for each field, or None if cls is not a dataclass.
+    """
+    if not dataclasses.is_dataclass(cls):
+        return None
+
+    try:
+        hints = get_type_hints(cls)
+    except Exception:  # pylint: disable=broad-exception-caught
+        hints = {}
+
+    result = []
+    for f in dataclass_fields(cls):
+        type_hint = hints.get(f.name)
+        type_str = _format_type_hint(type_hint) if type_hint else None
+        doc = f.metadata.get("doc") if f.metadata else None
+        result.append(AttrDocString(name=f.name, type=type_str, desc=doc))
+
+    return result if result else None
 
 
 def _parse_func_docstring(func: Callable) -> FuncDocString:
@@ -140,7 +179,8 @@ def _parse_docstring_sections(docstring: str) -> tuple[str, str, dict]:  # pylin
 
     # Section headers we recognize
     section_headers = {'Args', 'Arguments', 'Attributes', 'Returns', 'Return',
-                       'Raises', 'Raise', 'Example', 'Examples', 'Note', 'Notes'}
+                       'Raises', 'Raise', 'Example', 'Examples', 'Note', 'Notes',
+                       'STATEK-ACL'}
 
     # Find section boundaries
     section_starts = []
@@ -289,14 +329,51 @@ def _validate_args_documented(func: Callable, documented_args: Optional[List[Arg
         )
 
 
+def _get_merged_attributes(docstring: ClassDocString) -> Optional[List[AttrDocString]]:
+    """Merge dataclass fields and docstring attrs into a single attributes list.
+
+    Attrs take precedence over fields for entries with the same name.
+
+    Args:
+        docstring: The class docstring containing fields and attrs
+
+    Returns:
+        Merged list of AttrDocString, or None if empty
+    """
+    if not docstring.fields and not docstring.attrs:
+        return None
+
+    if not docstring.fields:
+        return docstring.attrs
+
+    if not docstring.attrs:
+        return docstring.fields
+
+    # Start with fields as base, then let attrs override by name
+    merged = {f.name: f for f in docstring.fields}
+    for attr in docstring.attrs:
+        merged[attr.name] = attr
+
+    # Preserve field order, appending any attrs-only entries at the end
+    field_names = [f.name for f in docstring.fields]
+    result = [merged[name] for name in field_names if name in merged]
+    for attr in docstring.attrs:
+        if attr.name not in field_names:
+            result.append(attr)
+
+    return result if result else None
+
+
 def format_docstring(docstring: FuncDocString | ClassDocString,
-                     brief: bool = False, py_syntax: bool = True) -> str:
+                     brief: bool = False, py_syntax: bool = True,
+                     agent: str = None) -> str:  # pylint: disable=unused-argument
     """Format a parsed docstring into a string representation.
 
     Args:
         docstring: The structured docstring object
         brief: Flag enabling brief-only formatting
         py_syntax: Flag requesting output using Python syntax
+        agent: Agent identifier for ACL (reserved for future use)
 
     Returns:
         str: The formatted string representation
@@ -404,11 +481,12 @@ def _format_class_py_syntax(docstring: ClassDocString, brief: bool) -> str:
         if docstring.full_desc:
             doc_lines.append(docstring.full_desc)
 
-        # Attributes section
-        if docstring.attrs:
+        # Attributes section (merged from fields and attrs)
+        merged_attrs = _get_merged_attributes(docstring)
+        if merged_attrs:
             doc_lines.append("")
             doc_lines.append("Attributes:")
-            for attr in docstring.attrs:
+            for attr in merged_attrs:
                 type_str = f" ({attr.type})" if attr.type else ""
                 doc_lines.append(f"    {attr.name}{type_str}: {attr.desc}")
 
@@ -629,3 +707,58 @@ def _format_default(default) -> str:
     if isinstance(default, str):
         return f'"{default}"'
     return repr(default)
+
+
+@dataclass
+class Statek_ACL:
+    """Parsed STATEK Access Control list."""
+    acl: List[ACL_Item]
+
+
+def parse_statek_acl(statek_acl: str) -> Statek_ACL:
+    """Parse a STATEK-ACL definition string into a structured Statek_ACL.
+
+    Args:
+        statek_acl: The ACL definition string, optionally including
+            the "STATEK-ACL:" header line
+
+    Returns:
+        Statek_ACL: The parsed access control list
+    """
+    items = []
+    for line in statek_acl.split('\n'):
+        line = line.strip()
+        if not line or line.startswith("STATEK-ACL"):
+            continue
+
+        # Determine access
+        if line[0] == '+':
+            access = True
+        elif line[0] == '-':
+            access = False
+        else:
+            continue
+
+        rest = line[1:]
+
+        # Split off optional scope after colon
+        scope = []
+        if ':' in rest:
+            name_part, scope_part = rest.split(':', 1)
+            scope = [s.strip() for s in scope_part.split(',') if s.strip()]
+        else:
+            name_part = rest
+
+        name_part = name_part.strip()
+
+        # Handle wildcard / prefix
+        if name_part.endswith('*'):
+            is_prefix = True
+            name = name_part[:-1]
+        else:
+            is_prefix = False
+            name = name_part
+
+        items.append(ACL_Item(access=access, name=name, is_prefix=is_prefix, scope=scope))
+
+    return Statek_ACL(acl=items)
