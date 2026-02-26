@@ -152,16 +152,23 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['exit'] = custom_exit_fn
     global_context['_smart_call'] = _smart_call
     global_context['_wrap_param'] = _wrap_param
-    
+
+    # Inject _STATEK_CTX with job-level context (agent, etc.)
+    statek_ctx = {}
+    if job.job_def.agent is not None:
+        statek_ctx['agent'] = job.job_def.agent
+    local_context['_STATEK_CTX'] = statek_ctx
+    global_context['_STATEK_CTX'] = statek_ctx
+
     try:
         yield custom_print_fn, custom_exit_fn
     finally:
         # Restore original built-ins
         builtins.print = original_print
         builtins.exit = original_exit
-        
+
         # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', '_wrap_param']:
+        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_STATEK_CTX']:
             if key in local_context:
                 del local_context[key]
 

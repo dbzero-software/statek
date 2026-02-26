@@ -366,20 +366,22 @@ def _get_merged_attributes(docstring: ClassDocString) -> Optional[List[AttrDocSt
 
 def format_docstring(docstring: FuncDocString | ClassDocString,
                      brief: bool = False, py_syntax: bool = True,
-                     agent: str = None) -> str:  # pylint: disable=unused-argument
+                     agent: str = None,
+                     default_acl: 'Optional[Statek_ACL]' = None) -> str:
     """Format a parsed docstring into a string representation.
 
     Args:
         docstring: The structured docstring object
         brief: Flag enabling brief-only formatting
         py_syntax: Flag requesting output using Python syntax
-        agent: Agent identifier for ACL (reserved for future use)
+        agent: Agent identifier for ACL resolution
+        default_acl: Fallback ACL when no class-level STATEK-ACL is defined
 
     Returns:
         str: The formatted string representation
     """
     if isinstance(docstring, ClassDocString):
-        return _format_class_docstring(docstring, brief, py_syntax)
+        return _format_class_docstring(docstring, brief, py_syntax, agent, default_acl)
     return _format_func_docstring(docstring, brief, py_syntax)
 
 
@@ -452,10 +454,12 @@ def _format_func_py_syntax(docstring: FuncDocString, sig_str: str, brief: bool) 
     return '\n'.join(lines)
 
 
-def _format_class_docstring(docstring: ClassDocString, brief: bool, py_syntax: bool) -> str:
+def _format_class_docstring(docstring: ClassDocString, brief: bool, py_syntax: bool,
+                             agent: str = None,
+                             default_acl: 'Optional[Statek_ACL]' = None) -> str:
     """Format a class docstring."""
     if py_syntax:
-        return _format_class_py_syntax(docstring, brief)
+        return _format_class_py_syntax(docstring, brief, agent, default_acl)
     return _format_class_plain(docstring, brief)
 
 
@@ -467,8 +471,12 @@ def _format_class_plain(docstring: ClassDocString, brief: bool) -> str:  # pylin
     return '\n'.join(lines)
 
 
-def _format_class_py_syntax(docstring: ClassDocString, brief: bool) -> str:
+def _format_class_py_syntax(docstring: ClassDocString, brief: bool,  # pylint: disable=too-many-locals,too-many-branches
+                             agent: str = None,
+                             default_acl: 'Optional[Statek_ACL]' = None) -> str:
     """Format class docstring in Python syntax."""
+    effective_acl = docstring.statek_acl or default_acl
+
     lines = [f"class {docstring.name}:"]
 
     # Build docstring content
@@ -484,11 +492,15 @@ def _format_class_py_syntax(docstring: ClassDocString, brief: bool) -> str:
         # Attributes section (merged from fields and attrs)
         merged_attrs = _get_merged_attributes(docstring)
         if merged_attrs:
-            doc_lines.append("")
-            doc_lines.append("Attributes:")
-            for attr in merged_attrs:
-                type_str = f" ({attr.type})" if attr.type else ""
-                doc_lines.append(f"    {attr.name}{type_str}: {attr.desc}")
+            if effective_acl is not None:
+                merged_attrs = [a for a in merged_attrs
+                                if effective_acl.has_access(a.name, agent)]
+            if merged_attrs:
+                doc_lines.append("")
+                doc_lines.append("Attributes:")
+                for attr in merged_attrs:
+                    type_str = f" ({attr.type})" if attr.type else ""
+                    doc_lines.append(f"    {attr.name}{type_str}: {attr.desc}")
 
     # Format as Python docstring
     lines.append('    """' + doc_lines[0])
@@ -502,6 +514,9 @@ def _format_class_py_syntax(docstring: ClassDocString, brief: bool) -> str:
     # In detailed mode, add member functions
     if not brief:
         member_funcs = _get_member_functions(docstring.source)
+        if effective_acl is not None:
+            member_funcs = [f for f in member_funcs
+                            if effective_acl.has_access(f.__name__, agent)]
         for func in member_funcs:
             try:
                 func_doc = parse_docstring(func)
@@ -713,6 +728,34 @@ def _format_default(default) -> str:
 class Statek_ACL:
     """Parsed STATEK Access Control list."""
     acl: List[ACL_Item]
+
+    def has_access(self, resource_name: str, agent: str = None) -> bool:
+        """Determine if access to a resource is granted.
+
+        Iterates the entire ACL; the last matching rule wins. Rules with a
+        scope list only match when the given agent is in that list. Without
+        an agent, scoped rules are skipped entirely. The default is False.
+
+        Args:
+            resource_name (str): The resource (field, method) name to check.
+            agent (str): Optional agent name; None matches general rules only.
+
+        Returns:
+            bool: True if access is granted, False if denied.
+        """
+        resolved = False
+        for item in self.acl:
+            if item.scope:
+                if agent is None or agent not in item.scope:
+                    continue
+            if item.is_prefix:
+                if not resource_name.startswith(item.name):
+                    continue
+            else:
+                if resource_name != item.name:
+                    continue
+            resolved = item.access
+        return resolved
 
 
 def parse_statek_acl(statek_acl: str) -> Statek_ACL:

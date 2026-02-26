@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from dbzero import enum
 
 from statek.prompt_config import PromptDef, load_prompt_files
+from statek.docstring import ACL_Item, Statek_ACL
 
 
 @enum(values=["CONSOLE", "MARKDOWN"])
@@ -80,10 +81,12 @@ class StatekSettings(BaseSettings):
     xml_box_example: Optional[str] = None
     """Log level for statek logger (DEBUG, INFO, WARNING, ERROR, CRITICAL)"""
     log_level: str = "WARNING"
+    """The default ACL mode string: GRANT or DENY (loaded from STATEK_DEFAULT_ACL)"""
+    default_acl_str: str = "DENY"
 
     model_config = SettingsConfigDict(extra='ignore')
 
-    def __init__(self, **data):
+    def __init__(self, **data):  # pylint: disable=too-many-branches
         """Initialize StatekSettings by parsing environment variables.
 
         Automatically detects provider-prefixed environment variables and
@@ -134,6 +137,10 @@ class StatekSettings(BaseSettings):
         if env_val is not None:
             self.log_level = env_val.upper()
         set_log_level(self.log_level)
+
+        env_val = os.environ.get('STATEK_DEFAULT_ACL')
+        if env_val is not None and 'default_acl_str' not in data:
+            self.default_acl_str = env_val.upper()
 
         if not self.prompt_defs:
             self.prompt_defs = (
@@ -229,6 +236,16 @@ class StatekSettings(BaseSettings):
         if self.xml_box_example:
             tags["example"] = self.xml_box_example
         return tags
+
+    @property
+    def default_acl(self) -> Statek_ACL:
+        """The default ACL: GRANT grants all implicit access, DENY denies it.
+
+        Returns:
+            Statek_ACL with a single wildcard rule matching the configured mode.
+        """
+        access = self.default_acl_str.upper() == "GRANT"
+        return Statek_ACL(acl=[ACL_Item(access=access, name="", is_prefix=True, scope=[])])
 
 
 

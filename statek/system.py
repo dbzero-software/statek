@@ -9,7 +9,7 @@ import nest_asyncio
 import dbzero as db0
 from .future import get_any_future, get_all_future
 from .docstring import parse_docstring, format_docstring
-from .utils import find_locals
+from .utils import find_locals, get_current_agent_name
 
 
 _TOOL_REGISTRY: list[Callable] = []
@@ -317,7 +317,8 @@ def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pyl
 
         # Use format_docstring for all tools (including temporal)
         parsed = parse_docstring(target)
-        formatted = format_docstring(parsed, brief=False, py_syntax=True)
+        formatted = format_docstring(parsed, brief=False, py_syntax=True,
+                                     agent=get_current_agent_name())
         print(formatted)
     except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"{type(e).__name__}: {e}")
@@ -365,7 +366,8 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
             target = target_type
 
         parsed = parse_docstring(target)
-        formatted = format_docstring(parsed, brief=True, py_syntax=False)
+        formatted = format_docstring(parsed, brief=True, py_syntax=False,
+                                     agent=get_current_agent_name())
         print(formatted)
     except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"{type(e).__name__}: {e}")

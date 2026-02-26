@@ -1,13 +1,14 @@
 """Tests for exec_tool function."""
 
 from typing import Any, Callable
+from unittest.mock import patch
 import pytest
 
 from statek.executors.utils import exec_tool
 from statek.utils import CallSpec
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
-from statek.system import tool
+from statek.system import tool, docs as docs_tool, brief as brief_tool
 
 
 # Module-level @tool function (db0 does not allow nested/decorated functions as members)
@@ -252,3 +253,74 @@ class TestExecTool:
         assert "ValueError" in result
         assert "async agent tool error" in result
         assert job.py_env.console is None
+
+
+# Module-level @tool for _STATEK_CTX tests (must be at module level due to db0 constraints)
+@tool
+def _ctx_checker_tool(**kwargs):
+    """Tool that checks if _STATEK_CTX has an 'agent' key."""
+    ctx = kwargs.get('_local_context', {}).get('_STATEK_CTX', {})
+    return 'agent' in ctx
+
+
+class TestExecToolStatekCtx:  # pylint: disable=too-few-public-methods
+    """Tests for _STATEK_CTX injection in exec_tool."""
+
+    @pytest.mark.asyncio
+    async def test_statek_ctx_agent_available_in_exec_tool(self, db0_fixture):  # pylint: disable=unused-argument
+        """_STATEK_CTX with 'agent' key is available to tools via _local_context."""
+        agent_obj = Agent(role="ctx_tool_test", _system_prompt="Test", _tools=[_ctx_checker_tool])
+        job_def = JobDef(agent=agent_obj, job_params=None, warmup_code=None)
+        job = Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+        result = await exec_tool(_call_spec("_ctx_checker_tool"), job)
+
+        assert result == "True"
+
+
+class _SimpleDocClass:
+    """A simple class for docstring testing."""
+
+
+class TestDocsAgentIntegration:
+    """Tests that docs and brief pass the current agent name to format_docstring."""
+
+    def _make_job(self, tools):
+        """Create a minimal job with the given tools."""
+        agent = Agent(role="doc_test_agent", _system_prompt="Test", _tools=tools)
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        return Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+    @pytest.mark.asyncio
+    async def test_docs_passes_agent_type_name_to_format_docstring(self, db0_fixture):  # pylint: disable=unused-argument
+        """docs tool passes current agent's type name as agent= to format_docstring."""
+        job = self._make_job([docs_tool])
+
+        with patch('statek.system.format_docstring', return_value="") as mock_fmt:
+            await exec_tool(_call_spec("docs", kwargs={"what": _SimpleDocClass}), job)
+
+        assert mock_fmt.called
+        _, call_kwargs = mock_fmt.call_args
+        assert call_kwargs.get('agent') == 'Agent'
+
+    @pytest.mark.asyncio
+    async def test_brief_passes_agent_type_name_to_format_docstring(self, db0_fixture):  # pylint: disable=unused-argument
+        """brief tool passes current agent's type name as agent= to format_docstring."""
+        job = self._make_job([brief_tool])
+
+        with patch('statek.system.format_docstring', return_value="") as mock_fmt:
+            await exec_tool(_call_spec("brief", kwargs={"what": _SimpleDocClass}), job)
+
+        assert mock_fmt.called
+        _, call_kwargs = mock_fmt.call_args
+        assert call_kwargs.get('agent') == 'Agent'

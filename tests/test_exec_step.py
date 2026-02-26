@@ -1,4 +1,5 @@
 """Tests for exec_step function."""
+# pylint: disable=too-many-lines
 
 from dataclasses import dataclass
 import pytest
@@ -995,3 +996,28 @@ class TestExecStepWithAsyncTools:
         await exec_step(code, job)
 
         assert job.py_env.local_state.get("b") == "async_result: second"
+
+
+class TestExecStepStatekCtx:
+    """Tests for _STATEK_CTX injection in exec_step execution context."""
+
+    @pytest.mark.asyncio
+    async def test_statek_ctx_available_in_exec_step(self, job_factory):
+        """_STATEK_CTX is accessible as a variable during code execution."""
+        job = job_factory()
+        await exec_step('_ctx = _STATEK_CTX', job)
+        assert job.py_env.local_state.get('_ctx') is not None
+
+    @pytest.mark.asyncio
+    async def test_statek_ctx_agent_is_job_agent(self, job_factory):
+        """_STATEK_CTX['agent'] refers to the job's agent."""
+        job = job_factory()
+        await exec_step('_agent = _STATEK_CTX["agent"]', job)
+        assert job.py_env.local_state.get('_agent') is job.job_def.agent
+
+    @pytest.mark.asyncio
+    async def test_statek_ctx_not_persisted_after_exec_step(self, job_factory):
+        """_STATEK_CTX is not saved to local_state after execution."""
+        job = job_factory()
+        await exec_step('x = 1', job)
+        assert '_STATEK_CTX' not in job.py_env.local_state
