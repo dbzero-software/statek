@@ -214,3 +214,21 @@ def test_flush_parameter():
 def test_mixed_types(capsys):
     statek_print(1, "two", [3])
     assert capsys.readouterr().out == '1 "two" [3]\n'
+
+
+# --- __llm_repr__ with **kwargs receives repeated in lists ---
+
+def test_list_with_llm_repr_kwargs_receives_repeated():
+    """statek_print passes repeated=True to __llm_repr__(**kwargs) for 2nd+ same-type elements."""
+    received_repeated = []
+
+    class Item:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self, **kwargs):
+            received_repeated.append(kwargs.get('repeated', False))
+            return f"Item({self.name})"
+
+    statek_print([Item("a"), Item("b")])
+    assert received_repeated == [False, True]

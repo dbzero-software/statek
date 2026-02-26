@@ -215,6 +215,36 @@ def test_llm_repr_delegates_to_format_default_no_recursion():
     assert result == 'Event(name="standup",time_slot=TimeSlot(hour=9))'
 
 
+def test_llm_repr_expand_kwargs_propagate_to_expanded_field():
+    """kwargs (e.g. repeated=True) received by __llm_repr__ propagate into expanded fields."""
+    class Meta:
+        pass
+
+    class TimeSlot:
+        def __init__(self, hour, meta):
+            self.hour = hour
+            self.meta = meta  # renders as <Object>
+
+    class Event:
+        def __init__(self, name, time_slot):
+            self.name = name
+            self.time_slot = time_slot
+
+        def __llm_repr__(self, **kwargs):
+            return format_default_llm_repr(self, expand=["time_slot"], **kwargs)
+
+    # In a list: second Event gets repeated=True, which propagates through expand into time_slot
+    events = [
+        Event("standup", TimeSlot(9, Meta())),
+        Event("retro", TimeSlot(15, Meta())),
+    ]
+    result = format_default_llm_repr(events)
+    assert result == (
+        '[Event(name="standup",time_slot=TimeSlot(hour=9,meta=<Object>)),'
+        'Event(name="retro",time_slot=TimeSlot(hour=15,...))]'
+    )
+
+
 def test_llm_repr_recursion_guard_kwargs_forwarded():
     """kwargs passed to format_default_llm_repr propagate into the recursive fallback."""
     class Event:

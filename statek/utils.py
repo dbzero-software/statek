@@ -708,7 +708,13 @@ def _format_element(item: Any, max_len: int, repeated: bool) -> str:
     if isinstance(item, _STATEK_PRINT_SCALAR_TYPES):
         return format_llm_repr(item, max_len=max_len)
     if hasattr(item, '__llm_repr__'):
-        return item.__llm_repr__()
+        method = item.__llm_repr__
+        sig = inspect.signature(method)
+        accepts_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in sig.parameters.values()
+        )
+        return method(repeated=repeated) if accepts_kwargs else method()
     if type(item).__str__ is not object.__str__:
         return str(item)
     return format_llm_repr(item, max_len=max_len, repeated=repeated)
@@ -864,7 +870,7 @@ def _format_object_llm(class_name: str, members: Dict[str, Any],
     has_omitted = False
     for name, val in shown.items():
         if expand and name in expand:
-            formatted_val = format_llm_repr(val)
+            formatted_val = format_llm_repr(val, **kwargs)
         else:
             formatted_val = format_value_repr(val)
             if repeated and formatted_val == '<Object>':
