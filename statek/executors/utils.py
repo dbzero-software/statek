@@ -103,9 +103,20 @@ class _ResilientTransformer(ast.NodeTransformer):
         return node
 
 """Execute a single AST node with custom print function."""
+def _fmt_print_arg(arg) -> str:
+    """Format a single print() argument.
+
+    Strings are emitted as-is (matching Python's built-in print behaviour).
+    All other types use the LLM-friendly representation.
+    """
+    if isinstance(arg, str):
+        return arg
+    return format_default_llm_repr(arg)
+
+
 def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
-    output = sep.join(format_default_llm_repr(arg) for arg in args) + end
+    output = sep.join(_fmt_print_arg(arg) for arg in args) + end
     job.console_append(output.rstrip('\n'))
 
 def custom_exit(job, status=None):
@@ -317,7 +328,7 @@ async def exec_tool(call_spec: CallSpec, job: Job) -> str:
     private_console = []
 
     def _private_print(*args, sep=' ', end='\n', **kwargs):
-        output = sep.join(format_default_llm_repr(arg) for arg in args) + end
+        output = sep.join(_fmt_print_arg(arg) for arg in args) + end
         private_console.append(output.rstrip('\n'))
 
     # Build global and local contexts — mirrors exec_step

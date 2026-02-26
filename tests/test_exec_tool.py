@@ -315,3 +315,27 @@ class TestDocsAgentIntegration:
         assert mock_fmt.called
         _, call_kwargs = mock_fmt.call_args
         assert call_kwargs.get('agent') == 'Agent'
+
+    @pytest.mark.asyncio
+    async def test_docs_output_does_not_start_with_extra_quote(self, db0_fixture):  # pylint: disable=unused-argument
+        """docs tool output must not be wrapped in extra double quotes."""
+        job = _make_job("doc_format_test", tools=[docs_tool],
+                        context_extras={"_SimpleDocClass": _SimpleDocClass})
+
+        result = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
+
+        assert result.startswith("class "), (
+            f"Output should start with 'class ', got: {result[:60]!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_docs_output_does_not_end_with_extra_quote(self, db0_fixture):  # pylint: disable=unused-argument
+        """docs tool output closing triple-quote must not gain an extra trailing quote."""
+        job = _make_job("doc_format_test2", tools=[docs_tool],
+                        context_extras={"_SimpleDocClass": _SimpleDocClass})
+
+        result = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
+
+        assert not result.endswith('""""'), (
+            f"Output should end with '\"\"\"', not '\"\"\"\"', got tail: {result[-20:]!r}"
+        )
