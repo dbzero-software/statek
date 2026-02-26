@@ -289,6 +289,10 @@ def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pyl
         docs(user)  # Get documentation for an object's class
         docs(User, "send_message")  # Get documentation for User.send_message method
     """
+    # A string passed to docs is almost certainly an unresolved name
+    if isinstance(what, str):
+        raise NameError(f"name '{what}' is not defined")
+
     # Handle object instances - get their class
     target_type = what
     if not isinstance(what, type) and not callable(what):
@@ -331,6 +335,10 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
         brief(user)  # Get brief documentation for an object's class
         brief(User, "send_message")  # Get brief documentation for User.send_message
     """
+    # A string passed to brief is almost certainly an unresolved name
+    if isinstance(what, str):
+        raise NameError(f"name '{what}' is not defined")
+
     # Handle object instances - get their class
     target_type = what
     if not isinstance(what, type) and not callable(what):
