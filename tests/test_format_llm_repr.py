@@ -215,6 +215,29 @@ def test_object_expand_with_other_members():
     assert result == 'User(name="alice",role=Role(name="admin"))'
 
 
+def test_expanded_field_receives_kwargs():
+    """kwargs like repeated=True are forwarded to format_llm_repr on expanded fields."""
+    class Meta:
+        pass
+
+    class Inner:
+        def __init__(self, x, meta):
+            self.x = x
+            self.meta = meta  # renders as <Object>
+
+    class Outer:
+        def __init__(self, inner):
+            self.inner = inner
+
+    # Without repeated: expanded inner shows meta=<Object>
+    result = format_llm_repr(Outer(Inner(1, Meta())), expand=["inner"])
+    assert result == 'Outer(inner=Inner(x=1,meta=<Object>))'
+
+    # With repeated=True: expanded inner has its <Object> fields skipped
+    result = format_llm_repr(Outer(Inner(1, Meta())), expand=["inner"], repeated=True)
+    assert result == 'Outer(inner=Inner(x=1,...))'
+
+
 def test_object_show_only():
     class User:
         def __init__(self, name, age, email):
@@ -595,3 +618,70 @@ def test_list_items_llm_repr_takes_precedence_over_str():
 
     result = format_llm_repr([Item()])
     assert result == "[llm]"
+
+
+# --- __llm_repr__ with **kwargs receives repeated in collections ---
+
+def test_list_items_llm_repr_kwargs_receives_repeated():
+    """__llm_repr__ with **kwargs receives repeated=True for 2nd+ same-type elements."""
+    received_repeated = []
+
+    class Item:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self, **kwargs):
+            received_repeated.append(kwargs.get('repeated', False))
+            return f"Item({self.name})"
+
+    format_llm_repr([Item("a"), Item("b"), Item("c")])
+    assert received_repeated == [False, True, True]
+
+
+def test_tuple_items_llm_repr_kwargs_receives_repeated():
+    """__llm_repr__ with **kwargs receives repeated=True for 2nd+ same-type elements in tuple."""
+    received_repeated = []
+
+    class Item:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self, **kwargs):
+            received_repeated.append(kwargs.get('repeated', False))
+            return f"Item({self.name})"
+
+    format_llm_repr((Item("a"), Item("b")))
+    assert received_repeated == [False, True]
+
+
+def test_dict_values_llm_repr_kwargs_receives_repeated():
+    """Dict value __llm_repr__ with **kwargs receives repeated=True for 2nd+ same-type values."""
+    received_repeated = []
+
+    class Item:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self, **kwargs):
+            received_repeated.append(kwargs.get('repeated', False))
+            return f"Item({self.name})"
+
+    format_llm_repr({"x": Item("a"), "y": Item("b")})
+    assert received_repeated == [False, True]
+
+
+def test_list_items_llm_repr_no_kwargs_unaffected():
+    """__llm_repr__ without **kwargs is still called without args."""
+    call_count = [0]
+
+    class Item:
+        def __init__(self, name):
+            self.name = name
+
+        def __llm_repr__(self):
+            call_count[0] += 1
+            return f"Item({self.name})"
+
+    result = format_llm_repr([Item("a"), Item("b")])
+    assert result == "[Item(a),Item(b)]"
+    assert call_count[0] == 2
