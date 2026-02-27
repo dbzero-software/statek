@@ -256,10 +256,10 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     # If it's an expression, capture and print the result
                     if is_expression:
                         # Evaluate the expression and print the result if it's not None
-                        result = eval(compile(ast.Expression(body=node.value), filename="<string>", mode="eval"), 
+                        result = eval(compile(ast.Expression(body=node.value), filename="<string>", mode="eval"),
                                      global_context, local_context)
                         if result is not None:
-                            job.console_append(repr(result))
+                            job.console_append(format_default_llm_repr(result))
                     else:
                         exec(code_obj, global_context, local_context)
                     
