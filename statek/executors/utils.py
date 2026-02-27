@@ -93,13 +93,30 @@ class _ResilientTransformer(ast.NodeTransformer):
 
     def visit_Name(self, node):
         # Wrap variables used in expressions (outside of function arguments handled above)
-        if isinstance(node.ctx, ast.Load) and node.id not in {'_wrap_param', '_smart_call'}:
+        if isinstance(node.ctx, ast.Load) and node.id not in {'_wrap_param', '_smart_call', '_fmt_fstring_arg'}:
             new_node = ast.Call(
                 func=ast.Name(id='_wrap_param', ctx=ast.Load()),
                 args=[node],
                 keywords=[]
             )
             return ast.copy_location(new_node, node)
+        return node
+
+    def visit_FormattedValue(self, node):
+        """Transform f-string value expressions to use format_default_llm_repr.
+
+        Only applied when there is no explicit conversion (like !r, !s, !a)
+        and no format spec (like :.2f), so explicit formatting is always respected.
+        """
+        self.generic_visit(node)
+        if node.conversion == -1 and node.format_spec is None:
+            wrapped = ast.Call(
+                func=ast.Name(id='_fmt_fstring_arg', ctx=ast.Load()),
+                args=[node.value],
+                keywords=[]
+            )
+            ast.copy_location(wrapped, node)
+            node.value = wrapped
         return node
 
 """Execute a single AST node with custom print function."""
@@ -159,10 +176,12 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     # Inject into local context (excluding print/exit since they're in builtins)
     local_context['_smart_call'] = _smart_call
     local_context['_wrap_param'] = _wrap_param
+    local_context['_fmt_fstring_arg'] = _fmt_print_arg
     global_context['print'] = custom_print_fn
     global_context['exit'] = custom_exit_fn
     global_context['_smart_call'] = _smart_call
     global_context['_wrap_param'] = _wrap_param
+    global_context['_fmt_fstring_arg'] = _fmt_print_arg
 
     # Inject _STATEK_CTX with job-level context (agent, etc.)
     statek_ctx = {}
@@ -179,7 +198,7 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
         builtins.exit = original_exit
 
         # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_STATEK_CTX']:
+        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX']:
             if key in local_context:
                 del local_context[key]
 
