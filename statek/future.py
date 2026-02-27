@@ -74,8 +74,8 @@ class FutureResult:
     __fetch_result: Callable = None
 
     def set_complement_functions(self, complement: Callable, condition: Callable):
-        self.__check_condition = db0.weak_proxy(condition)
-        self.__fetch_result = db0.weak_proxy(complement)
+        self.__check_condition = condition
+        self.__fetch_result = complement
 
     @property
     def value(self):

@@ -170,10 +170,11 @@ class Agent:
         return '\n\n'.join(formatted)
 
     def setup_required_context(self):
+        """Set up required context items. Override in subclasses to add agent-specific context."""
         if self._X__context is None:
             self._X__context = {}
         self._X__context["agent_name"] = self.role
-        """Set up required context items. Override in subclasses to add agent-specific context."""
+
 
     @property
     def context(self) -> Optional[Dict]:
