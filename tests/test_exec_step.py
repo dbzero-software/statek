@@ -1021,3 +1021,68 @@ class TestExecStepStatekCtx:
         job = job_factory()
         await exec_step('x = 1', job)
         assert '_STATEK_CTX' not in job.py_env.local_state
+
+
+# ---------------------------------------------------------------------------
+# Module-level @tool for string-to-name resolution tests.
+# Must be module-level: @tool requires **kwargs and db0 disallows decorated
+# nested functions.
+# ---------------------------------------------------------------------------
+
+@tool
+def _resolve_type_tool(what: type, **kwargs):  # pylint: disable=unused-argument
+    """Receives a type argument and prints its name.
+
+    Args:
+        what: The type argument to inspect.
+
+    Returns:
+        None.
+    """
+    if isinstance(what, type):
+        print(f"resolved:{what.__name__}")
+    else:
+        print(f"got_string:{what}")
+
+
+class TestExecStepStringNameResolution:
+    """Tests for _bind_by_name resolving string class names from agent context."""
+
+    def _make_job(self, tools, context=None):
+        """Create a minimal job whose agent has the given tools and context."""
+        agent = Agent(
+            role="string_resolution_test",
+            _system_prompt="Test",
+            _tools=tools,
+            _X__context=context or {},
+        )
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        return Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+    @pytest.mark.asyncio
+    async def test_tool_resolves_class_name_string_from_agent_context(self, db0_fixture):  # pylint: disable=unused-argument
+        """A tool with type annotation resolves a string class name via agent context."""
+        job = self._make_job(
+            tools=[_resolve_type_tool],
+            context={"MemoObject": MemoObject},
+        )
+
+        await exec_step('_resolve_type_tool("MemoObject")', job)
+
+        assert job.py_env.console is not None
+        assert any("resolved:MemoObject" in line for line in job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_tool_passes_string_when_name_not_in_context(self, db0_fixture):  # pylint: disable=unused-argument
+        """When the name is not in context, the string is passed as-is."""
+        job = self._make_job(tools=[_resolve_type_tool])  # no context with MemoObject
+
+        await exec_step('_resolve_type_tool("MemoObject")', job)
+
+        assert job.py_env.console is not None
+        assert any("got_string:MemoObject" in line for line in job.py_env.console)

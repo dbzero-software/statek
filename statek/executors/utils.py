@@ -142,7 +142,7 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         global_context.update(job.job_def.agent.context)
     for tool in job.job_def.agent._tools:
-        global_context[tool.__name__] = inject_context(tool, local_context)
+        global_context[tool.__name__] = inject_context(tool, global_context)
 
     # Create custom functions
     custom_print_fn = print_fn if print_fn is not None else (lambda *args, **kwargs: custom_print(job, *args, **kwargs))
