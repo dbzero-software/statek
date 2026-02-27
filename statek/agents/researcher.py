@@ -1,6 +1,6 @@
 """Researcher agent implementation for looking up information and answering questions."""
 
-from typing import Callable, Dict, Iterable, Optional
+from typing import Callable, Iterable
 from dataclasses import dataclass
 import sys
 import dbzero as db0
@@ -48,32 +48,13 @@ class Researcher(SupervisedAgent):
             role="researcher",
             _system_prompt=None, # Prompt is readed in StatekSetings
             _tools=basic_tools,
-            _X__context=None
         )
 
-    @property
-    def context(self) -> Optional[Dict]:
-        """
-        Get researcher's private context with dynamically created tools.
-
-        When accessed, verifies if the 'ask' and 'answer' tools are available.
-        If not, creates them dynamically within the private context using create_tool.
-
-        Returns:
-            Dictionary containing private tools and context
-        """
-        # Initialize context if it doesn't exist
+    def init_context(self):
         if self._X__context is None:
-            self._X__context = {}
-
-        # Check if ask and answer tools are already in context
-        if 'ask' not in self._X__context:
+            super().init_context()
             self._create_ask_tool()
-
-        if 'answer' not in self._X__context:
             self._create_answer_tool()
-
-        return self._X__context
 
     def _create_ask_tool(self):
         """Create the ask tool dynamically."""

@@ -1,6 +1,6 @@
 """Message Dispatcher agent implementation for analyzing and routing messages."""
 
-from typing import Callable, Dict, Optional
+from typing import Callable
 from dataclasses import dataclass
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
@@ -45,46 +45,19 @@ class MessageDispatcher(SupervisedAgent):
 
         # Initialize with basic tools (docs)
         basic_tools = [docs, chat_history, start_new_thread, dispatch_to]
-        # add insnces to _x_context
-        x_context = {
-            'chat_history': chat_history,
-            'start_new_thread': start_new_thread,
-            'dispatch_to': dispatch_to
-        }
         # Call parent constructor
         super().__init__(
             role="message_dispatcher",
             _system_prompt=None, # Prompt is readed in StatekSetings
             _tools=basic_tools,
-            _X__context=x_context
         )
 
-    @property
-    def context(self) -> Optional[Dict]:
-        """
-        Get dispatcher's private context with dynamically created tools.
-        
-        When accessed, verifies if the dispatcher-specific tools are available.
-        If not, creates them dynamically within the private context.
-        
-        Returns:
-            Dictionary containing private tools and context
-        """
-        # Initialize context if it doesn't exist
+    def init_context(self):
         if self._X__context is None:
-            self._X__context = {}
-
-        # Check if tools are already in context
-        if 'chat_history' not in self._X__context:
+            super().init_context()
             self._create_chat_history_tool()
-
-        if 'start_new_chat_thread' not in self._X__context:
             self._create_start_new_thread_tool()
-
-        if 'dispatch_to' not in self._X__context:
             self._create_dispatch_to_tool()
-
-        return self._X__context
 
     def _create_chat_history_tool(self):
         """Create the chat_history tool dynamically."""
