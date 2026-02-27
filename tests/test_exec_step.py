@@ -161,6 +161,16 @@ def function_with_mixed(regular_param, *args, **kwargs):
 DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
 
 
+@db0.memo
+@dataclass
+class _LLMReprTestObj:  # pylint: disable=too-few-public-methods
+    """Object with __llm_repr__ for implicit expression output tests."""
+    name: str = "test"
+
+    def __llm_repr__(self):
+        return f"custom:{self.name}"
+
+
 # pylint: disable=too-many-public-methods
 class TestExecStep:
     """Test cases for exec_step function."""
@@ -822,17 +832,31 @@ result"""
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_string(self, job_factory):
-        """Test that string expressions are printed with repr."""
+        """Test that string expressions are printed with LLM repr (double-quoted)."""
         simple_job = self.create_job(job_factory)
 
         code = """text = "hello"
 text"""
         await exec_step(code, simple_job)
 
-        # Verify the string was printed with quotes (repr)
+        # Verify the string was printed with double quotes (format_default_llm_repr)
         assert simple_job.py_env.console is not None
         assert len(simple_job.py_env.console) == 1
-        assert "'hello'" in simple_job.py_env.console[0]
+        assert '"hello"' in simple_job.py_env.console[0]
+
+    @pytest.mark.asyncio
+    async def test_exec_step_expression_uses_llm_repr(self, job_factory):
+        """Test that standalone expressions use format_default_llm_repr, not repr."""
+        simple_job = self.create_job(job_factory)
+        obj = _LLMReprTestObj(name="slot")
+        simple_job.py_env.local_state = {'obj': obj}
+
+        code = """obj"""
+        await exec_step(code, simple_job)
+
+        assert simple_job.py_env.console is not None
+        assert len(simple_job.py_env.console) == 1
+        assert simple_job.py_env.console[0] == "custom:slot"
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_complex(self, job_factory):
