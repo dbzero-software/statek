@@ -48,9 +48,9 @@ class Coordinator(SupervisedAgent):
             _tools=basic_tools,
         )
 
-    def setup_required_context(self):
-        super().setup_required_context()
-        if 'find_agents' not in self._X__context:
+    def init_context(self):
+        if self._X__context is None:
+            super().init_context()
             docstring = """Find available specialized agents.
 
             Returns:

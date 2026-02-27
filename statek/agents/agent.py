@@ -78,8 +78,6 @@ class Agent:
                 self.update_metadata(prompt_def.metadata)
         self.append_tool(list_of_examples)
         self.append_tool(show_example)
-        if self._X__context is None:
-            self._X__context = {}
 
 
     def update_metadata(self, new_metadata: Dict[str, str]) -> bool:
@@ -169,19 +167,19 @@ class Agent:
 
         return '\n\n'.join(formatted)
 
-    def setup_required_context(self):
-        """Set up required context items. Override in subclasses to add agent-specific context."""
+    def init_context(self):
+        """Initialize context. Override in subclasses to add agent-specific context."""
         if self._X__context is None:
             self._X__context = {}
         self._X__context["agent_name"] = self.role
-
 
     @property
     def context(self) -> Optional[Dict]:
         """
         Get agent's private context.
         """
-        self.setup_required_context()
+        if self._X__context is None:
+            self.init_context()
         return self._X__context
 
     @property

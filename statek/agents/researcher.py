@@ -50,12 +50,10 @@ class Researcher(SupervisedAgent):
             _tools=basic_tools,
         )
 
-    def setup_required_context(self):
-        super().setup_required_context()
-        if 'ask' not in self._X__context:
+    def init_context(self):
+        if self._X__context is None:
+            super().init_context()
             self._create_ask_tool()
-
-        if 'answer' not in self._X__context:
             self._create_answer_tool()
 
     def _create_ask_tool(self):

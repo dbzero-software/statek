@@ -52,15 +52,11 @@ class MessageDispatcher(SupervisedAgent):
             _tools=basic_tools,
         )
 
-    def setup_required_context(self):
-        super().setup_required_context()
-        if 'chat_history' not in self._X__context:
+    def init_context(self):
+        if self._X__context is None:
+            super().init_context()
             self._create_chat_history_tool()
-
-        if 'start_new_chat_thread' not in self._X__context:
             self._create_start_new_thread_tool()
-
-        if 'dispatch_to' not in self._X__context:
             self._create_dispatch_to_tool()
 
     def _create_chat_history_tool(self):
