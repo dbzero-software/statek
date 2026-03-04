@@ -504,7 +504,12 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Step 7: Handle all other exceptions
             # Print error message and top 3 execution frames to agent's console
             # Leave exit_status as None so the LLM can see the error and recover
+            # log the full stack trace to the statek logger for debugging
+
+            traceback_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+            print(traceback_str)
             error_msg = f"{type(e).__name__}: {e}"
+
             job.console_append(error_msg, error_message=error_msg)
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
@@ -651,7 +656,6 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
         # Step 4: Submit run_job_step for jobs that aren't already pending
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:
-            statek_log("Adding new jobs to pending tasks", level='debug')
             for job in ready_or_started_jobs:
                 # Create task for this job. Add all tasks to pending_tasks
                 task = asyncio.create_task(job_worker(semaphore, job, provider))
