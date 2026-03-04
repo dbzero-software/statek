@@ -504,12 +504,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Step 7: Handle all other exceptions
             # Print error message and top 3 execution frames to agent's console
             # Leave exit_status as None so the LLM can see the error and recover
-            # log the full stack trace to the statek logger for debugging
-
-            traceback_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
-            print(traceback_str)
             error_msg = f"{type(e).__name__}: {e}"
-
             job.console_append(error_msg, error_message=error_msg)
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
