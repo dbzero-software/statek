@@ -1,0 +1,222 @@
+"""Tests for the web_ui job detail helper functions."""
+
+from unittest.mock import MagicMock
+from web_ui.pages.job_detail import (
+    _get_console_slice,
+    _get_warmup_blocks,
+    _get_warmup_console_ranges,
+    _get_turn_console_ranges,
+    _get_code_str,
+)
+
+
+class _FakeCodeBlock:  # pylint: disable=too-few-public-methods
+    """Duck-typed stand-in for statek.utils.CodeBlock (avoids db0 initialization)."""
+    def __init__(self, code=None):
+        self.code = code
+
+
+def _make_chat_log_item(console_pos: int, llm_resp, timestamp=None):
+    item = MagicMock()
+    item.console_pos = console_pos
+    item.llm_resp = llm_resp
+    if timestamp is not None:
+        item.timestamp = timestamp
+    return item
+
+
+def _make_job(
+    warmup_code=None,
+    warmup_console_positions=None,
+    chat_log=None,
+    console=None,
+):
+    job = MagicMock()
+    job_def = MagicMock()
+    job_def.warmup_code = warmup_code
+    job.job_def = job_def
+    job.warmup_console_positions = warmup_console_positions or []
+    job.chat_log = chat_log or []
+    py_env = MagicMock()
+    py_env.console = console
+    job.py_env = py_env
+    return job
+
+
+class TestGetConsoleSlice:
+    def test_returns_empty_string_when_console_is_none(self):
+        assert _get_console_slice(None, 0, 5) == ''
+
+    def test_returns_empty_string_when_empty_console(self):
+        assert _get_console_slice([], 0, 5) == ''
+
+    def test_joins_items_in_range(self):
+        console = ['line1\n', 'line2\n', 'line3\n', 'line4\n']
+        result = _get_console_slice(console, 1, 3)
+        assert result == 'line2\nline3\n'
+
+    def test_items_without_newline_get_one_appended(self):
+        console = ['hello', 'world']
+        assert _get_console_slice(console, 0, 2) == 'hello\nworld\n'
+
+    def test_items_already_with_newline_not_doubled(self):
+        console = ['hello\n', 'world\n']
+        assert _get_console_slice(console, 0, 2) == 'hello\nworld\n'
+
+    def test_full_range(self):
+        console = ['a', 'b', 'c']
+        assert _get_console_slice(console, 0, 3) == 'a\nb\nc\n'
+
+    def test_empty_range(self):
+        console = ['a', 'b', 'c']
+        assert _get_console_slice(console, 2, 2) == ''
+
+    def test_to_pos_beyond_list(self):
+        console = ['a', 'b']
+        assert _get_console_slice(console, 0, 100) == 'a\nb\n'
+
+
+class TestGetWarmupBlocks:
+    def test_no_warmup_returns_empty(self):
+        job = _make_job(warmup_code=None)
+        assert not _get_warmup_blocks(job)
+
+    def test_single_string_block(self):
+        job = _make_job(warmup_code='x = 1')
+        blocks = _get_warmup_blocks(job)
+        assert blocks == ['x = 1']
+
+    def test_single_code_block(self):
+        cb = _FakeCodeBlock(code='x = 1')
+        job = _make_job(warmup_code=cb)
+        blocks = _get_warmup_blocks(job)
+        assert blocks == [cb]
+
+    def test_list_of_blocks(self):
+        cb1 = _FakeCodeBlock(code='a = 1')
+        cb2 = 'b = 2'
+        job = _make_job(warmup_code=[cb1, cb2])
+        blocks = _get_warmup_blocks(job)
+        assert blocks == [cb1, cb2]
+
+    def test_tuple_of_blocks(self):
+        cb = _FakeCodeBlock(code='a = 1')
+        job = _make_job(warmup_code=(cb, 'b = 2'))
+        blocks = _get_warmup_blocks(job)
+        assert blocks == [cb, 'b = 2']
+
+
+class TestGetWarmupConsoleRanges:
+    def test_no_warmup_returns_empty(self):
+        job = _make_job(warmup_code=None)
+        assert not _get_warmup_console_ranges(job)
+
+    def test_single_block_no_positions_recorded(self):
+        # Warmup hasn't finished yet — range starts at 0, ends at console length
+        job = _make_job(
+            warmup_code='x = 1',
+            warmup_console_positions=[],
+            console=['out1', 'out2'],
+        )
+        ranges = _get_warmup_console_ranges(job)
+        assert ranges == [(0, 2)]
+
+    def test_single_block_position_recorded(self):
+        job = _make_job(
+            warmup_code='x = 1',
+            warmup_console_positions=[3],
+            console=['a', 'b', 'c', 'd'],
+        )
+        ranges = _get_warmup_console_ranges(job)
+        assert ranges == [(0, 3)]
+
+    def test_two_blocks_both_positions_recorded(self):
+        cb1 = 'block1'
+        cb2 = 'block2'
+        job = _make_job(
+            warmup_code=[cb1, cb2],
+            warmup_console_positions=[2, 5],
+            console=['a', 'b', 'c', 'd', 'e'],
+        )
+        ranges = _get_warmup_console_ranges(job)
+        assert ranges == [(0, 2), (2, 5)]
+
+    def test_two_blocks_only_first_position_recorded(self):
+        cb1 = 'block1'
+        cb2 = 'block2'
+        job = _make_job(
+            warmup_code=[cb1, cb2],
+            warmup_console_positions=[2],
+            console=['a', 'b', 'c', 'd', 'e'],
+        )
+        ranges = _get_warmup_console_ranges(job)
+        assert ranges == [(0, 2), (2, 5)]
+
+
+class TestGetTurnConsoleRanges:
+    def test_no_chat_log_returns_empty(self):
+        job = _make_job(chat_log=[])
+        assert not _get_turn_console_ranges(job)
+
+    def test_single_turn_no_warmup(self):
+        chat_item = _make_chat_log_item(console_pos=3, llm_resp='code')
+        job = _make_job(
+            chat_log=[chat_item],
+            warmup_console_positions=[],
+        )
+        ranges = _get_turn_console_ranges(job)
+        assert ranges == [(0, 3)]
+
+    def test_single_turn_with_warmup(self):
+        chat_item = _make_chat_log_item(console_pos=5, llm_resp='code')
+        job = _make_job(
+            warmup_code='warmup',
+            warmup_console_positions=[2],
+            chat_log=[chat_item],
+        )
+        ranges = _get_turn_console_ranges(job)
+        assert ranges == [(2, 5)]
+
+    def test_two_turns_no_warmup(self):
+        item1 = _make_chat_log_item(console_pos=3, llm_resp='code1')
+        item2 = _make_chat_log_item(console_pos=7, llm_resp='code2')
+        job = _make_job(
+            chat_log=[item1, item2],
+            warmup_console_positions=[],
+        )
+        ranges = _get_turn_console_ranges(job)
+        assert ranges == [(0, 3), (3, 7)]
+
+    def test_two_turns_with_two_warmup_blocks(self):
+        item1 = _make_chat_log_item(console_pos=6, llm_resp='code1')
+        item2 = _make_chat_log_item(console_pos=9, llm_resp='code2')
+        job = _make_job(
+            warmup_code=['w1', 'w2'],
+            warmup_console_positions=[2, 4],
+            chat_log=[item1, item2],
+        )
+        ranges = _get_turn_console_ranges(job)
+        assert ranges == [(4, 6), (6, 9)]
+
+
+class TestGetCodeStr:
+    def test_plain_string(self):
+        assert _get_code_str('print("hello")') == 'print("hello")'
+
+    def test_code_block_with_code(self):
+        cb = _FakeCodeBlock(code='x = 1')
+        assert _get_code_str(cb) == 'x = 1'
+
+    def test_code_block_with_none_code(self):
+        cb = _FakeCodeBlock(code=None)
+        assert _get_code_str(cb) == ''
+
+    def test_none_returns_empty(self):
+        assert _get_code_str(None) == ''
+
+    def test_code_block_with_list_code(self):
+        cb = _FakeCodeBlock(code=['line1\n', 'line2\n'])
+        assert _get_code_str(cb) == 'line1\nline2\n'
+
+    def test_list_of_strings(self):
+        assert _get_code_str(['x = 1\n', 'y = 2\n']) == 'x = 1\ny = 2\n'
