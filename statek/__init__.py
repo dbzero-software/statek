@@ -7,6 +7,7 @@ from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
 from .system import tool, docs, get_any, get_all
 from .utils import statek_print, format_default_llm_repr, get_current_agent, get_current_agent_name
+from . import task
 
 __version__ = "0.1.0"
 
