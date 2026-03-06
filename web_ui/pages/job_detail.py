@@ -1,5 +1,6 @@
 """Job detail view for the Statek web UI."""
 
+import io
 from typing import Optional
 
 import dbzero as db0
@@ -99,6 +100,191 @@ def _get_code_str(llm_resp) -> str:
     return str(llm_resp)
 
 
+def _get_tool_data_for_block(code_block, tool_log, key: int) -> list:
+    """Return [(call_spec, result_str), ...] for a code block's tool calls.
+
+    Args:
+        code_block: str or CodeBlock-like; tool calls come from code_block.tool_calls
+        tool_log: dict mapping int key -> str or list[str], or None
+        key: the tool_log key to look up results under
+
+    Returns:
+        List of (call_spec, result_str) pairs. Empty if no tool calls or no log entry.
+    """
+    if not hasattr(code_block, 'tool_calls') or not code_block.tool_calls:
+        return []
+    if tool_log is None or key not in tool_log:
+        return []
+    call_specs = list(code_block.tool_calls)
+    raw = tool_log[key]
+    results = [raw] if isinstance(raw, str) else list(raw)
+    return [
+        (cs, results[i] if i < len(results) else '')
+        for i, cs in enumerate(call_specs)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Export helpers (pure — no NiceGUI dependency)
+# ---------------------------------------------------------------------------
+
+def _escape_md(text: str) -> str:
+    """Escape special markdown characters in plain text (used inside tables)."""
+    return text.replace('|', '\\|').replace('\n', ' ')
+
+
+def _md_code_fence(code: str, lang: str = '') -> str:
+    return f'```{lang}\n{code}\n```'
+
+
+def _build_md_content(
+    uuid_str: str,
+    status_str: str,
+    agent_role: str,
+    model: str,
+    total_cost: float,
+    num_turns: int,
+    exception_count: int,
+    system_prompt: str,
+    initial_prompt: str,
+    job,
+    warmup_blocks: list,
+    warmup_ranges: list[tuple[int, int]],
+    turn_ranges: list[tuple[int, int]],
+) -> str:
+    """Build a markdown document representing the full job execution log."""
+    parts: list[str] = []
+
+    # ── Header ──────────────────────────────────────────────────────────────
+    parts.append('# Job Detail\n')
+    parts.append('| Field | Value |')
+    parts.append('|---|---|')
+    parts.append(f'| **Status** | {_escape_md(status_str)} |')
+    parts.append(f'| **UUID** | `{_escape_md(uuid_str)}` |')
+    parts.append(f'| **Agent** | {_escape_md(agent_role)} |')
+    parts.append(f'| **Model** | `{_escape_md(model)}` |')
+    parts.append(f'| **Cost** | `${total_cost:.4f}` |')
+    parts.append(f'| **Turns** | {num_turns} |')
+    if exception_count:
+        parts.append(f'| **Errors** | {exception_count} |')
+    parts.append('')
+
+    # ── System Prompt ────────────────────────────────────────────────────────
+    if system_prompt:
+        parts.append('---\n')
+        parts.append('## System Prompt\n')
+        parts.append(_md_code_fence(system_prompt))
+        parts.append('')
+
+    # ── Initial Prompt ───────────────────────────────────────────────────────
+    if initial_prompt:
+        parts.append('---\n')
+        parts.append('## Initial Prompt\n')
+        parts.append(initial_prompt)
+        parts.append('')
+
+    # ── Warmup Blocks ────────────────────────────────────────────────────────
+    if warmup_blocks:
+        parts.append('---\n')
+        parts.append('## Warmup\n')
+        tool_log = getattr(job.py_env, 'tool_log', None)
+        for i, (block, (from_pos, to_pos)) in enumerate(zip(warmup_blocks, warmup_ranges)):
+            label = f'Warmup Code {i + 1}/{len(warmup_blocks)}' if len(warmup_blocks) > 1 else 'Warmup Code'
+            parts.append(f'### {label}\n')
+            code = _get_code_str(block)
+            parts.append(_md_code_fence(code or '(empty)', 'python'))
+            tool_data = _get_tool_data_for_block(block, tool_log, 0)
+            if tool_data:
+                parts.append('\n**Tool Calls**\n')
+                for cs, result in tool_data:
+                    parts.append(f'- **`{cs.format()}`**')
+                    if result:
+                        parts.append(_md_code_fence(str(result).strip()))
+            console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
+            if console_out.strip():
+                parts.append('\n**Console Output**\n')
+                parts.append(_md_code_fence(console_out.rstrip()))
+            parts.append('')
+
+    # ── LLM Turns ────────────────────────────────────────────────────────────
+    if job.chat_log:
+        parts.append('---\n')
+        exceptions = getattr(job.py_env, 'exceptions', None) or {}
+        tool_log = getattr(job.py_env, 'tool_log', None)
+        for i, (chat_item, (from_pos, to_pos)) in enumerate(zip(job.chat_log, turn_ranges)):
+            ts = getattr(chat_item, 'timestamp', None)
+            ts_str = f' — {ts.strftime("%H:%M:%S")}' if ts else ''
+            parts.append(f'## Turn {i + 1}{ts_str}\n')
+
+            code = _get_code_str(chat_item.llm_resp)
+            parts.append(_md_code_fence(code or '(empty)', 'python'))
+
+            tool_data = _get_tool_data_for_block(chat_item.llm_resp, tool_log, i + 1)
+            if tool_data:
+                parts.append(f'\n### Tool Call{"s" if len(tool_data) != 1 else ""}\n')
+                for cs, result in tool_data:
+                    parts.append(f'**`{cs.format()}`**\n')
+                    if result:
+                        parts.append(_md_code_fence(str(result).strip()))
+
+            if i in exceptions:
+                parts.append(f'\n> **Error:** `{exceptions[i]}`\n')
+
+            console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
+            if console_out.strip():
+                parts.append('\n**Console Output**\n')
+                parts.append(_md_code_fence(console_out.rstrip()))
+
+            parts.append('\n---\n')
+
+    return '\n'.join(parts)
+
+
+def _build_pdf_bytes(md_content: str) -> bytes:
+    """Convert markdown content to PDF bytes via weasyprint."""
+    import markdown as md_lib
+    import weasyprint
+
+    body_html = md_lib.markdown(
+        md_content,
+        extensions=['fenced_code', 'tables', 'nl2br'],
+    )
+    css = """
+        @page { margin: 20mm 18mm; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 10pt;
+            line-height: 1.55;
+            color: #212121;
+        }
+        h1 { font-size: 18pt; color: #3949ab; border-bottom: 2px solid #c5cae9; padding-bottom: 6px; }
+        h2 { font-size: 13pt; color: #5c6bc0; margin-top: 18px; border-bottom: 1px solid #e8eaf6; }
+        h3 { font-size: 11pt; color: #37474f; margin-top: 12px; }
+        table { border-collapse: collapse; margin: 8px 0 14px; width: auto; }
+        th, td { border: 1px solid #e0e0e0; padding: 5px 10px; font-size: 9.5pt; }
+        th { background: #f5f5f5; font-weight: 600; }
+        pre {
+            background: #f5f5f5;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 10px 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 8.5pt;
+            white-space: pre-wrap;
+            word-break: break-word;
+            margin: 6px 0;
+        }
+        code { font-family: 'Courier New', monospace; font-size: 8.5pt; background: #f5f5f5; padding: 1px 4px; border-radius: 3px; }
+        pre code { background: none; padding: 0; }
+        blockquote { border-left: 3px solid #ef9a9a; background: #fff5f5; margin: 8px 0; padding: 6px 12px; color: #b71c1c; }
+        hr { border: none; border-top: 1px solid #e0e0e0; margin: 12px 0; }
+    """
+    html = f'<!DOCTYPE html><html><head><meta charset="utf-8"><style>{css}</style></head><body>{body_html}</body></html>'
+    buf = io.BytesIO()
+    weasyprint.HTML(string=html).write_pdf(buf)
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # UI rendering
 # ---------------------------------------------------------------------------
@@ -106,6 +292,10 @@ def _get_code_str(llm_resp) -> str:
 _LLM_HEADER_BG    = 'background: linear-gradient(90deg, #e8eaf6, #ede7f6)'
 _CODE_WARMUP_BG   = '#fdf6e3'
 _CODE_LLM_BG      = '#f3f4fd'
+_TOOL_HEADER_BG   = '#fff3e0'
+_TOOL_BORDER      = '#ffcc80'
+_TOOL_CALL_BG     = '#ffe0b2'
+_TOOL_RESULT_BG   = '#fafafa'
 
 
 def _render_code_block(code: str, bg_color: str, label: str) -> None:
@@ -142,15 +332,64 @@ def _render_console_output(output: str, has_error: bool = False) -> None:
 
 
 
+def _render_tool_calls(tool_data: list) -> None:
+    """Render tool calls and their results inline on the timeline."""
+    if not tool_data:
+        return
+    with ui.column().classes('w-full gap-0'):
+        with ui.row().classes('items-center gap-2 px-3 py-1.5 rounded-t').style(
+            f'background: {_TOOL_HEADER_BG}; border: 1px solid {_TOOL_BORDER}; border-bottom: none'
+        ):
+            ui.icon('build').classes('text-sm text-orange-700')
+            ui.label('Tool Calls').classes('text-xs font-semibold text-orange-800 uppercase tracking-wide')
+            ui.label(f'{len(tool_data)}').classes(
+                'text-xs font-bold px-1.5 py-0.5 rounded-full bg-orange-200 text-orange-800'
+            )
+        with ui.column().classes('w-full gap-2').style(
+            f'border: 1px solid {_TOOL_BORDER}; border-top: none; border-radius: 0 0 6px 6px;'
+            f'padding: 10px; background: {_TOOL_RESULT_BG}'
+        ):
+            for i, (cs, result) in enumerate(tool_data):
+                if i > 0:
+                    ui.separator().classes('my-1')
+                with ui.column().classes('w-full gap-1'):
+                    # Call signature
+                    with ui.row().classes('items-center gap-2 px-2 py-1 rounded').style(
+                        f'background: {_TOOL_CALL_BG}'
+                    ):
+                        ui.icon('call_made').classes('text-xs text-orange-700')
+                        ui.label(cs.format()).classes('text-xs font-mono font-semibold text-orange-900 break-all')
+                    # Result
+                    result_str = str(result).strip() if result else ''
+                    if result_str:
+                        ui.html(
+                            f'<pre style="'
+                            f'white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word;'
+                            f'font-family: \'JetBrains Mono\', monospace;'
+                            f'font-size: 0.72rem; line-height: 1.5;'
+                            f'color: #4e342e; background: #fff8f0;'
+                            f'border: 1px solid {_TOOL_BORDER}; border-radius: 4px;'
+                            f'padding: 8px; margin: 0; width: 100%; box-sizing: border-box;'
+                            f'">{result_str.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</pre>'
+                        ).classes('w-full')
+                    else:
+                        ui.label('(no result)').classes('text-xs text-gray-400 italic px-2')
+
+
 def _render_warmup_section(job, blocks: list, ranges: list[tuple[int, int]]) -> None:
     """Render all warmup blocks with their console output."""
+    tool_log = getattr(job.py_env, 'tool_log', None)
     for i, (block, (from_pos, to_pos)) in enumerate(zip(blocks, ranges)):
         code = _get_code_str(block)
         console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
         block_label = f'Warmup Code {i + 1} / {len(blocks)}' if len(blocks) > 1 else 'Warmup Code'
+        tool_data = _get_tool_data_for_block(block, tool_log, 0)
 
         with ui.column().classes('w-full gap-2'):
             _render_code_block(code, _CODE_WARMUP_BG, block_label.lower())
+
+            if tool_data:
+                _render_tool_calls(tool_data)
 
             with ui.expansion('Console Output', icon='terminal', value=True).props('dense').classes(
                 'w-full rounded border border-gray-200'
@@ -159,7 +398,7 @@ def _render_warmup_section(job, blocks: list, ranges: list[tuple[int, int]]) -> 
 
 
 def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: int) -> None:
-    """Render a single LLM turn with code and console output."""
+    """Render a single LLM turn with code, tool calls, and console output."""
     code = _get_code_str(chat_item.llm_resp)
     console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
     ts = getattr(chat_item, 'timestamp', None)
@@ -167,6 +406,9 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
 
     exceptions = getattr(job.py_env, 'exceptions', None) or {}
     has_error = turn_idx in exceptions
+    tool_log = getattr(job.py_env, 'tool_log', None)
+    # tool_log key for LLM turn i is i+1 (stored after append_chat_log, len=i+1)
+    tool_data = _get_tool_data_for_block(chat_item.llm_resp, tool_log, turn_idx + 1)
 
     with ui.column().classes('w-full gap-2'):
         # Section header
@@ -175,6 +417,11 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
         ):
             ui.icon('smart_toy').classes('text-indigo-600')
             ui.label(f'Turn {turn_idx + 1}').classes('text-sm font-bold text-indigo-800 flex-1')
+            if tool_data:
+                ui.icon('build').classes('text-orange-500 text-sm')
+                ui.label(f'{len(tool_data)} tool call{"s" if len(tool_data) != 1 else ""}').classes(
+                    'text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700'
+                )
             if has_error:
                 ui.icon('error_outline').classes('text-red-500 text-sm')
             if ts_str:
@@ -184,6 +431,9 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
             )
 
         _render_code_block(code, _CODE_LLM_BG, 'LLM submitted code')
+
+        if tool_data:
+            _render_tool_calls(tool_data)
 
         if has_error:
             with ui.row().classes('items-center gap-2 px-3 py-2 rounded').style(
@@ -270,7 +520,45 @@ def create_job_detail_dialog(job) -> None:
                                     'text-xs text-red-600 font-medium'
                                 )
 
-                ui.button(icon='close', on_click=dlg.close).props('flat round dense')
+                with ui.row().classes('items-center gap-1 shrink-0'):
+                    def _download_md(
+                        _uuid=uuid_str, _status=status_str, _agent=agent_role,
+                        _model=model, _cost=total_cost, _turns=num_turns,
+                        _errors=exception_count, _sys=system_prompt, _init=initial_prompt,
+                        _job=job, _wb=warmup_blocks, _wr=warmup_ranges, _tr=turn_ranges,
+                    ):
+                        md = _build_md_content(
+                            uuid_str=_uuid, status_str=_status, agent_role=_agent,
+                            model=_model, total_cost=_cost, num_turns=_turns,
+                            exception_count=_errors, system_prompt=_sys,
+                            initial_prompt=_init, job=_job,
+                            warmup_blocks=_wb, warmup_ranges=_wr, turn_ranges=_tr,
+                        )
+                        ui.download(md.encode(), filename=f'job_{_uuid}.md', media_type='text/markdown')
+
+                    def _download_pdf(
+                        _uuid=uuid_str, _status=status_str, _agent=agent_role,
+                        _model=model, _cost=total_cost, _turns=num_turns,
+                        _errors=exception_count, _sys=system_prompt, _init=initial_prompt,
+                        _job=job, _wb=warmup_blocks, _wr=warmup_ranges, _tr=turn_ranges,
+                    ):
+                        md = _build_md_content(
+                            uuid_str=_uuid, status_str=_status, agent_role=_agent,
+                            model=_model, total_cost=_cost, num_turns=_turns,
+                            exception_count=_errors, system_prompt=_sys,
+                            initial_prompt=_init, job=_job,
+                            warmup_blocks=_wb, warmup_ranges=_wr, turn_ranges=_tr,
+                        )
+                        pdf = _build_pdf_bytes(md)
+                        ui.download(pdf, filename=f'job_{_uuid}.pdf', media_type='application/pdf')
+
+                    ui.button('MD', icon='download', on_click=_download_md).props(
+                        'flat dense no-caps'
+                    ).classes('text-xs text-indigo-600').tooltip('Download as Markdown')
+                    ui.button('PDF', icon='picture_as_pdf', on_click=_download_pdf).props(
+                        'flat dense no-caps'
+                    ).classes('text-xs text-red-600').tooltip('Download as PDF')
+                    ui.button(icon='close', on_click=dlg.close).props('flat round dense')
 
             ui.separator().classes('mb-4')
 
