@@ -134,6 +134,58 @@ class TestJob:
         expected = "> Out5"
         assert result == expected
 
+    def test_get_next_prompt_push_log_none_no_change(self, job_factory):
+        """No push_log → behaviour is unchanged."""
+        job = job_factory()
+        job.py_env.console_append("Out1")
+        result = job.get_next_prompt()
+        assert result == "Test task\n> Out1"
+
+    def test_get_next_prompt_first_prompt_push_log_appended(self, job_factory):
+        """First prompt: push_log message is appended after console output."""
+        job = job_factory()
+        job.py_env.console_append("Out1")
+        job.push_to_console("user message")  # key=1
+        result = job.get_next_prompt()
+        assert "Out1" in result
+        assert "user message" in result
+
+    def test_get_next_prompt_first_prompt_push_log_order(self, job_factory):
+        """First prompt: push_log message appears after console output."""
+        job = job_factory()
+        job.py_env.console_append("Out1")
+        job.push_to_console("user message")
+        result = job.get_next_prompt()
+        assert result.index("Out1") < result.index("user message")
+
+    def test_get_next_prompt_subsequent_prompt_push_log_at_from_pos(self, job_factory):
+        """Subsequent prompt: push_log entry at from_pos is included."""
+        job = job_factory()
+        job.py_env.console = ["c1", "c2"]
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp"))
+        job.push_to_console("pushed msg")  # key=2 (console len=2)
+        result = job.get_next_prompt()
+        assert "pushed msg" in result
+
+    def test_get_next_prompt_subsequent_prompt_push_log_before_from_pos_excluded(self, job_factory):
+        """Subsequent prompt: push_log entry with key < from_pos is excluded."""
+        job = job_factory()
+        job.py_env.console = ["c1", "c2"]
+        job.push_to_console("early msg")     # key=2 (console len=2 at push time)
+        job.py_env.console.append("c3")      # console grows to 3
+        job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp"))
+        result = job.get_next_prompt()
+        assert "early msg" not in result
+
+    def test_get_next_prompt_push_log_list_values_included(self, job_factory):
+        """Multiple pushes at same position (stored as list) are all included."""
+        job = job_factory()
+        job.push_to_console("msg1")  # key=0
+        job.push_to_console("msg2")  # key=0, becomes list
+        result = job.get_next_prompt()
+        assert "msg1" in result
+        assert "msg2" in result
+
 
 class TestJobGetChatHistory:
     """Test cases for Job.get_chat_history method."""
@@ -831,3 +883,95 @@ class TestAppendChatLogCodeBlock:
         job.append_chat_log(request, llm_resp)
 
         assert job.chat_log[0].console_pos == 2
+
+
+class TestJobPushToConsole:
+    """Test cases for Job.push_to_console method."""
+
+    def test_push_log_starts_as_none(self, job_factory):
+        job = job_factory()
+        assert job.py_env.push_log is None
+
+    def test_push_to_console_populates_push_log(self, job_factory):
+        job = job_factory()
+        job.push_to_console("hello")
+        assert job.py_env.push_log is not None
+
+    def test_push_to_console_appends_message(self, job_factory):
+        job = job_factory()
+        job.push_to_console("hello")
+        assert job.py_env.push_log[0] == "hello"
+
+    def test_push_to_console_appends_multiple_messages_same_position(self, job_factory):
+        """Two pushes at the same console position are stored as a list under that key."""
+        job = job_factory()
+        job.push_to_console("first")
+        job.push_to_console("second")
+        # Both pushed when console is empty (key=0) → stored as list
+        assert job.py_env.push_log[0] == ["first", "second"]
+
+    def test_push_to_console_appends_multiple_messages_different_positions(self, job_factory):
+        """Pushes at different console positions are stored under separate keys."""
+        job = job_factory()
+        job.push_to_console("first")
+        job.py_env.console_append("output")  # advance console position to 1
+        job.push_to_console("second")
+        assert job.py_env.push_log[0] == "first"
+        assert job.py_env.push_log[1] == "second"
+
+    def test_push_to_console_from_done_returns_true(self, job_factory):
+        job = job_factory()
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        result = job.push_to_console("msg")
+        assert result is True
+
+    def test_push_to_console_from_done_transitions_to_started(self, job_factory):
+        job = job_factory()
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        job.push_to_console("msg")
+        assert job.status == JobStatus.STARTED  # pylint: disable=no-member
+
+    def test_push_to_console_from_done_removes_done_tag(self, job_factory):
+        job = job_factory()
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        job.push_to_console("msg")
+        assert len(db0.find(Job, JobStatus.DONE)) == 0  # pylint: disable=no-member
+
+    def test_push_to_console_from_done_adds_started_tag(self, job_factory):
+        job = job_factory()
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        job.push_to_console("msg")
+        assert len(db0.find(Job, JobStatus.STARTED)) == 1  # pylint: disable=no-member
+
+    def test_push_to_console_from_ready_returns_false(self, job_factory):
+        job = job_factory()
+        result = job.push_to_console("msg")
+        assert result is False
+
+    def test_push_to_console_from_ready_does_not_change_status(self, job_factory):
+        job = job_factory()
+        job.push_to_console("msg")
+        assert job.status == JobStatus.READY  # pylint: disable=no-member
+
+    def test_push_to_console_from_started_returns_false(self, job_factory):
+        job = job_factory()
+        job.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+        result = job.push_to_console("msg")
+        assert result is False
+
+    def test_push_to_console_from_started_does_not_change_status(self, job_factory):
+        job = job_factory()
+        job.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+        job.push_to_console("msg")
+        assert job.status == JobStatus.STARTED  # pylint: disable=no-member
+
+    def test_push_to_console_from_suspended_returns_false(self, job_factory):
+        job = job_factory()
+        job.set_status(JobStatus.SUSPENDED)  # pylint: disable=no-member
+        result = job.push_to_console("msg")
+        assert result is False
+
+    def test_push_to_console_appends_regardless_of_status(self, job_factory):
+        job = job_factory()
+        job.push_to_console("appended")
+        assert job.py_env.push_log[0] == "appended"

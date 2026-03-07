@@ -291,6 +291,27 @@ class Job:
         db0.tags(self).add(new_status)
         self.__job_status = new_status
 
+    def _collect_push_log(self, from_pos: int) -> str:
+        """Return push_log messages with key >= from_pos as a newline-joined string.
+
+        Args:
+            from_pos: Include only entries whose console-position key is >= this value.
+
+        Returns:
+            Newline-joined string of all matching messages, or empty string if none.
+        """
+        if not self.py_env.push_log:
+            return ""
+        parts = []
+        for key in sorted(self.py_env.push_log.keys()):
+            if key >= from_pos:
+                value = self.py_env.push_log[key]
+                if not isinstance(value, str):
+                    parts.extend(value)
+                else:
+                    parts.append(value)
+        return "\n".join(parts)
+
     def get_next_prompt(self) -> str:
         """
         Generate the next prompt to be included in the LLM chat.
@@ -299,6 +320,9 @@ class Job:
         and append the entire py_env console starting from position 0.
         Otherwise, format the console starting from the last chat element's
         console position to provide the console result for LLM analysis.
+
+        If push_log is available, push_log entries whose console-position key falls
+        within the relevant range are appended after the console output.
 
         Returns:
             The formatted prompt string ready to be sent to the LLM
@@ -326,28 +350,36 @@ class Job:
                     else 0
                 )
                 limit = last_end - prev_end
-                return prompt_append_console(
+                console_part = prompt_append_console(
                     self.py_env.console, chat_style,
                     from_pos=prev_end, limit=limit if limit > 0 else 0,
                     xml_tags=xml_tags
                 ) if limit > 0 else ""
+                push_part = self._collect_push_log(from_pos=prev_end)
+                parts = [p for p in [console_part, push_part] if p]
+                return "\n".join(parts)
             else:
                 # No warmup: template + all console is the first user prompt
                 template = self.job_def.prompt()
                 console_part = prompt_append_console(
                     self.py_env.console, chat_style, from_pos=0, xml_tags=xml_tags
                 )
-                parts = [p for p in [template, console_part] if p]
+                push_part = self._collect_push_log(from_pos=0)
+                parts = [p for p in [template, console_part, push_part] if p]
                 return "\n".join(parts)
         else:
             # Not first prompt: format console from last chat element's console position
             last_chat_item = self.chat_log[-1]
-            return prompt_append_console(
+            from_pos = last_chat_item.console_pos
+            console_part = prompt_append_console(
                 self.py_env.console,
                 chat_style,
-                from_pos=last_chat_item.console_pos,
+                from_pos=from_pos,
                 xml_tags=xml_tags
             )
+            push_part = self._collect_push_log(from_pos=from_pos)
+            parts = [p for p in [console_part, push_part] if p]
+            return "\n".join(parts)
 
     def get_chat_history(self) -> Iterable[str]:
         """
@@ -720,3 +752,34 @@ class Job:
     def approx_token_usage(self) -> int:
         """Calculates approximate token usage based on total bytes sent and received."""
         return (self.total_bytes_sent + self.total_bytes_received) // 4
+
+    def push_to_console(self, message: str) -> bool:
+        """Append a pushed message to the job's push_log and re-activate if DONE.
+
+        Intended for processing push notifications (e.g. a user writing a message
+        into a completed job). Appends the message to py_env.push_log keyed by
+        sequential index. Transitions DONE -> STARTED (updating tags) when the job
+        is in DONE state. No other status transitions are performed.
+
+        Args:
+            message: The message to append to the push_log.
+
+        Returns:
+            True if the job was transitioned DONE -> STARTED, False otherwise.
+        """
+        if self.py_env.push_log is None:
+            self.py_env.push_log = {}
+        # Key by current console length so get_next_prompt can filter by position range.
+        key = len(self.py_env.console) if self.py_env.console else 0
+        existing = self.py_env.push_log.get(key)
+        if existing is None:
+            self.py_env.push_log[key] = message
+        elif isinstance(existing, list):
+            existing.append(message)
+        else:
+            self.py_env.push_log[key] = [existing, message]
+
+        if self.status == JobStatus.DONE:  # pylint: disable=no-member
+            self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+            return True
+        return False  # pylint: disable=no-member

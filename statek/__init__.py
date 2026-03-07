@@ -6,7 +6,8 @@ from .llm_api import LLM_API, OpenRouter_API, Claude_API, LLM_Response, LLM_Stat
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
 from .system import tool, docs, get_any, get_all
-from .utils import statek_print, format_default_llm_repr, get_current_agent, get_current_agent_name
+from .utils import (statek_print, format_default_llm_repr,
+                    get_current_agent, get_current_agent_name, get_current_job)
 
 __version__ = "0.1.0"
 
@@ -27,4 +28,5 @@ __all__ = [
     "format_default_llm_repr",
     "get_current_agent",
     "get_current_agent_name",
+    "get_current_job",
 ]
