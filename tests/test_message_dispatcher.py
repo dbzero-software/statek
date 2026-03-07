@@ -1,6 +1,7 @@
 """Tests for MessageDispatcher agent."""
 
 import pytest
+
 from statek.agents.message_dispatcher import MessageDispatcher
 from statek.agents.agent import SupervisedAgent
 
