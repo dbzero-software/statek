@@ -19,7 +19,6 @@ class FQ_Item:  # pylint: disable=invalid-name
     """Single queue entry; stores kwargs and its own integer key."""
 
     def __init__(self, key: int, prefix=None, **kwargs):
-        print(f"Creating FQ_Item with key={key}, prefix={prefix}, kwargs={kwargs}")
         if prefix is not None:
             db0.set_prefix(self, prefix)
         self.__key = key

@@ -504,8 +504,12 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             return False
         except Exception as e:
             # Step 7: Handle all other exceptions
-            # Print error message and top 3 execution frames to agent's console
-            # Leave exit_status as None so the LLM can see the error and recover
+            if job.status == JobStatus.WARMING_UP:
+                # Critical job definition failure — terminate job and record error
+                job.job_def.set_error(e)
+                job.set_status(JobStatus.DONE)
+                return True
+            # Non-warmup exception: print error so the LLM can see and recover
             error_msg = f"{type(e).__name__}: {e}"
             job.console_append(error_msg, error_message=error_msg)
 
@@ -683,7 +687,6 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
                                             db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED]))
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:
-            statek_log("Adding new jobs to pending tasks", level='debug')
             for job in ready_or_started_jobs:
                 # Create task for this job. Add all tasks to pending_tasks
                 task = asyncio.create_task(job_worker(semaphore, job, provider))
@@ -717,6 +720,82 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
                     statek_log("Auto-terminate: all jobs completed, exiting loop", level='debug')
                     break
     return
+
+
+def find_existing_job_def(
+    agent: 'Agent',
+    warmup_code: Optional[Union[str, Sequence]],
+) -> Optional[JobDef]:
+    """Find an existing JobDef matching the given agent and warmup_code.
+
+    Args:
+        agent: the Agent the JobDef must be associated with
+        warmup_code: the warmup code to match (compared after parsing)
+
+    Returns:
+        The first matching JobDef, or None if not found
+    """
+    parsed = parse_warmup_code(warmup_code)
+    for job_def in db0.find(JobDef, db0.as_tag(agent)):
+        if job_def.warmup_code == parsed:
+            return job_def
+    return None
+
+
+def _make_start_jobs_func(agent, job_def, task_queue_size_func, provider):
+    """Create the start_jobs_func callback for run_agentic_loop.
+
+    The returned callable is invoked each loop iteration with available capacity.
+    It raises RuntimeError if the job definition has errors (circuit breaker), then
+    creates min(capacity, task_queue_size - ready_jobs) new jobs.
+
+    Args:
+        agent: the Agent instance
+        job_def: the shared JobDef used for new jobs
+        task_queue_size_func: callable returning number of queued tasks
+        provider: LLM provider name (or None for default)
+
+    Returns:
+        Callable[[int], None] — the start_jobs_func callback
+    """
+    from statek.pyenv import PyEnv  # pylint: disable=import-outside-toplevel
+
+    def start_jobs_func(capacity: int):
+        if job_def.has_errors():
+            raise RuntimeError(
+                f"Job definition for agent '{agent.role}' has errors — aborting agentic loop"
+            )
+
+        if capacity <= 0:
+            return
+
+        num_awaiting_tasks = task_queue_size_func()
+
+        if num_awaiting_tasks <= 0:
+            return
+
+        ready_jobs_count = len(db0.find(Job, db0.as_tag(agent), [JobStatus.READY, JobStatus.WARMING_UP]))
+
+        jobs_to_create = min(capacity, num_awaiting_tasks - ready_jobs_count)
+
+        if jobs_to_create <= 0:
+            return
+
+        statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='debug')
+
+        provider_settings = get_provider_settings(provider)
+        model_to_use = provider_settings.default_model if provider_settings else None
+
+        for _ in range(jobs_to_create):
+            Job(
+                job_def=job_def,
+                model_family=provider or "default",
+                model=model_to_use,
+                job_status=JobStatus.READY,
+                py_env=PyEnv(local_state={}),
+            )
+
+    return start_jobs_func
 
 
 async def run_agentic_loop(agent: 'Agent',
@@ -754,67 +833,23 @@ async def run_agentic_loop(agent: 'Agent',
             return len(db0.find(Message, MessageStatus.PENDING))
         ```
     """
-    from statek.pyenv import PyEnv
-    # Parse warmup_code once before the loop
-    parsed_warmup_code = parse_warmup_code(warmup_code)
     statek_log("Starting agentic loop...", level='debug')
-    def start_jobs_func(capacity: int):
-        """
-        Internal function to create new jobs based on available capacity and pending tasks.
-        
-        This function:
-        1. Calls task_queue_size() to check the number of awaiting tasks
-        2. Uses db0.find to identify the number of agent-related jobs in READY or WARMING_UP state
-        3. Creates N new agent jobs where N = min(capacity, task_queue_size - ready_jobs)
-        """
-        if capacity <= 0:
-            return
-        
-        num_awaiting_tasks = task_queue_size_func()
-        
-        if num_awaiting_tasks <= 0:
-            return
-        
-        # Find the number of jobs related to this agent that are in READY or WARMING_UP state
-        ready_jobs = db0.filter(
-            lambda job: job.job_def.agent == agent,
-            db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP])
+
+    # Reuse an existing matching job definition or create a new one
+    job_def = find_existing_job_def(agent, warmup_code)
+    if job_def:
+        # Clear any previous errors on the job definition they might'be been fixed after process restart
+        job_def.clear_errors()
+    else:
+        parsed_warmup_code = parse_warmup_code(warmup_code)
+        job_def = JobDef(
+            agent=agent,
+            job_params=None,
+            warmup_code=parsed_warmup_code,
         )
-        #FIXME: Change when len of filter returns correct value
-        ready_jobs_count = len(list(ready_jobs))
-        
-        jobs_to_create = min(capacity, num_awaiting_tasks - ready_jobs_count)
-        
-        if jobs_to_create <= 0:
-            return
-        
-        statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='debug')
-        for _ in range(jobs_to_create):
-            job_def = JobDef(
-                agent=agent,
-                job_params=None,
-                warmup_code=parsed_warmup_code
-            )
-            
-            # Create PyEnv with agent's context if available
-            pyenv = PyEnv(local_state={})
-            
-            # Get model info from settings if provider not specified
-            if provider is None:
-                settings = get_statek_settings()
-                model_to_use = settings.default_model
-            else:
-                settings = get_provider_settings(provider)
-                model_to_use = settings.default_model
-            
-            Job(
-                job_def=job_def,
-                model_family=provider or "default",
-                model=model_to_use,
-                job_status=JobStatus.READY,
-                py_env=pyenv
-            )
     
+    start_jobs_func = _make_start_jobs_func(agent, job_def, task_queue_size_func, provider)
+
     await run_jobs_loop(
         max_concurrency=max_concurrency,
         provider=provider,
