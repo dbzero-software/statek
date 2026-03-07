@@ -1,3 +1,4 @@
+#pylint: disable=R0903
 import functools
 from typing import Any
 
