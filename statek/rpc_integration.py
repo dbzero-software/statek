@@ -17,7 +17,7 @@ _RPC_MOCK = _RpcMock()
 
 
 @functools.lru_cache(None)
-def rpc() -> Any:
+def _load_rpc() -> Any:
     try:
         # pylint:disable=import-outside-toplevel
         import db0_rpc
@@ -25,6 +25,9 @@ def rpc() -> Any:
         return db0_rpc
     except ModuleNotFoundError:
         return _RPC_MOCK
+
+
+rpc = _load_rpc()
 
 
 def has_rpc() -> bool:
