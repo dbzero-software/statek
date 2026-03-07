@@ -448,6 +448,27 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
             _render_console_output(console_out, has_error=has_error)
 
 
+def _get_system_prompt(job) -> tuple[str, Optional[str]]:
+    """Return (prompt_text, error_message) for a job's system prompt.
+
+    Tries to return the fully formatted prompt. On formatting failure, falls back
+    to the raw template and sets error_message to describe what went wrong.
+    Returns ('', None) if no system prompt is available.
+    """
+    try:
+        if not job.job_def or not job.job_def.agent:
+            return '', None
+        try:
+            return job.job_def.agent.system_prompt(
+                job_params=job.job_def.job_params
+            ) or '', None
+        except Exception as exc:  # pylint: disable=broad-except
+            raw = job.job_def.agent._system_prompt or ''  # pylint: disable=protected-access
+            return raw, f'{type(exc).__name__}: {exc}'
+    except Exception:  # pylint: disable=broad-except
+        return '', None
+
+
 def create_job_detail_dialog(job) -> None:
     """Open a full-screen dialog showing the job execution breakdown."""
     try:
@@ -472,13 +493,9 @@ def create_job_detail_dialog(job) -> None:
     except Exception:  # pylint: disable=broad-except
         pass
 
-    system_prompt = ''
+    system_prompt, system_prompt_error = _get_system_prompt(job)
     initial_prompt = ''
     try:
-        if job.job_def and job.job_def.agent:
-            system_prompt = job.job_def.agent.system_prompt(
-                job_params=job.job_def.job_params
-            ) or ''
         initial_prompt = job.job_def.prompt() or ''
     except Exception:  # pylint: disable=broad-except
         pass
@@ -552,6 +569,39 @@ def create_job_detail_dialog(job) -> None:
                         pdf = _build_pdf_bytes(md)
                         ui.download(pdf, filename=f'job_{_uuid}.pdf', media_type='application/pdf')
 
+                    if system_prompt:
+                        def _show_system_prompt(_sp=system_prompt, _err=system_prompt_error):
+                            with ui.dialog() as sp_dlg:
+                                with ui.card().classes('w-full max-w-5xl'):
+                                    with ui.row().classes('w-full items-center justify-between mb-2'):
+                                        with ui.row().classes('items-center gap-2'):
+                                            ui.icon('description').classes('text-gray-600')
+                                            ui.label('System Prompt').classes(
+                                                'text-lg font-bold text-gray-800'
+                                            )
+                                        ui.button(
+                                            icon='close', on_click=sp_dlg.close
+                                        ).props('flat round dense')
+                                    ui.separator().classes('mb-2')
+                                    ui.label(_sp).classes(
+                                        'text-sm text-gray-700 whitespace-pre-wrap w-full rounded p-3'
+                                    ).style(
+                                        'font-family: "JetBrains Mono", monospace;'
+                                        ' background: #fdf6e3; max-height: 70vh; overflow-y: auto'
+                                    )
+                                    if _err:
+                                        with ui.row().classes('items-center gap-2 mt-3 px-3 py-2 rounded').style(
+                                            'background: #fff0f0; border: 1px solid #ffcdd2'
+                                        ):
+                                            ui.icon('warning').classes('text-amber-600 text-sm')
+                                            ui.label(
+                                                f'Showing raw template — rendering failed: {_err}'
+                                            ).classes('text-xs text-red-700 font-mono')
+                            sp_dlg.open()
+
+                        ui.button('System Prompt', icon='description', on_click=_show_system_prompt).props(
+                            'flat dense no-caps'
+                        ).classes('text-xs text-gray-600').tooltip('View system prompt')
                     ui.button('MD', icon='download', on_click=_download_md).props(
                         'flat dense no-caps'
                     ).classes('text-xs text-indigo-600').tooltip('Download as Markdown')

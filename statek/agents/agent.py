@@ -163,6 +163,8 @@ class Agent:
         if self._tools_by_name:
             for tool_name in self._tools_by_name:
                 fn = self.context.get(tool_name)
+                if fn is None:
+                    raise ValueError(f'Missing tool defined by name "{tool_name}"')
                 formatted.append(inner_format_tool(fn))
 
         return '\n\n'.join(formatted)

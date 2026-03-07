@@ -542,6 +542,134 @@ class TestRunJobStepToolCallLogging:
         assert tool_marker_pos < open_tag_pos
 
 
+class TestRunJobStepWarmupException:
+    """Tests for critical failure handling when warmup code raises a non-FutureError exception."""
+
+    @pytest.mark.asyncio
+    async def test_warmup_exception_sets_job_done(self, db0_fixture):  # pylint: disable=unused-argument
+        """A non-FutureError exception in warmup sets job status to DONE."""
+        agent = Agent(role="warmup_exc_done", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code="raise ValueError('boom')")
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        assert job.status == JobStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_warmup_exception_calls_set_error_on_job_def(self, db0_fixture):  # pylint: disable=unused-argument
+        """A non-FutureError exception in warmup calls job_def.set_error with the exception."""
+        agent = Agent(role="warmup_exc_set_error", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code="raise RuntimeError('critical')")
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        assert job_def.has_errors() is True
+        errors = list(job_def.get_errors())
+        assert len(errors) == 1
+        assert "critical" in errors[0].error_message
+
+    @pytest.mark.asyncio
+    async def test_warmup_exception_returns_true(self, db0_fixture):  # pylint: disable=unused-argument
+        """run_job_step returns True when warmup raises a non-FutureError exception."""
+        agent = Agent(role="warmup_exc_ret", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code="raise TypeError('bad type')")
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        result = await run_job_step(job)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_warmup_exception_does_not_call_llm(self, db0_fixture):  # pylint: disable=unused-argument
+        """No LLM API call is made when warmup raises a non-FutureError exception."""
+        agent = Agent(role="warmup_exc_no_llm", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code="raise ValueError('no llm')")
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            await run_job_step(job)
+            mock_llm_api_cls.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_warmup_future_error_still_suspends(self, db0_fixture):  # pylint: disable=unused-argument
+        """FutureError from warmup still suspends the job (not treated as critical failure)."""
+        agent = Agent(role="warmup_future_suspend", _system_prompt="Test", _tools=[])
+        future_not_ready = create_future_not_ready()
+        warmup_code = "result = future_val"
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+        job.py_env.local_state['future_val'] = future_not_ready
+
+        result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.WARMING_UP
+        assert job_def.has_errors() is False
+
+    @pytest.mark.asyncio
+    async def test_non_warmup_exception_does_not_set_error(self, db0_fixture):  # pylint: disable=unused-argument
+        """A non-FutureError exception in STARTED (non-warmup) code does NOT call set_error."""
+        agent = Agent(role="started_exc_no_error", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.STARTED)
+        # Simulate the job having a last response that raises an exception
+        from tests.conftest import create_chat_log_item  # pylint: disable=import-outside-toplevel
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="raise KeyError('oops')"))
+
+        mock_response = MagicMock()
+        mock_response.text = "exit('done')"
+        mock_response.session_id = None
+        mock_response.stats = MagicMock(total_bytes_sent=0, total_bytes_received=0, cost=None)
+        mock_response.call_requests = None
+
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        assert job_def.has_errors() is False
+
+    @pytest.mark.asyncio
+    async def test_warmup_second_block_exception_sets_job_done(self, db0_fixture):  # pylint: disable=unused-argument
+        """Exception in the second warmup block is also treated as critical failure."""
+        agent = Agent(role="warmup_blk2_exc", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None,
+                         warmup_code=["x = 1", "raise ValueError('second block fails')"])
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        # First block executes successfully, advances to second block
+        result1 = await run_job_step(job)
+        assert result1 is False
+        assert job.status == JobStatus.WARMING_UP
+
+        # Second block raises exception
+        result2 = await run_job_step(job)
+        assert result2 is True
+        assert job.status == JobStatus.DONE
+        assert job_def.has_errors() is True
+
+
 class TestRunJobStepEmptyCodeBlock:
     """Tests that run_job_step handles CodeBlock with None/empty code correctly."""
 
