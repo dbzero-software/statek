@@ -1,7 +1,10 @@
 """LLM Harness - guards against catastrophic situations such as excessive token usage."""
 
+import logging
 from functools import lru_cache
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .exceptions import LLM_HarnessError
 from .settings import get_statek_settings
@@ -60,9 +63,18 @@ class LLM_Harness:
 def get_llm_harness() -> LLM_Harness:
     """Get the LLM_Harness instance initialized from StatekSettings."""
     settings = get_statek_settings()
-    return LLM_Harness(
+    harness = LLM_Harness(
         max_turns=settings.max_turns,
         max_exceptions=settings.max_exceptions,
         max_consecutive_exceptions=settings.max_consecutive_exceptions,
         max_token_usage=settings.max_token_usage,
     )
+    logger.info(
+        "LLM_Harness initialized: max_turns=%s, max_exceptions=%s, "
+        "max_consecutive_exceptions=%s, max_token_usage=%s",
+        harness.max_turns,
+        harness.max_exceptions,
+        harness.max_consecutive_exceptions,
+        harness.max_token_usage,
+    )
+    return harness

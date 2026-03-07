@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import re
+import traceback as _traceback_module
 from typing import List, Optional, Iterable, Dict, Any, Sequence, Union
 import dbzero as db0
 from dbzero import memo, enum
@@ -62,6 +63,22 @@ def parse_warmup_code(
 
 
 @memo
+class JobDefError:
+    """Container for storing error information from a job failure."""
+    error_message: str
+    """Populated when the traceback collection is turned on"""
+    traceback: Optional[List[str]] = None
+
+    def __init__(self, error: Exception, collect_traceback: bool = True):
+        """Create JobDefError initialized with information from exception."""
+        self.error_message = str(error)
+        if collect_traceback and error.__traceback__ is not None:
+            self.traceback = _traceback_module.format_tb(error.__traceback__)
+        else:
+            self.traceback = None
+
+
+@memo
 @dataclass
 class JobDef:
     """
@@ -73,6 +90,23 @@ class JobDef:
     job_params: Optional[Dict[str, Any]] = None
     # Optional warmup code (single block or sequence of blocks) executed before the first prompt
     warmup_code: Optional[Union[str, CodeBlock, Sequence[Union[str, CodeBlock]]]] = None
+
+    def __post_init__(self):
+        if self.agent is not None:
+            db0.tags(self).add(self.agent)
+
+    def set_error(self, error: Exception, collect_traceback: bool = True) -> None:
+        """Create a JobDefError from the given exception and associate it with this JobDef."""
+        jde = JobDefError(error, collect_traceback=collect_traceback)
+        db0.tags(jde).add(db0.as_tag(self))
+
+    def get_errors(self) -> Iterable["JobDefError"]:
+        """Yield all JobDefError instances associated with this JobDef."""
+        yield from db0.find(JobDefError, db0.as_tag(self))
+
+    def has_errors(self) -> bool:
+        """Return True if any errors are associated with this JobDef."""
+        return any(True for _ in self.get_errors())
 
     def update_warmup_code(
         self,
@@ -131,7 +165,8 @@ class Job:
         chat_log: List[ChatLogItem] = None,
         awaited_result: Optional[FutureResult] = None,
         next_instr_num: Optional[int] = None,
-        warmup_block_num: Optional[int] = None
+        warmup_block_num: Optional[int] = None,
+        error: Optional[JobDefError] = None
     ):
         self.job_def = job_def
         if self.job_def.agent is not None:
@@ -155,6 +190,8 @@ class Job:
         self.next_instr_num = next_instr_num
         # Continuation warmup block number (for multi-block warmup_code)
         self.warmup_block_num = warmup_block_num
+        # Error information if the job failed
+        self.error: Optional[JobDefError] = error
         # Console position recorded after each warmup block completes
         self.warmup_console_positions: List[int] = []
         # Total context bytes used by this job so far

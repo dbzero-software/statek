@@ -4,11 +4,68 @@ import types
 from unittest.mock import patch, MagicMock
 import dbzero as db0
 from tests.conftest import create_chat_log_item
-from statek.executors.job import Job, JobStatus
+from statek.executors.job import Job, JobDefError, JobStatus
 from statek.executors.chat_log_item import ChatLogItem
 from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats, CallParams
 from statek.utils import CodeBlock, CallSpec
 from statek.settings import ChatStyle
+
+
+class TestJobDefError:
+    """Test cases for JobDefError class."""
+
+    def _make_raised_error(self, msg="something went wrong"):
+        """Return an exception that has been raised (has a traceback)."""
+        try:
+            raise ValueError(msg)
+        except ValueError as exc:
+            return exc
+
+    def test_error_message_is_set(self, db0_fixture):  # pylint: disable=unused-argument
+        """error_message is set to the string representation of the exception."""
+        error = self._make_raised_error("boom")
+        jde = JobDefError(error)
+        assert jde.error_message == "boom"
+
+    def test_traceback_collected_by_default(self, db0_fixture):  # pylint: disable=unused-argument
+        """traceback is a non-empty sequence of strings when collect_traceback=True."""
+        error = self._make_raised_error("oops")
+        jde = JobDefError(error)
+        assert jde.traceback is not None
+        assert len(jde.traceback) > 0
+        assert all(isinstance(s, str) for s in jde.traceback)
+
+    def test_traceback_not_collected_when_disabled(self, db0_fixture):  # pylint: disable=unused-argument
+        """traceback is None when collect_traceback=False."""
+        error = self._make_raised_error("oops")
+        jde = JobDefError(error, collect_traceback=False)
+        assert jde.traceback is None
+
+    def test_traceback_none_when_no_traceback_on_exception(self, db0_fixture):  # pylint: disable=unused-argument
+        """traceback is None when exception was never raised (no __traceback__)."""
+        error = ValueError("never raised")
+        jde = JobDefError(error)
+        assert jde.traceback is None
+
+
+class TestJobWithError:
+    """Test cases for Job.error field."""
+
+    def test_job_error_is_none_by_default(self, job_factory):
+        """Job.error is None when created without error."""
+        job = job_factory()
+        assert job.error is None
+
+    def test_job_error_can_be_set(self, job_factory, db0_fixture):  # pylint: disable=unused-argument
+        """Job.error can be set to a JobDefError instance."""
+        try:
+            raise RuntimeError("job failed")
+        except RuntimeError as exc:
+            err = JobDefError(exc)
+            job = job_factory()
+            job.error = err
+            assert job.error is err
+            assert job.error.error_message == "job failed"
 
 
 class TestJobDef:
@@ -633,6 +690,77 @@ class TestJobAppendChatLog:
 
         assert job.chat_log[2].console_pos == 4
         assert job.chat_log[2].llm_resp == "code_block_3"
+
+
+class TestJobDefErrors:
+    """Tests for JobDef.set_error, get_errors, has_errors."""
+
+    def _make_raised_error(self, msg="something went wrong"):
+        try:
+            raise ValueError(msg)
+        except ValueError as exc:
+            return exc
+
+    def test_has_errors_false_by_default(self, job_def_factory):
+        """has_errors returns False when no errors have been set."""
+        job_def = job_def_factory()
+        assert job_def.has_errors() is False
+
+    def test_get_errors_empty_by_default(self, job_def_factory):
+        """get_errors yields nothing when no errors have been set."""
+        job_def = job_def_factory()
+        assert not list(job_def.get_errors())
+
+    def test_set_error_creates_job_def_error(self, job_def_factory):
+        """set_error creates a JobDefError associated with the job definition."""
+        job_def = job_def_factory()
+        error = self._make_raised_error("boom")
+        job_def.set_error(error)
+        errors = list(job_def.get_errors())
+        assert len(errors) == 1
+        assert isinstance(errors[0], JobDefError)
+        assert errors[0].error_message == "boom"
+
+    def test_set_error_has_errors_true(self, job_def_factory):
+        """has_errors returns True after set_error is called."""
+        job_def = job_def_factory()
+        job_def.set_error(self._make_raised_error("oops"))
+        assert job_def.has_errors() is True
+
+    def test_set_error_collects_traceback_by_default(self, job_def_factory):
+        """set_error collects traceback by default."""
+        job_def = job_def_factory()
+        error = self._make_raised_error("traceback test")
+        job_def.set_error(error)
+        errors = list(job_def.get_errors())
+        assert errors[0].traceback is not None
+        assert len(errors[0].traceback) > 0
+
+    def test_set_error_no_traceback_when_disabled(self, job_def_factory):
+        """set_error does not collect traceback when collect_traceback=False."""
+        job_def = job_def_factory()
+        error = self._make_raised_error("no tb")
+        job_def.set_error(error, collect_traceback=False)
+        errors = list(job_def.get_errors())
+        assert errors[0].traceback is None
+
+    def test_set_error_multiple_errors(self, job_def_factory):
+        """set_error can be called multiple times; all errors are retrievable."""
+        job_def = job_def_factory()
+        job_def.set_error(self._make_raised_error("first"))
+        job_def.set_error(self._make_raised_error("second"))
+        errors = list(job_def.get_errors())
+        assert len(errors) == 2
+        messages = {e.error_message for e in errors}
+        assert messages == {"first", "second"}
+
+    def test_errors_isolated_between_job_defs(self, job_def_factory):
+        """Errors set on one JobDef are not visible from another."""
+        job_def1 = job_def_factory()
+        job_def2 = job_def_factory()
+        job_def1.set_error(self._make_raised_error("only for def1"))
+        assert not list(job_def2.get_errors())
+        assert job_def2.has_errors() is False
 
 
 class TestJobDefUpdateWarmupCode:

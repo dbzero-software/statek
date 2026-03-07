@@ -1,6 +1,6 @@
 """Tests for the web_ui job detail helper functions."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock
 from web_ui.pages.job_detail import (
     _get_console_slice,
     _get_warmup_blocks,
@@ -8,6 +8,7 @@ from web_ui.pages.job_detail import (
     _get_turn_console_ranges,
     _get_code_str,
     _get_tool_data_for_block,
+    _get_system_prompt,
     _build_md_content,
 )
 
@@ -430,3 +431,80 @@ class TestBuildMdContent:
         md = _call_build_md(job)
         assert isinstance(md, str)
         assert len(md) > 0
+
+
+def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, raw_prompt=None,
+                         no_agent=False, no_job_def=False):
+    job = MagicMock()
+    if no_job_def:
+        job.job_def = None
+        return job
+    job_def = MagicMock()
+    job_def.job_params = {}
+    if no_agent:
+        job_def.agent = None
+    else:
+        agent = MagicMock()
+        agent._system_prompt = raw_prompt  # pylint: disable=protected-access
+        if system_prompt_raises:
+            agent.system_prompt.side_effect = system_prompt_raises
+        else:
+            agent.system_prompt.return_value = system_prompt_return
+        job_def.agent = agent
+    job.job_def = job_def
+    return job
+
+
+class TestGetSystemPrompt:
+    def test_returns_formatted_system_prompt(self):
+        job = _make_job_with_agent(system_prompt_return='You are an assistant.')
+        text, error = _get_system_prompt(job)
+        assert text == 'You are an assistant.'
+        assert error is None
+
+    def test_returns_empty_string_when_no_job_def(self):
+        job = _make_job_with_agent(no_job_def=True)
+        text, error = _get_system_prompt(job)
+        assert text == ''
+        assert error is None
+
+    def test_returns_empty_string_when_no_agent(self):
+        job = _make_job_with_agent(no_agent=True)
+        text, error = _get_system_prompt(job)
+        assert text == ''
+        assert error is None
+
+    def test_falls_back_to_raw_prompt_on_format_error(self):
+        job = _make_job_with_agent(
+            system_prompt_raises=KeyError('missing_key'),
+            raw_prompt='Raw template with {missing_key}.',
+        )
+        text, error = _get_system_prompt(job)
+        assert text == 'Raw template with {missing_key}.'
+        assert error is not None
+        assert 'KeyError' in error
+
+    def test_error_message_contains_exception_detail(self):
+        job = _make_job_with_agent(
+            system_prompt_raises=ValueError('bad format'),
+            raw_prompt='template',
+        )
+        _, error = _get_system_prompt(job)
+        assert 'ValueError' in error
+        assert 'bad format' in error
+
+    def test_returns_empty_string_when_formatted_and_raw_both_none(self):
+        job = _make_job_with_agent(
+            system_prompt_raises=KeyError('x'),
+            raw_prompt=None,
+        )
+        text, error = _get_system_prompt(job)
+        assert text == ''
+        assert error is not None
+
+    def test_returns_empty_string_on_unexpected_error(self):
+        job = MagicMock()
+        type(job).job_def = PropertyMock(side_effect=RuntimeError('db error'))
+        text, error = _get_system_prompt(job)
+        assert text == ''
+        assert error is None
