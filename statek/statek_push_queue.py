@@ -2,12 +2,11 @@
 # pylint: disable=no-member
 from typing import List, Optional, Tuple
 
-import db0_rpc
 import dbzero as db0
 
 from statek.executors.job import Job
 from statek.fifo_queue import FiFoQueue
-
+from statek.rpc_integration import rpc as db0_rpc
 
 @db0.memo(singleton=True)
 class StatekPushQueue:
