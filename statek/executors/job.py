@@ -108,6 +108,12 @@ class JobDef:
         """Return True if any errors are associated with this JobDef."""
         return any(True for _ in self.get_errors())
 
+    def clear_errors(self):
+        """Remove all JobDefError instances associated with this JobDef."""
+        tag = db0.as_tag(self)
+        for err in list(self.get_errors()):
+            db0.tags(err).remove(tag)
+        
     def update_warmup_code(
         self,
         warmup_code: Optional[Union[str, Sequence[str]]],

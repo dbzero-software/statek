@@ -808,7 +808,10 @@ async def run_agentic_loop(agent: 'Agent',
 
     # Reuse an existing matching job definition or create a new one
     job_def = find_existing_job_def(agent, warmup_code)
-    if job_def is None:
+    if job_def:
+        # Clear any previous errors on the job definition they might'be been fixed after process restart
+        job_def.clear_errors()
+    else:
         parsed_warmup_code = parse_warmup_code(warmup_code)
         job_def = JobDef(
             agent=agent,

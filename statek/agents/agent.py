@@ -80,6 +80,21 @@ class Agent:
         self.append_tool(show_example)
 
 
+    def update_system_prompt(self, new_prompt: str) -> bool:
+        """Update _system_prompt only if it differs from the current value.
+
+        Args:
+            new_prompt: New system prompt string to apply.
+
+        Returns:
+            True if the prompt was updated, False if it was already up to date.
+        """
+        if self._system_prompt == new_prompt:
+            return False
+        self._system_prompt = new_prompt
+        STATEK_LOGGER.debug("Agent '%s' system prompt updated", self.role)
+        return True
+
     def update_metadata(self, new_metadata: Dict[str, str]) -> bool:
         """Update _metadata only if keys or values differ from the current state.
 
