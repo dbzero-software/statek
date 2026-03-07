@@ -1,14 +1,12 @@
 """Tests for Job class."""
 
 import types
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import dbzero as db0
 from tests.conftest import create_chat_log_item
 from statek.executors.job import Job, JobDefError, JobStatus
-from statek.executors.chat_log_item import ChatLogItem
-from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats, CallParams
+from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats
 from statek.utils import CodeBlock, CallSpec
-from statek.settings import ChatStyle
 
 
 class TestJobDefError:
