@@ -19,17 +19,18 @@ class FQ_Item:  # pylint: disable=invalid-name
     """Single queue entry; stores kwargs and its own integer key."""
 
     def __init__(self, key: int, prefix=None, **kwargs):
-        if prefix is not None:
-            db0.set_prefix(self, prefix)
+        db0.set_prefix(self, prefix)
         self.__key = key
-        self.__data = kwargs
+        self.__kwarg_keys = list(kwargs.keys())
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
     @property
     def queue_key(self) -> int:
         return self.__key
 
     def to_dict(self) -> Dict:
-        return dict(self.__data.items())
+        return {k: getattr(self, k) for k in self.__kwarg_keys}
 
 
 @db0.memo
