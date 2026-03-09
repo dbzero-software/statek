@@ -1,11 +1,74 @@
-"""Docstring parsing utilities for statek package."""
+"""Docstring parsing utilities for statek package."""  # pylint: disable=too-many-lines
 
 import dataclasses
 import inspect
 import re
 from collections import namedtuple
 from dataclasses import dataclass, fields as dataclass_fields
-from typing import Callable, List, Optional, Any, get_type_hints, Union
+from typing import Callable, Dict, List, Optional, Any, get_type_hints, Union
+
+
+_VARIANT_SEP_RE = re.compile(r'/([A-Za-z0-9]{0,8}):')
+
+
+def parse_variants(text: str) -> Dict | str:
+    """Parse a multi-variant encoded string into a dict of named variants.
+
+    If the input starts with the ``VARIANTS/`` prefix the string is split on
+    ``/NAME:`` delimiters and each segment is returned as a dict entry keyed
+    by the lower-cased variant name (empty string for the default variant).
+    When the input is not a multi-variant string it is returned unchanged.
+
+    Args:
+        text (str): The input string, possibly using multi-variant encoding.
+
+    Returns:
+        Dict | str: A dict mapping variant name → text when multi-variant,
+            or the original string otherwise.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith('VARIANTS/'):
+        return text
+
+    body = stripped[len('VARIANTS'):]  # starts with /name:
+    matches = list(_VARIANT_SEP_RE.finditer(body))
+    if not matches:
+        return text
+
+    result = {}
+    for i, match in enumerate(matches):
+        name = match.group(1).lower()
+        text_start = match.end()
+        text_end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        result[name] = body[text_start:text_end]
+    return result
+
+
+def get_text_variant(text: str, variant_name: Optional[str]) -> str:
+    """Retrieve a named variant from a multi-variant string.
+
+    When the input is a multi-variant string (see :func:`parse_variants`) the
+    variant identified by *variant_name* is returned.  If that variant is
+    absent the default variant (empty name) is returned instead.  When the
+    input is not a multi-variant string it is returned as-is.  Matching on
+    *variant_name* is case-insensitive.  When *variant_name* is ``None`` it
+    selects the default variant (same as passing an empty string).
+
+    Args:
+        text (str): Either a multi-variant or a regular string.
+        variant_name (str): The variant name to retrieve (case insensitive),
+            or None to select the default variant.
+
+    Returns:
+        str: The retrieved text.
+    """
+    parsed = parse_variants(text)
+    if isinstance(parsed, str):
+        return parsed
+    key = variant_name.lower() if variant_name is not None else ''
+    if key in parsed:
+        return parsed[key]
+    return parsed.get('', '')
 
 
 # Docstring parsing structures
@@ -36,9 +99,14 @@ class ClassDocString:
     name: str
     brief_desc: str
     full_desc: str
+    """dataclass fields"""
     fields: Optional[List[AttrDocString]] = None
+    """Tag descriptors"""
+    tags: Optional[List[str]] = None
+    """Explicit attribute declarations in the original docstring"""
     attrs: Optional[List[AttrDocString]] = None
     props: Optional[List[AttrDocString]] = None
+    """If not defined, the default ACL from StatekSettings is used"""
     statek_acl: Optional['Statek_ACL'] = None
 
 
@@ -46,8 +114,36 @@ class DocstringParseError(Exception):
     """Exception raised when docstring parsing fails."""
 
 
-def parse_docstring(type_or_func: Any) -> FuncDocString | ClassDocString:
+def parse_docstring(type_or_func: Any, variant_name: str = None) -> FuncDocString | ClassDocString:
     """Parse a docstring from a class or callable into a structured format.
+
+    Args:
+        type_or_func: Either a class or a callable (function/method)
+        variant_name: Optional variant name (e.g. "tool"). When provided, the
+            named variant is extracted from multi-variant docstrings before
+            parsing. When None the raw docstring is used.
+
+    Returns:
+        FuncDocString: for functions/methods, ClassDocString for classes
+
+    Raises:
+        DocstringParseError: If required docstring elements are missing
+    """
+    if isinstance(type_or_func, type):
+        return _parse_class_docstring(type_or_func, variant_name)
+    if callable(type_or_func):
+        return _parse_func_docstring(type_or_func, variant_name)
+    raise DocstringParseError(
+        f"Expected a class or callable, got {type(type_or_func).__name__}"
+    )
+
+
+def parse_tool_docstring(type_or_func: Any) -> FuncDocString | ClassDocString:
+    """Parse the "tool" variant of a docstring from a class or callable.
+
+    Convenience wrapper around :func:`parse_docstring` that always selects the
+    ``"tool"`` variant from multi-variant docstrings.  Falls back to the
+    default variant (or the plain docstring) when no ``tool`` variant exists.
 
     Args:
         type_or_func: Either a class or a callable (function/method)
@@ -58,26 +154,24 @@ def parse_docstring(type_or_func: Any) -> FuncDocString | ClassDocString:
     Raises:
         DocstringParseError: If required docstring elements are missing
     """
-    if isinstance(type_or_func, type):
-        return _parse_class_docstring(type_or_func)
-    if callable(type_or_func):
-        return _parse_func_docstring(type_or_func)
-    raise DocstringParseError(
-        f"Expected a class or callable, got {type(type_or_func).__name__}"
-    )
+    return parse_docstring(type_or_func, variant_name="tool")
 
 
-def _parse_class_docstring(cls: type) -> ClassDocString:
+def _parse_class_docstring(cls: type, variant_name: str = None) -> ClassDocString:
     """Parse a class docstring into ClassDocString structure."""
     docstring = inspect.getdoc(cls)
     if not docstring:
         raise DocstringParseError(f"Class '{cls.__name__}' has no docstring")
 
-    brief_desc, full_desc, sections = _parse_docstring_sections(docstring)
+    brief_desc, extra_desc, sections = _parse_docstring_sections(docstring)
 
     attrs = None
     if "Attributes" in sections:
         attrs = _parse_typed_items(sections["Attributes"], AttrDocString)
+
+    tags = None
+    if "Tags" in sections:
+        tags = _parse_tags_section(sections["Tags"])
 
     fields = _extract_dataclass_fields(cls)
     props = _extract_class_properties(cls)
@@ -86,12 +180,29 @@ def _parse_class_docstring(cls: type) -> ClassDocString:
     if "STATEK-ACL" in sections:
         statek_acl = parse_statek_acl(sections["STATEK-ACL"])
 
+    brief_desc = get_text_variant(brief_desc, variant_name)
+    extra_desc = get_text_variant(extra_desc, variant_name).strip()
+    full_desc = (brief_desc + '\n\n' + extra_desc) if extra_desc else brief_desc
+    if attrs is not None:
+        attrs = [AttrDocString(a.name, a.type,
+                               get_text_variant(a.desc, variant_name) if a.desc else a.desc)
+                 for a in attrs]
+    if fields is not None:
+        fields = [AttrDocString(f.name, f.type,
+                                get_text_variant(f.desc, variant_name) if f.desc else f.desc)
+                  for f in fields]
+    if props is not None:
+        props = [AttrDocString(p.name, p.type,
+                               get_text_variant(p.desc, variant_name) if p.desc else p.desc)
+                 for p in props]
+
     return ClassDocString(
         source=cls,
         name=cls.__name__,
         brief_desc=brief_desc,
         full_desc=full_desc,
         fields=fields,
+        tags=tags,
         attrs=attrs,
         props=props,
         statek_acl=statek_acl
@@ -171,13 +282,13 @@ def _extract_class_properties(cls: type) -> Optional[List[AttrDocString]]:
     return result if result else None
 
 
-def _parse_func_docstring(func: Callable) -> FuncDocString:
+def _parse_func_docstring(func: Callable, variant_name: str = None) -> FuncDocString:
     """Parse a function/method docstring into FuncDocString structure."""
     docstring = inspect.getdoc(func)
     if not docstring:
         raise DocstringParseError(f"Function '{func.__name__}' has no docstring")
 
-    brief_desc, full_desc, sections = _parse_docstring_sections(docstring)
+    brief_desc, extra_desc, sections = _parse_docstring_sections(docstring)
 
     args = None
     if "Args" in sections:
@@ -206,6 +317,24 @@ def _parse_func_docstring(func: Callable) -> FuncDocString:
         if complement_ret is not None:
             returns = complement_ret
 
+    brief_desc = get_text_variant(brief_desc, variant_name)
+    extra_desc = get_text_variant(extra_desc, variant_name).strip()
+    full_desc = (brief_desc + '\n\n' + extra_desc) if extra_desc else brief_desc
+    if args is not None:
+        args = [ArgDocString(a.name, a.type,
+                             get_text_variant(a.desc, variant_name) if a.desc else a.desc)
+                for a in args]
+    if returns is not None:
+        returns = RetDocString(returns.type,
+                               get_text_variant(returns.desc, variant_name)
+                               if returns.desc else returns.desc)
+    if raises is not None:
+        raises = [RaiseDocString(r.type,
+                                 get_text_variant(r.desc, variant_name) if r.desc else r.desc)
+                  for r in raises]
+    if example is not None:
+        example = get_text_variant(example, variant_name)
+
     return FuncDocString(
         source=func,
         name=func.__name__,
@@ -219,17 +348,18 @@ def _parse_func_docstring(func: Callable) -> FuncDocString:
 
 
 def _parse_docstring_sections(docstring: str) -> tuple[str, str, dict]:  # pylint: disable=too-many-locals
-    """Parse docstring into brief description, full description, and sections.
+    """Parse docstring into brief description, extra description, and sections.
 
     Returns:
-        Tuple of (brief_desc, full_desc, sections_dict)
+        Tuple of (brief_desc, extra_desc, sections_dict) where extra_desc is
+        the description text after the first paragraph (may be a VARIANTS string).
     """
     lines = docstring.split('\n')
 
     # Section headers we recognize
     section_headers = {'Args', 'Arguments', 'Attributes', 'Returns', 'Return',
                        'Raises', 'Raise', 'Example', 'Examples', 'Note', 'Notes',
-                       'STATEK-ACL'}
+                       'Tags', 'STATEK-ACL'}
 
     # Find section boundaries
     section_starts = []
@@ -255,8 +385,8 @@ def _parse_docstring_sections(docstring: str) -> tuple[str, str, dict]:  # pylin
         brief_lines.append(line.strip())
     brief_desc = ' '.join(brief_lines)
 
-    # Full description is everything up to first section
-    full_desc = '\n'.join(line for line in desc_lines).strip()
+    # Extra description is everything after the first paragraph
+    extra_desc = '\n'.join(desc_lines[len(brief_lines):]).strip()
 
     # Parse sections
     sections = {}
@@ -271,7 +401,7 @@ def _parse_docstring_sections(docstring: str) -> tuple[str, str, dict]:  # pylin
         section_content = '\n'.join(lines[start_line + 1:end_line])
         sections[section_name] = section_content
 
-    return brief_desc, full_desc, sections
+    return brief_desc, extra_desc, sections
 
 
 def _parse_typed_items(section_content: str, item_class) -> List:
@@ -328,6 +458,27 @@ def _parse_typed_items(section_content: str, item_class) -> List:
             items.append(item_class(current_name, current_type, desc))
 
     return items if items else None
+
+
+def _parse_tags_section(section_content: str) -> Optional[List[str]]:
+    """Parse a Tags section into a list of tag name strings.
+
+    Each non-empty line is a tag entry. If a line contains `` - ``, only the
+    part before the separator is used as the tag name; otherwise the whole
+    stripped line is the tag name.
+    """
+    tags = []
+    for line in section_content.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if ' - ' in stripped:
+            tag_name = stripped.split(' - ', 1)[0].strip()
+        else:
+            tag_name = stripped
+        if tag_name:
+            tags.append(tag_name)
+    return tags if tags else None
 
 
 def _parse_return_section(section_content: str) -> Optional[RetDocString]:
@@ -547,6 +698,13 @@ def _format_class_py_syntax(docstring: ClassDocString, brief: bool,  # pylint: d
         if docstring.full_desc:
             doc_lines.append(docstring.full_desc)
 
+        # Tags section
+        if docstring.tags:
+            doc_lines.append("")
+            doc_lines.append("Tags:")
+            for tag in docstring.tags:
+                doc_lines.append(f"    {tag}")
+
         # Attributes section (merged from fields and attrs)
         merged_attrs = _get_merged_attributes(docstring)
         if merged_attrs:
@@ -577,7 +735,7 @@ def _format_class_py_syntax(docstring: ClassDocString, brief: bool,  # pylint: d
                             if effective_acl.has_access(f.__name__, agent)]
         for func in member_funcs:
             try:
-                func_doc = parse_docstring(func)
+                func_doc = parse_tool_docstring(func)
                 func_formatted = _format_func_docstring(func_doc, brief=True, py_syntax=True)
                 # Indent the function definition
                 indented_lines = ['    ' + line for line in func_formatted.split('\n')]

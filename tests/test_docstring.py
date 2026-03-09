@@ -8,8 +8,11 @@ import pytest
 
 from statek.docstring import (
     parse_docstring,
+    parse_tool_docstring,
     format_docstring,
     parse_statek_acl,
+    parse_variants,
+    get_text_variant,
     FuncDocString,
     ClassDocString,
     AttrDocString,
@@ -1185,3 +1188,474 @@ class TestParseClassProperties:
 
         assert "Attributes:" not in result
         assert "area" not in result
+
+
+class TestParseVariants:
+    """Test cases for parse_variants."""
+
+    def test_non_variant_string_returned_as_is(self):
+        """A plain string without VARIANTS/ prefix is returned unchanged."""
+        text = "Hello, world."
+        assert parse_variants(text) == text
+
+    def test_empty_string_returned_as_is(self):
+        """An empty string is returned unchanged."""
+        assert parse_variants("") == ""
+
+    def test_basic_two_variants(self):
+        """Parse a string with two variants into a dict."""
+        result = parse_variants("VARIANTS/:This is default variant/TOOL:this is a tool variant.")
+
+        assert isinstance(result, dict)
+        assert result[""] == "This is default variant"
+        assert result["tool"] == "this is a tool variant."
+
+    def test_variant_names_normalized_to_lowercase(self):
+        """Variant names are stored in lowercase."""
+        result = parse_variants("VARIANTS/:default/TOOL:tool text/MyVar:myvar text")
+
+        assert "tool" in result
+        assert "myvar" in result
+        assert "TOOL" not in result
+
+    def test_default_only_variant(self):
+        """A multi-variant string with only the default variant produces a dict."""
+        result = parse_variants("VARIANTS/:only default")
+
+        assert isinstance(result, dict)
+        assert result[""] == "only default"
+
+    def test_multiline_variant_text(self):
+        """Variant text can span multiple lines."""
+        text = "VARIANTS/:Line one.\nLine two./TOOL:Short."
+        result = parse_variants(text)
+
+        assert result[""] == "Line one.\nLine two."
+        assert result["tool"] == "Short."
+
+    def test_variant_text_with_slashes(self):
+        """Variant text can contain forward slashes that are not delimiters."""
+        text = "VARIANTS/:path/to/file/TOOL:other"
+        result = parse_variants(text)
+
+        # /to/ and /file/ could match as variant delimiters too, but "to" and "file"
+        # are valid variant names — depends on greedy parsing behaviour
+        # The key requirement is that VARIANTS/ prefix triggers parsing
+        assert isinstance(result, dict)
+
+    def test_variant_text_with_quoted_content(self):
+        """Variant text can include quotes."""
+        text = 'VARIANTS/:default text/TOOL:this is a "tool" variant.'
+        result = parse_variants(text)
+
+        assert result["tool"] == 'this is a "tool" variant.'
+
+    def test_three_variants(self):
+        """Parse a string with three variants."""
+        result = parse_variants("VARIANTS/:default/A:alpha/B:beta")
+
+        assert result[""] == "default"
+        assert result["a"] == "alpha"
+        assert result["b"] == "beta"
+
+    def test_leading_whitespace_ignored(self):
+        """Leading whitespace before VARIANTS/ is ignored."""
+        result = parse_variants("  VARIANTS/:default/TOOL:tool text")
+
+        assert isinstance(result, dict)
+        assert result[""] == "default"
+        assert result["tool"] == "tool text"
+
+    def test_leading_newlines_ignored(self):
+        """Leading newlines before VARIANTS/ are ignored."""
+        result = parse_variants("\n\nVARIANTS/:default/TOOL:tool text")
+
+        assert isinstance(result, dict)
+        assert result[""] == "default"
+
+    def test_leading_mixed_whitespace_ignored(self):
+        """Mixed leading whitespace (spaces, tabs, newlines) before VARIANTS/ is ignored."""
+        result = parse_variants("\n  \t  VARIANTS/:default/TOOL:tool text")
+
+        assert isinstance(result, dict)
+        assert result[""] == "default"
+
+    def test_non_variant_similar_prefix_not_parsed(self):
+        """A string starting with VARIANTS but wrong format is returned as-is."""
+        text = "VARIANTS_NOT/:something"
+        assert parse_variants(text) == text
+
+    def test_variant_name_up_to_8_chars(self):
+        """Variant names up to 8 characters are parsed correctly."""
+        result = parse_variants("VARIANTS/:default/LONGNAME:long name text")
+
+        assert "longname" in result
+        assert result["longname"] == "long name text"
+
+
+class TestGetTextVariant:
+    """Test cases for get_text_variant."""
+
+    def test_plain_string_returned_as_is(self):
+        """A non-variant string is returned unchanged regardless of variant_name."""
+        assert get_text_variant("plain text", "tool") == "plain text"
+
+    def test_get_existing_variant(self):
+        """Returns the requested variant when it exists."""
+        text = "VARIANTS/:default/TOOL:tool text"
+        assert get_text_variant(text, "tool") == "tool text"
+
+    def test_get_default_variant(self):
+        """Returns the default (empty-name) variant when requested."""
+        text = "VARIANTS/:default text/TOOL:tool text"
+        assert get_text_variant(text, "") == "default text"
+
+    def test_missing_variant_falls_back_to_default(self):
+        """Falls back to default variant when the requested one is absent."""
+        text = "VARIANTS/:default text/TOOL:tool text"
+        assert get_text_variant(text, "nonexistent") == "default text"
+
+    def test_variant_name_case_insensitive(self):
+        """Variant name matching is case-insensitive."""
+        text = "VARIANTS/:default/TOOL:tool text"
+        assert get_text_variant(text, "TOOL") == "tool text"
+        assert get_text_variant(text, "Tool") == "tool text"
+        assert get_text_variant(text, "tool") == "tool text"
+
+    def test_missing_variant_no_default_returns_empty(self):
+        """When variant is missing and no default exists, returns empty string."""
+        text = "VARIANTS/A:alpha/B:beta"
+        result = get_text_variant(text, "nonexistent")
+        assert result == ""
+
+    def test_plain_string_any_variant_name(self):
+        """A plain string always returns itself, no matter the variant name."""
+        text = "just a string"
+        assert get_text_variant(text, "") == text
+        assert get_text_variant(text, "tool") == text
+
+
+class TestParseDocstringVariantName:
+    """Tests for parse_docstring variant_name parameter and parse_tool_docstring."""
+
+    def test_variant_name_none_parses_plain_docstring(self):
+        """With variant_name=None, behaviour is identical to calling without variant_name."""
+        def fn(x: int) -> int:
+            """Double a number.
+
+            Args:
+                x (int): The input.
+
+            Returns:
+                int: Doubled value.
+            """
+            return x * 2
+
+        result = parse_docstring(fn, variant_name=None)
+        assert isinstance(result, FuncDocString)
+        assert result.brief_desc == "Double a number."
+
+    def test_variant_name_selects_tool_variant_in_brief_desc(self):
+        """When variant_name='tool', the tool variant is selected from the brief_desc field."""
+        def fn(x: int) -> int:
+            """VARIANTS/:Default brief description./tool:Tool brief description.
+
+            Args:
+                x (int): The input.
+
+            Returns:
+                int: The output.
+            """
+            return x
+
+        result = parse_docstring(fn, variant_name="tool")
+        assert isinstance(result, FuncDocString)
+        assert result.brief_desc == "Tool brief description."
+
+    def test_variant_name_falls_back_to_default_for_plain_docstring(self):
+        """A function with a plain (non-variant) docstring returns the same for any variant_name."""
+        def fn(x: int) -> int:
+            """Plain brief.
+
+            Args:
+                x (int): The input.
+
+            Returns:
+                int: The output.
+            """
+            return x
+
+        plain = parse_docstring(fn)
+        with_variant = parse_docstring(fn, variant_name="tool")
+        assert plain.brief_desc == with_variant.brief_desc
+
+    def test_variant_name_selects_tool_variant_class_brief(self):
+        """When variant_name='tool', the tool variant is selected from the class brief_desc."""
+        @dataclass
+        class MyModel:
+            """VARIANTS/:Default class description./tool:Tool class description.
+
+            """
+            value: int = 0
+
+        result = parse_docstring(MyModel, variant_name="tool")
+        assert isinstance(result, ClassDocString)
+        assert result.brief_desc == "Tool class description."
+
+    def test_parse_tool_docstring_is_tool_variant_wrapper(self):
+        """parse_tool_docstring returns the 'tool' variant for a multi-variant brief_desc."""
+        def fn(x: int) -> int:
+            """VARIANTS/:Default brief./tool:Tool brief.
+
+            Args:
+                x (int): The input.
+
+            Returns:
+                int: The output.
+            """
+            return x
+
+        result = parse_tool_docstring(fn)
+        assert isinstance(result, FuncDocString)
+        assert result.brief_desc == "Tool brief."
+
+    def test_parse_tool_docstring_plain_docstring(self):
+        """parse_tool_docstring works correctly on a plain (non-variant) docstring."""
+        def fn(x: int) -> int:
+            """Plain brief.
+
+            Args:
+                x (int): The input.
+
+            Returns:
+                int: The output.
+            """
+            return x
+
+        result = parse_tool_docstring(fn)
+        assert isinstance(result, FuncDocString)
+        assert result.brief_desc == "Plain brief."
+
+    def test_parse_tool_docstring_class_with_tool_variant(self):
+        """parse_tool_docstring uses 'tool' variant from each individual text element."""
+        @dataclass
+        class MyClass:
+            """VARIANTS/:Default class brief./tool:Tool class brief.
+
+            """
+            x: int = 0
+
+        result = parse_tool_docstring(MyClass)
+        assert isinstance(result, ClassDocString)
+        assert result.brief_desc == "Tool class brief."
+
+    def test_tool_variant_arg_description(self):
+        """Tool variant is applied per-element: arg description can differ between variants."""
+        def fn(x: int) -> int:
+            """Brief desc.
+
+            Args:
+                x (int): VARIANTS/:Default param desc./tool:Tool param desc.
+
+            Returns:
+                int: The output.
+            """
+            return x
+
+        default_result = parse_docstring(fn, variant_name="")
+        tool_result = parse_tool_docstring(fn)
+
+        assert default_result.args[0].desc == "Default param desc."
+        assert tool_result.args[0].desc == "Tool param desc."
+
+    def test_tool_variant_return_description(self):
+        """Tool variant is applied per-element: return description can differ between variants."""
+        def fn(x: int) -> int:
+            """Brief desc.
+
+            Args:
+                x (int): The input.
+
+            Returns:
+                int: VARIANTS/:Default return desc./tool:Tool return desc.
+            """
+            return x
+
+        default_result = parse_docstring(fn, variant_name="")
+        tool_result = parse_tool_docstring(fn)
+
+        assert default_result.returns.desc == "Default return desc."
+        assert tool_result.returns.desc == "Tool return desc."
+
+    def test_tool_variant_class_attr_description(self):
+        """Tool variant is applied per-element: attr description can differ between variants."""
+        class MyClass:  # pylint: disable=too-few-public-methods
+            """Brief desc.
+
+            Attributes:
+                value (int): VARIANTS/:Default attr desc./tool:Tool attr desc.
+            """
+            def __init__(self, value: int):
+                self.value = value
+
+        default_result = parse_docstring(MyClass, variant_name="")
+        tool_result = parse_tool_docstring(MyClass)
+
+        assert default_result.attrs[0].desc == "Default attr desc."
+        assert tool_result.attrs[0].desc == "Tool attr desc."
+
+    def test_embedded_variants_in_full_desc_resolved(self):
+        """Embedded VARIANTS block within full_desc is resolved, not left as raw syntax."""
+        @dataclass
+        class MyClass:
+            """Base description.
+
+            VARIANTS/:Default extra detail./TOOL:Tool extra detail.
+            """
+            value: int = 0
+
+        tool_result = parse_tool_docstring(MyClass)
+        default_result = parse_docstring(MyClass, variant_name="")
+
+        assert "VARIANTS" not in tool_result.full_desc
+        assert "VARIANTS" not in default_result.full_desc
+        assert tool_result.full_desc == "Base description.\n\nTool extra detail."
+        assert default_result.full_desc == "Base description.\n\nDefault extra detail."
+
+    def test_embedded_variants_empty_tool_in_full_desc(self):
+        """When tool variant is empty in embedded block, full_desc contains only preamble."""
+        @dataclass
+        class MyClass:
+            """Base description.
+
+            VARIANTS/:Default extra detail./TOOL:
+            """
+            value: int = 0
+
+        tool_result = parse_tool_docstring(MyClass)
+
+        assert "VARIANTS" not in tool_result.full_desc
+        assert tool_result.full_desc == "Base description."
+
+
+class TestParseClassTags:
+    """Test cases for parsing Tags sections in class docstrings."""
+
+    def test_parse_class_tags_basic(self):
+        """Tags section with name-description entries is parsed into tag names."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """A simulator.
+
+            Tags:
+                particle_type - the associated type
+                mass_category - the mass category
+            """
+
+        result = parse_docstring(Sim)
+        assert result.tags == ["particle_type", "mass_category"]
+
+    def test_parse_class_tags_no_description(self):
+        """Tags without a description separator are captured as-is."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """A simulator.
+
+            Tags:
+                active
+                archived
+            """
+
+        result = parse_docstring(Sim)
+        assert result.tags == ["active", "archived"]
+
+    def test_parse_class_tags_mixed(self):
+        """Tags section may mix entries with and without descriptions."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """A simulator.
+
+            Tags:
+                particle_type - the associated type
+                the mass category
+            """
+
+        result = parse_docstring(Sim)
+        assert result.tags == ["particle_type", "the mass category"]
+
+    def test_parse_class_no_tags_section(self):
+        """Classes without a Tags section have tags=None."""
+        result = parse_docstring(ParticleSimulator)
+        assert result.tags is None
+
+    def test_parse_class_empty_tags_section(self):
+        """An empty Tags section yields tags=None."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """A simulator.
+
+            Tags:
+            """
+
+        result = parse_docstring(Sim)
+        assert result.tags is None
+
+    def test_format_class_includes_tags(self):
+        """format_docstring includes the Tags section when tags are present."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """A simulator.
+
+            Tags:
+                particle_type - the associated type
+                mass_category
+            """
+
+        result = parse_docstring(Sim)
+        formatted = format_docstring(result)
+        assert "Tags:" in formatted
+        assert "particle_type" in formatted
+        assert "mass_category" in formatted
+
+    def test_format_class_brief_excludes_tags(self):
+        """In brief mode, Tags section is not included in the output."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """A simulator.
+
+            Tags:
+                particle_type - the associated type
+            """
+
+        result = parse_docstring(Sim)
+        formatted = format_docstring(result, brief=True)
+        assert "Tags:" not in formatted
+
+    def test_format_class_no_tags_section_absent(self):
+        """When no tags, Tags section is absent from formatted output."""
+        result = parse_docstring(ParticleSimulator)
+        formatted = format_docstring(result)
+        assert "Tags:" not in formatted
+
+    def test_parse_class_tags_with_attributes(self):
+        """Tags and Attributes sections coexist and are both parsed."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """A simulator.
+
+            Tags:
+                particle_type - the associated type
+
+            Attributes:
+                gravity (float): Downward force.
+            """
+
+        result = parse_docstring(Sim)
+        assert result.tags == ["particle_type"]
+        assert result.attrs is not None
+        assert result.attrs[0].name == "gravity"
+
+    def test_parse_class_tags_variants(self):
+        """Tags from variant docstrings are parsed in the selected variant."""
+        class Sim:  # pylint: disable=too-few-public-methods
+            """VARIANTS/:Full description./TOOL:Tool description.
+
+            Tags:
+                particle_type - the associated type
+            """
+
+        result = parse_tool_docstring(Sim)
+        assert result.tags == ["particle_type"]
