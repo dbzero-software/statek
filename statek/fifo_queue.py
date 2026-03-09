@@ -12,7 +12,6 @@ class FQ_Item:  # pylint: disable=invalid-name
     def __init__(self, key: int, prefix=None, **kwargs):
         db0.set_prefix(self, prefix)
         self.__key = key
-        self.__kwarg_keys = list(kwargs.keys())
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -21,7 +20,11 @@ class FQ_Item:  # pylint: disable=invalid-name
         return self.__key
 
     def to_dict(self) -> Dict:
-        return {k: getattr(self, k) for k in self.__kwarg_keys}
+        return {
+            key: value
+            for key, value in vars(self).items()
+            if key != "_FQ_Item__key"
+        }
 
 
 @db0.memo
