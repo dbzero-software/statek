@@ -5,15 +5,6 @@ from typing import Callable, Dict, List
 import dbzero as db0
 
 
-def _wrap_value(value):
-    """Return a db0.weak_proxy for memo objects, or the value unchanged."""
-    try:
-        db0.uuid(value)
-        return db0.weak_proxy(value)
-    except Exception:  # pylint: disable=broad-except
-        return value
-
-
 @db0.memo
 class FQ_Item:  # pylint: disable=invalid-name
     """Single queue entry; stores kwargs and its own integer key."""
