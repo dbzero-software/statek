@@ -4,6 +4,7 @@ import inspect
 import traceback
 import asyncio
 import builtins
+from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Union
 from contextlib import contextmanager
 import dbzero as db0
@@ -769,6 +770,20 @@ def _make_start_jobs_func(agent, job_def, task_queue_size_func, provider):
     return start_jobs_func
 
 
+@dataclass
+class AgentLoopDef:
+    """Definition for a single agent loop within a fleet.
+
+    Attributes:
+        agent: the SupervisedAgent instance to run
+        warmup_code: initialization code — single block or sequence of blocks
+        task_queue_size_func: callable returning the number of queued tasks
+    """
+    agent: 'SupervisedAgent'
+    warmup_code: Union[str, Sequence[str], None]
+    task_queue_size_func: Callable
+
+
 async def run_agentic_loop(agent: 'Agent',
                            warmup_code: Union[str, Sequence[str]],
                            task_queue_size_func: Callable, max_concurrency: int = 100,
@@ -826,4 +841,56 @@ async def run_agentic_loop(agent: 'Agent',
         provider=provider,
         start_jobs_func=start_jobs_func,
         auto_terminate=auto_terminate
+    )
+
+
+async def run_agentic_fleet(
+    agent_loop_defs: Sequence[AgentLoopDef],
+    max_concurrency: int = 100,
+    provider: str = None,
+    auto_terminate: bool = False,
+):
+    """
+    Start an entire fleet of agents within a single process.
+
+    Creates one JobDef and start_jobs_func per AgentLoopDef, then runs them all
+    within a single run_jobs_loop for resource-efficient orchestration.
+
+    Args:
+        agent_loop_defs: sequence of AgentLoopDef instances defining agents to run
+        max_concurrency: maximum number of concurrent jobs (default: 100)
+        provider: the default LLM provider (or None for default)
+        auto_terminate: flag indicating if the loop should be terminated once all jobs
+                        have been completed; this flag is most useful for testing
+    """
+    statek_log("Starting agentic fleet...", level='debug')
+
+    start_jobs_funcs = []
+    for loop_def in agent_loop_defs:
+        agent = loop_def.agent
+        warmup_code = loop_def.warmup_code
+        task_queue_size_func = loop_def.task_queue_size_func
+
+        job_def = find_existing_job_def(agent, warmup_code)
+        if job_def:
+            job_def.clear_errors()
+        else:
+            parsed_warmup_code = parse_warmup_code(warmup_code)
+            job_def = JobDef(
+                agent=agent,
+                job_params=None,
+                warmup_code=parsed_warmup_code,
+            )
+
+        start_jobs_funcs.append(_make_start_jobs_func(agent, job_def, task_queue_size_func, provider))
+
+    def combined_start_jobs_func(capacity: int):
+        for func in start_jobs_funcs:
+            func(capacity)
+
+    await run_jobs_loop(
+        max_concurrency=max_concurrency,
+        provider=provider,
+        start_jobs_func=combined_start_jobs_func,
+        auto_terminate=auto_terminate,
     )
