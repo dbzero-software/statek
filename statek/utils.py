@@ -322,9 +322,9 @@ def _extract_docstring_info(func: Callable) -> tuple:
     Returns a (description, param_descs) tuple. Falls back gracefully when the
     docstring is absent or incompletely documents the function's parameters.
     """
-    from statek.docstring import parse_docstring, DocstringParseError  # pylint: disable=import-outside-toplevel
+    from statek.docstring import parse_tool_docstring, DocstringParseError  # pylint: disable=import-outside-toplevel
     try:
-        doc = parse_docstring(func)
+        doc = parse_tool_docstring(func)
         description = doc.brief_desc or ""
         param_descs = {arg.name: arg.desc for arg in doc.args} if doc.args else {}
         return description, param_descs

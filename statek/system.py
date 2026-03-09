@@ -8,7 +8,7 @@ from copy import copy
 import nest_asyncio
 import dbzero as db0
 from .future import get_any_future, get_all_future
-from .docstring import parse_docstring, format_docstring
+from .docstring import parse_tool_docstring, format_docstring
 from .utils import find_locals, get_current_agent_name
 
 
@@ -316,7 +316,7 @@ def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pyl
             target = target_type
 
         # Use format_docstring for all tools (including temporal)
-        parsed = parse_docstring(target)
+        parsed = parse_tool_docstring(target)
         formatted = format_docstring(parsed, brief=False, py_syntax=True,
                                      agent=get_current_agent_name())
         print(formatted)
@@ -365,7 +365,7 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
         else:
             target = target_type
 
-        parsed = parse_docstring(target)
+        parsed = parse_tool_docstring(target)
         formatted = format_docstring(parsed, brief=True, py_syntax=False,
                                      agent=get_current_agent_name())
         print(formatted)

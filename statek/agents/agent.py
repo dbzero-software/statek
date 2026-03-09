@@ -4,7 +4,7 @@ from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import block_comment, find_locals, _get_class_name
 from statek.system import tool
-from statek.docstring import parse_docstring, format_docstring
+from statek.docstring import parse_tool_docstring, format_docstring
 from statek.executors.job import JobDef, parse_warmup_code
 from statek.settings import get_statek_logger
 
@@ -169,7 +169,7 @@ class Agent:
         agent_name = _get_class_name(self)
         formatted = []
         def inner_format_tool(fn: Callable) -> str:
-            parsed = parse_docstring(fn)
+            parsed = parse_tool_docstring(fn)
             return format_docstring(parsed, brief=brief, py_syntax=py_syntax,
                                     agent=agent_name)
 
