@@ -71,18 +71,25 @@ def _get_warmup_console_ranges(job) -> list[tuple[int, int]]:
 
 
 def _get_turn_console_ranges(job) -> list[tuple[int, int]]:
-    """Return list of (from_pos, to_pos) console ranges for each LLM turn in chat_log."""
+    """Return list of (from_pos, to_pos) console ranges for each LLM turn in chat_log.
+
+    Each chat_log item records console_pos as the console length *before* that turn's
+    code ran (i.e. the start of its output). The end is the next turn's console_pos,
+    or the full console length for the last turn.
+    """
     if not job.chat_log:
         return []
 
-    warmup_positions = job.warmup_console_positions
-    warmup_base = warmup_positions[-1] if warmup_positions else 0
+    console_len = len(job.py_env.console) if job.py_env.console else 0
 
     ranges = []
-    prev = warmup_base
-    for item in job.chat_log:
-        ranges.append((prev, item.console_pos))
-        prev = item.console_pos
+    for i, item in enumerate(job.chat_log):
+        from_pos = item.console_pos
+        if i + 1 < len(job.chat_log):
+            to_pos = job.chat_log[i + 1].console_pos
+        else:
+            to_pos = console_len
+        ranges.append((from_pos, to_pos))
     return ranges
 
 
@@ -122,6 +129,40 @@ def _get_tool_data_for_block(code_block, tool_log, key: int) -> list:
         (cs, results[i] if i < len(results) else '')
         for i, cs in enumerate(call_specs)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Raw repr helper (pure — no NiceGUI dependency)
+# ---------------------------------------------------------------------------
+
+def _build_raw_repr(job) -> str:
+    """Return a pprint-formatted string of all Job attributes for raw inspection."""
+    import pprint  # pylint: disable=import-outside-toplevel
+
+    def _to_display(obj, depth=0):
+        if depth > 4:
+            return repr(obj)
+        if obj is None or isinstance(obj, (bool, int, float, str)):
+            return obj
+        if isinstance(obj, (list, tuple)):
+            converted = [_to_display(x, depth + 1) for x in obj]
+            return converted if isinstance(obj, list) else tuple(converted)
+        if isinstance(obj, dict):
+            return {str(k): _to_display(v, depth + 1) for k, v in obj.items()}
+        try:
+            attrs = vars(obj)
+        except TypeError:
+            return repr(obj)
+        return {
+            '__type__': type(obj).__name__,
+            **{k: _to_display(v, depth + 1) for k, v in attrs.items() if not k.startswith('__')},
+        }
+
+    try:
+        data = _to_display(job)
+        return pprint.pformat(data, width=120, depth=10, sort_dicts=False)
+    except Exception as exc:  # pylint: disable=broad-except
+        return f'(Error building raw repr: {exc})'
 
 
 # ---------------------------------------------------------------------------
@@ -610,46 +651,70 @@ def create_job_detail_dialog(job) -> None:
                     ).classes('text-xs text-red-600').tooltip('Download as PDF')
                     ui.button(icon='close', on_click=dlg.close).props('flat round dense')
 
-            ui.separator().classes('mb-4')
+            ui.separator().classes('mb-2')
 
-            # ── System Prompt ───────────────────────────────────────────────
-            if system_prompt:
-                with ui.expansion('System Prompt', icon='description').props('dense').classes(
-                    'w-full rounded border border-gray-200 mb-4'
-                ):
-                    ui.label(system_prompt).classes(
-                        'text-xs text-gray-700 whitespace-pre-wrap w-full rounded p-3'
-                    ).style('font-family: "JetBrains Mono", monospace; background: #fdf6e3')
+            # ── Tab bar ─────────────────────────────────────────────────────
+            with ui.tabs().classes('mb-3') as tabs:
+                tab_log = ui.tab('Execution Log', icon='timeline')
+                tab_raw = ui.tab('Raw', icon='data_object')
 
-            # ── Initial Prompt ──────────────────────────────────────────────
-            if initial_prompt:
-                with ui.column().classes('w-full gap-1 mb-4'):
-                    with ui.row().classes('items-center gap-2 px-3 py-2 rounded-lg').style(
-                        'background: #e8f5e9; border: 1px solid #a5d6a7'
-                    ):
-                        ui.icon('chat').classes('text-green-700')
-                        ui.label('Initial Prompt').classes('text-sm font-bold text-green-800')
+            with ui.tab_panels(tabs, value=tab_log).classes('w-full'):
 
-                    ui.label(initial_prompt).classes(
-                        'text-sm text-gray-700 whitespace-pre-wrap w-full rounded p-3'
-                    ).style('background: #f1f8e9; border: 1px solid #c5e1a5')
+                # ── Execution Log tab ────────────────────────────────────────
+                with ui.tab_panel(tab_log).classes('px-0'):
 
-            # ── Warmup Blocks ───────────────────────────────────────────────
-            if warmup_blocks:
-                with ui.column().classes('w-full gap-3 mb-4'):
-                    _render_warmup_section(job, warmup_blocks, warmup_ranges)
+                    # ── System Prompt ────────────────────────────────────────
+                    if system_prompt:
+                        with ui.expansion('System Prompt', icon='description').props('dense').classes(
+                            'w-full rounded border border-gray-200 mb-4'
+                        ):
+                            ui.label(system_prompt).classes(
+                                'text-xs text-gray-700 whitespace-pre-wrap w-full rounded p-3'
+                            ).style('font-family: "JetBrains Mono", monospace; background: #fdf6e3')
 
-            # ── LLM Turns ───────────────────────────────────────────────────
-            if job.chat_log:
-                with ui.column().classes('w-full gap-3'):
-                    for i, (chat_item, (from_pos, to_pos)) in enumerate(
-                        zip(job.chat_log, turn_ranges)
-                    ):
-                        _render_turn_section(job, i, chat_item, from_pos, to_pos)
+                    # ── Initial Prompt ───────────────────────────────────────
+                    if initial_prompt:
+                        with ui.column().classes('w-full gap-1 mb-4'):
+                            with ui.row().classes('items-center gap-2 px-3 py-2 rounded-lg').style(
+                                'background: #e8f5e9; border: 1px solid #a5d6a7'
+                            ):
+                                ui.icon('chat').classes('text-green-700')
+                                ui.label('Initial Prompt').classes('text-sm font-bold text-green-800')
 
-            if not warmup_blocks and not job.chat_log:
-                with ui.column().classes('items-center justify-center gap-3 mt-8'):
-                    ui.icon('hourglass_empty').classes('text-4xl text-gray-300')
-                    ui.label('No execution history yet.').classes('text-gray-400 italic')
+                            ui.label(initial_prompt).classes(
+                                'text-sm text-gray-700 whitespace-pre-wrap w-full rounded p-3'
+                            ).style('background: #f1f8e9; border: 1px solid #c5e1a5')
+
+                    # ── Warmup Blocks ────────────────────────────────────────
+                    if warmup_blocks:
+                        with ui.column().classes('w-full gap-3 mb-4'):
+                            _render_warmup_section(job, warmup_blocks, warmup_ranges)
+
+                    # ── LLM Turns ────────────────────────────────────────────
+                    if job.chat_log:
+                        with ui.column().classes('w-full gap-3'):
+                            for i, (chat_item, (from_pos, to_pos)) in enumerate(
+                                zip(job.chat_log, turn_ranges)
+                            ):
+                                _render_turn_section(job, i, chat_item, from_pos, to_pos)
+
+                    if not warmup_blocks and not job.chat_log:
+                        with ui.column().classes('items-center justify-center gap-3 mt-8'):
+                            ui.icon('hourglass_empty').classes('text-4xl text-gray-300')
+                            ui.label('No execution history yet.').classes('text-gray-400 italic')
+
+                # ── Raw tab ──────────────────────────────────────────────────
+                with ui.tab_panel(tab_raw).classes('px-0'):
+                    raw_repr = _build_raw_repr(job)
+                    ui.html(
+                        f'<pre style="'
+                        f'white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word;'
+                        f'font-family: \'JetBrains Mono\', monospace;'
+                        f'font-size: 0.75rem; line-height: 1.6;'
+                        f'color: #263238; background: #f5f5f5;'
+                        f'border: 1px solid #e0e0e0; border-radius: 6px;'
+                        f'padding: 16px; margin: 0; width: 100%; box-sizing: border-box;'
+                        f'">{raw_repr.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</pre>'
+                    ).classes('w-full')
 
     dlg.open()

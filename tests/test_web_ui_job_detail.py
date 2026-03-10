@@ -10,6 +10,7 @@ from web_ui.pages.job_detail import (
     _get_tool_data_for_block,
     _get_system_prompt,
     _build_md_content,
+    _build_raw_repr,
 )
 
 # aliases used in _call_build_md helper
@@ -182,41 +183,50 @@ class TestGetTurnConsoleRanges:
         assert not _get_turn_console_ranges(job)
 
     def test_single_turn_no_warmup(self):
-        chat_item = _make_chat_log_item(console_pos=3, llm_resp='code')
+        # console_pos=0 means this turn's output starts at index 0
+        chat_item = _make_chat_log_item(console_pos=0, llm_resp='code')
         job = _make_job(
             chat_log=[chat_item],
             warmup_console_positions=[],
+            console=['a', 'b', 'c'],
         )
         ranges = _get_turn_console_ranges(job)
         assert ranges == [(0, 3)]
 
     def test_single_turn_with_warmup(self):
-        chat_item = _make_chat_log_item(console_pos=5, llm_resp='code')
+        # warmup consumed console[0:2]; turn starts at index 2
+        chat_item = _make_chat_log_item(console_pos=2, llm_resp='code')
         job = _make_job(
             warmup_code='warmup',
             warmup_console_positions=[2],
             chat_log=[chat_item],
+            console=['w1', 'w2', 'out1', 'out2', 'out3'],
         )
         ranges = _get_turn_console_ranges(job)
         assert ranges == [(2, 5)]
 
     def test_two_turns_no_warmup(self):
-        item1 = _make_chat_log_item(console_pos=3, llm_resp='code1')
-        item2 = _make_chat_log_item(console_pos=7, llm_resp='code2')
+        # Turn 1 starts at 0, Turn 2 starts at 3; console has 7 items
+        item1 = _make_chat_log_item(console_pos=0, llm_resp='code1')
+        item2 = _make_chat_log_item(console_pos=3, llm_resp='code2')
         job = _make_job(
             chat_log=[item1, item2],
             warmup_console_positions=[],
+            console=['a', 'b', 'c', 'd', 'e', 'f', 'g'],
         )
         ranges = _get_turn_console_ranges(job)
         assert ranges == [(0, 3), (3, 7)]
 
     def test_two_turns_with_two_warmup_blocks(self):
-        item1 = _make_chat_log_item(console_pos=6, llm_resp='code1')
-        item2 = _make_chat_log_item(console_pos=9, llm_resp='code2')
+        # Two warmup blocks consumed console[0:2] and console[2:4];
+        # Turn 1 starts at 4, Turn 2 starts at 6; console has 9 items
+        item1 = _make_chat_log_item(console_pos=4, llm_resp='code1')
+        item2 = _make_chat_log_item(console_pos=6, llm_resp='code2')
         job = _make_job(
             warmup_code=['w1', 'w2'],
             warmup_console_positions=[2, 4],
             chat_log=[item1, item2],
+            console=['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'],
         )
         ranges = _get_turn_console_ranges(job)
         assert ranges == [(4, 6), (6, 9)]
@@ -388,14 +398,14 @@ class TestBuildMdContent:
         assert 'ok' in md
 
     def test_includes_llm_turn_section(self):
-        chat_item = _make_chat_log_item(console_pos=1, llm_resp='result = 42')
+        chat_item = _make_chat_log_item(console_pos=0, llm_resp='result = 42')
         job = _make_job_for_md(chat_log=[chat_item], console=['done\n'])
         md = _call_build_md(job)
         assert 'Turn 1' in md
         assert 'result = 42' in md
 
     def test_includes_turn_console_output(self):
-        chat_item = _make_chat_log_item(console_pos=1, llm_resp='x = 1')
+        chat_item = _make_chat_log_item(console_pos=0, llm_resp='x = 1')
         job = _make_job_for_md(chat_log=[chat_item], console=['output line\n'])
         md = _call_build_md(job)
         assert 'output line' in md
@@ -417,8 +427,8 @@ class TestBuildMdContent:
         assert 'NameError: x' in md
 
     def test_multiple_turns_all_included(self):
-        item1 = _make_chat_log_item(console_pos=1, llm_resp='step_one()')
-        item2 = _make_chat_log_item(console_pos=2, llm_resp='step_two()')
+        item1 = _make_chat_log_item(console_pos=0, llm_resp='step_one()')
+        item2 = _make_chat_log_item(console_pos=1, llm_resp='step_two()')
         job = _make_job_for_md(chat_log=[item1, item2], console=['a\n', 'b\n'])
         md = _call_build_md(job)
         assert 'Turn 1' in md
@@ -508,3 +518,84 @@ class TestGetSystemPrompt:
         text, error = _get_system_prompt(job)
         assert text == ''
         assert error is None
+
+
+class _StubPyEnv:  # pylint: disable=too-few-public-methods
+    def __init__(self):
+        self.console = ['line1\n', 'line2\n']
+        self.exceptions = {0: 'NameError: x'}
+        self.tool_log = {1: 'result'}
+        self.global_state = {'key': 'value'}
+        self.local_state = {}
+
+
+class _StubJob:  # pylint: disable=too-few-public-methods
+    def __init__(self):
+        self.model = 'claude-3-opus'
+        self.model_family = 'claude'
+        self.session_id = 'sess-abc'
+        self.total_cost = 0.0042
+        self.context_bytes = 1024
+        self.total_bytes_sent = 512
+        self.total_bytes_received = 512
+        self.warmup_console_positions = [2]
+        self.next_instr_num = None
+        self.warmup_block_num = None
+        self.chat_log = []
+        self.py_env = _StubPyEnv()
+
+
+class TestBuildRawRepr:
+    def test_returns_string(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_includes_model_field(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        assert 'model' in result
+        assert 'claude-3-opus' in result
+
+    def test_includes_model_family(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        assert 'model_family' in result
+        assert 'claude' in result
+
+    def test_includes_total_cost(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        assert 'total_cost' in result
+
+    def test_includes_nested_py_env_fields(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        # py_env and its fields should appear somewhere
+        assert 'py_env' in result or 'PyEnv' in result or '_StubPyEnv' in result
+
+    def test_includes_console_content(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        assert 'line1' in result
+
+    def test_includes_exceptions(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        assert 'NameError' in result
+
+    def test_handles_error_gracefully(self):
+        # An object that raises on vars()
+        class _BadJob:  # pylint: disable=too-few-public-methods
+            @property
+            def __dict__(self):
+                raise RuntimeError('no vars')
+        result = _build_raw_repr(_BadJob())
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_includes_warmup_console_positions(self):
+        job = _StubJob()
+        result = _build_raw_repr(job)
+        assert 'warmup_console_positions' in result

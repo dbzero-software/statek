@@ -1,6 +1,8 @@
 """Utility functions for statek package."""
 
 import ast
+import difflib
+import logging
 import re
 import inspect
 import sys
@@ -12,6 +14,7 @@ from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Type, An
                     get_type_hints, get_origin, get_args, Union, ForwardRef)
 import dbzero as db0
 
+logger = logging.getLogger(__name__)
 
 ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
 ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
@@ -635,12 +638,62 @@ def get_current_agent_name() -> Optional[str]:
     return _get_class_name(agent)
 
 
+def _collect_aggregated_locals(start_frame, max_frames: int = 10) -> dict:
+    """Collect and merge locals from up to max_frames call-stack frames."""
+    aggregated: dict = {}
+    frames = []
+    frame = start_frame
+    for _ in range(max_frames):
+        if frame is None:
+            break
+        frames.append(frame)
+        frame = frame.f_back
+
+    for f in reversed(frames):
+        f_locals = f.f_locals.copy()
+        lctx = f_locals.get('_local_context')
+        if isinstance(lctx, dict):
+            aggregated.update(lctx)
+        kwargs = f_locals.get('kwargs')
+        if isinstance(kwargs, dict):
+            lctx = kwargs.get('_local_context')
+            if isinstance(lctx, dict):
+                aggregated.update(lctx)
+        aggregated.update(f_locals)
+    return aggregated
+
+
+def _yield_future_by_name(value, var_type):  # pylint: disable=import-outside-toplevel
+    """Resolve a FutureResult by name; propagate FutureError if not ready."""
+    actual = value.value  # raises FutureError when not ready
+    if var_type is None or isinstance(actual, var_type):
+        yield actual
+
+
+def _yield_future_by_type(value, var_type):
+    """Resolve a FutureResult by type; silently skip if not ready."""
+    from statek.exceptions import FutureError  # pylint: disable=import-outside-toplevel
+    try:
+        actual = value.value
+        if isinstance(actual, var_type):
+            yield actual
+    except FutureError:
+        pass
+
+
 def find_locals(var_type: Optional[Type] = None,
                 var_name: Optional[str] = None) -> Iterable[Any]:
     """
     Search through the caller's local context - retrieving variables matching
     a specific type or name. This function is helpful when implementing temporal
     functions which need to be context-aware.
+
+    FutureResult / FutureElement resolution:
+      - By name (var_name specified): if the variable is a FutureResult or FutureElement,
+        resolve its value (raises FutureError if not ready yet), then check var_type.
+      - By type only (var_type specified, var_name=None): also scan all FutureResult /
+        FutureElement locals, attempt to resolve each, and yield matching values; if a
+        future is not ready (FutureError), it is silently skipped.
 
     Args:
         var_type: Optional type to identify local variables by (e.g. SMS_Message or User)
@@ -650,51 +703,42 @@ def find_locals(var_type: Optional[Type] = None,
         Matching variables from the caller's context. If neither var_type nor var_name
         is specified, all variables from the local context will be yielded.
     """
-    # Search through up to 10 frames up the call stack
-    caller_frame = inspect.currentframe().f_back
-    frames_to_search = []
+    from statek.future import FutureResult  # pylint: disable=import-outside-toplevel
 
-    # Collect up to 10 frames
-    current_frame = caller_frame
-    for _ in range(10):
-        if current_frame is None:
-            break
-        frames_to_search.append(current_frame)
-        current_frame = current_frame.f_back
+    aggregated_locals = _collect_aggregated_locals(inspect.currentframe().f_back)
 
-    # Aggregate locals from all frames, with priority to closer frames
-    aggregated_locals = {}
-    for frame in reversed(frames_to_search):
-        frame_locals = frame.f_locals.copy()
-
-        # Check if _local_context is set and extend with it
-        if '_local_context' in frame_locals:
-            local_context = frame_locals['_local_context']
-            if local_context is not None and isinstance(local_context, dict):
-                aggregated_locals.update(local_context)
-
-        # Also check if kwargs contains _local_context
-        if 'kwargs' in frame_locals and isinstance(frame_locals['kwargs'], dict):
-            if '_local_context' in frame_locals['kwargs']:
-                local_context = frame_locals['kwargs']['_local_context']
-                if local_context is not None and isinstance(local_context, dict):
-                    aggregated_locals.update(local_context)
-
-        # Update with frame locals (closer frames override)
-        aggregated_locals.update(frame_locals)
-
-    # Iterate through aggregated local variables
+    found = False
     for name, value in aggregated_locals.items():
-        # If no filters specified, yield all variables
         if var_type is None and var_name is None:
             yield value
-        else:
-            # Apply filters
-            type_match = var_type is None or isinstance(value, var_type)
-            name_match = var_name is None or name == var_name
+            continue
 
-            if type_match and name_match:
-                yield value
+        if var_name is not None and name != var_name:
+            continue
+
+        is_future = isinstance(value, FutureResult)
+
+        if is_future and var_name is not None:
+            yielded = list(_yield_future_by_name(value, var_type))
+            if yielded:
+                found = True
+                yield from yielded
+        elif is_future:
+            yield from _yield_future_by_type(value, var_type)
+        elif var_type is None or isinstance(value, var_type):
+            found = True
+            yield value
+
+    if var_name is not None and not found and logger.isEnabledFor(logging.DEBUG):
+        available = list(aggregated_locals.keys())
+        close = difflib.get_close_matches(var_name, available, n=3, cutoff=0.5)
+        logger.debug(
+            "find_locals: variable %r not found. "
+            "Available: %s. Closest matches: %s",
+            var_name,
+            available,
+            close if close else "(none)",
+        )
 
 
 def format_value_repr(value: Any) -> str:
