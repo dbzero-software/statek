@@ -92,3 +92,58 @@ def test_build_warmup_code_none_kwargs_becomes_empty_dict():
     tc = ParsedFuncCall(name='ping', args=[], kwargs=None)
     result = build_warmup_code([_parsed("ping()", [tc])])
     assert result.tool_calls[0].kwargs == {}
+
+
+class TestCodeBlockEquality:
+    """Tests for CodeBlock equality comparison with str."""
+
+    def test_code_block_equals_str_when_no_tool_calls(self):
+        """CodeBlock with no tool calls should equal a str with the same code."""
+        block = CodeBlock(code="x = 1", tool_calls=None)
+        assert block == "x = 1"
+
+    def test_str_equals_code_block_when_no_tool_calls(self):
+        """str should equal a CodeBlock with the same code and no tool calls (reflected)."""
+        block = CodeBlock(code="x = 1", tool_calls=None)
+        assert "x = 1" == block
+
+    def test_code_block_not_equal_different_str(self):
+        """CodeBlock should not equal a str with different content."""
+        block = CodeBlock(code="x = 1", tool_calls=None)
+        assert block != "y = 2"
+
+    def test_code_block_with_tool_calls_not_equal_str(self):
+        """CodeBlock with tool calls should not equal a plain str."""
+        tc = ParsedFuncCall(name='ping', args=[], kwargs=None)
+        block = build_warmup_code([_parsed("ping()", [tc])])
+        assert block != "ping()"
+
+    def test_code_block_equals_str_empty_tool_calls(self):
+        """CodeBlock with empty tool_calls list should equal the equivalent str."""
+        block = CodeBlock(code="x = 1", tool_calls=[])
+        assert block == "x = 1"
+
+    def test_code_block_equals_code_block_with_same_tool_calls(self):
+        """Two CodeBlocks with identical tool calls but distinct objects should be equal."""
+        tc = ParsedFuncCall(name='ping', args=[], kwargs=None)
+        block_a = build_warmup_code([_parsed("ping()", [tc])])
+        block_b = build_warmup_code([_parsed("ping()", [tc])])
+        # They are different db0 objects with different CallSpec instances
+        assert block_a is not block_b
+        assert block_a == block_b
+
+    def test_code_block_not_equal_different_tool_call_func(self):
+        """CodeBlocks with different tool call func names should not be equal."""
+        tc_a = ParsedFuncCall(name='ping', args=[], kwargs=None)
+        tc_b = ParsedFuncCall(name='pong', args=[], kwargs=None)
+        block_a = build_warmup_code([_parsed("ping()", [tc_a])])
+        block_b = build_warmup_code([_parsed("pong()", [tc_b])])
+        assert block_a != block_b
+
+    def test_code_block_not_equal_different_tool_call_args(self):
+        """CodeBlocks with different tool call args should not be equal."""
+        tc_a = ParsedFuncCall(name='ping', args=[1], kwargs=None)
+        tc_b = ParsedFuncCall(name='ping', args=[2], kwargs=None)
+        block_a = build_warmup_code([_parsed("ping(1)", [tc_a])])
+        block_b = build_warmup_code([_parsed("ping(2)", [tc_b])])
+        assert block_a != block_b
