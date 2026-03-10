@@ -20,6 +20,8 @@ class PyEnv:
     exceptions: Dict[int, str] = None
     # Optional log of tool results by console log-ID
     tool_log: Dict[int, Union[str, List[str]]] = None
+    # Messages pushed into the console of an active job
+    push_log: Dict[int, Union[str, List[str]]] = None
     # The next instruction ID for continuation
     next_instr_id: int = None
     # The warmup block number for continuation (for multi-block warmup_code)

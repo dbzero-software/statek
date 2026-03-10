@@ -16,6 +16,7 @@ from statek.future import FutureResult
 from statek.exceptions import FutureError
 from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
+from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
@@ -184,8 +185,9 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['_wrap_param'] = _wrap_param
     global_context['_fmt_fstring_arg'] = _fmt_print_arg
 
-    # Inject _STATEK_CTX with job-level context (agent, etc.)
+    # Inject _STATEK_CTX with job-level context (agent, job, etc.)
     statek_ctx = {}
+    statek_ctx['job'] = job
     if job.job_def.agent is not None:
         statek_ctx['agent'] = job.job_def.agent
     local_context['_STATEK_CTX'] = statek_ctx
@@ -572,6 +574,38 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     return False
 
 
+def process_push_notifications(step_size=100, max_count=500):
+    """Process pending push notifications from StatekPushQueues on all open prefixes.
+
+    Finds all StatekPushQueue instances across open prefixes and delivers push
+    messages to the target jobs by calling job.push_to_console. Jobs that have
+    been deleted are silently ignored.
+
+    Args:
+        step_size: Number of notifications to retrieve per batch.
+        max_count: Maximum total notifications to process in this call.
+    """
+    processed = 0
+
+    for prefix in db0.get_prefixes():
+        if processed >= max_count:
+            break
+        queue = db0.find_singleton(StatekPushQueue, prefix.name)
+        if queue is None:
+            continue
+        while processed < max_count:
+            batch_size = min(step_size, max_count - processed)
+            items = queue.pop_from_job_console(batch_size)
+            if not items:
+                break
+            for job, message in items:
+                try:
+                    job.push_to_console(message)
+                except Exception:  # pylint: disable=broad-except
+                    pass
+                processed += 1
+
+
 def unsuspend_jobs():
     """
     Review continuation conditions of suspended jobs and change their status to STARTED
@@ -642,18 +676,16 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     pending_tasks = {}  # Dict[Job, asyncio.Task]
     semaphore = asyncio.Semaphore(max_concurrency)
     while True:
-        # Step 1: Unsuspend jobs whose continuation conditions are satisfied
         unsuspend_jobs()
-        
-        # Step 2: Call start_jobs_func if provided
+
+        process_push_notifications()
+
         if start_jobs_func is not None:
             available_capacity = max_concurrency - len(pending_tasks)
             start_jobs_func(available_capacity)
         
-        # Step 3: Find jobs with status READY, WARMING_UP or STARTED, excluding jobs already pending
         ready_or_started_jobs = db0.filter(lambda found_job: found_job not in pending_tasks,
                                             db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED]))
-        # Step 4: Submit run_job_step for jobs that aren't already pending
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:
             for job in ready_or_started_jobs:
@@ -661,9 +693,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
                 task = asyncio.create_task(job_worker(semaphore, job, provider))
                 pending_tasks[job] = task
         
-        # Step 5: Wait for completion of at least 1 job or sleep 300ms
         if pending_tasks:
-            # Wait for at least one task to complete or timeout after 300ms
             done, pending = await asyncio.wait(
                 pending_tasks.values(),
                 timeout=0.3,
@@ -678,9 +708,8 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
             # No pending tasks, just sleep
             await asyncio.sleep(0.3)
         
-        # Step 6: Check auto_terminate condition after processing
+        # Check auto_terminate condition after processing
         if auto_terminate:
-            # Give a small grace period for jobs to transition states before checking
             # Check if there are any active jobs left (not DONE)
             active_jobs = db0.find(Job, db0.no([JobStatus.DONE]))
             # Also check if we have any tasks that might still be completing

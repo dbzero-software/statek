@@ -1,0 +1,99 @@
+"""Tests for process_push_notifications function."""
+# pylint: disable=unused-argument
+from statek.executors.job import Job, JobDef, JobStatus
+from statek.agents.agent import Agent
+from statek.statek_push_queue import StatekPushQueue
+from statek.executors.utils import process_push_notifications
+
+
+def _make_started_job():
+    agent = Agent(role="test", _system_prompt="test", _tools=[])
+    job_def = JobDef(agent=agent)
+    return Job(job_def=job_def, model_family="test", model="test-model",
+               job_status=JobStatus.STARTED)  # pylint: disable=no-member
+
+
+class TestProcessPushNotifications:
+
+    def test_no_queue_does_nothing(self, db0_fixture):
+        # No StatekPushQueue created — should not raise
+        process_push_notifications()
+
+    def test_empty_queue_does_nothing(self, db0_fixture):
+        StatekPushQueue()
+        process_push_notifications()
+
+    def test_processes_single_notification(self, db0_fixture):
+        job = _make_started_job()
+        queue = StatekPushQueue()
+        queue.push_to_job_console(job=job, message="hello")
+
+        process_push_notifications()
+
+        assert job.py_env.push_log is not None
+        assert job.py_env.push_log[0] == "hello"
+
+    def test_queue_is_empty_after_processing(self, db0_fixture):
+        job = _make_started_job()
+        queue = StatekPushQueue()
+        queue.push_to_job_console(job=job, message="hello")
+
+        process_push_notifications()
+
+        remaining = queue.pop_from_job_console(10)
+        assert remaining == []
+
+    def test_processes_multiple_notifications_for_same_job(self, db0_fixture):
+        job = _make_started_job()
+        queue = StatekPushQueue()
+        queue.push_to_job_console(job=job, message="msg1")
+        queue.push_to_job_console(job=job, message="msg2")
+
+        process_push_notifications()
+
+        assert job.py_env.push_log is not None
+        val = job.py_env.push_log[0]
+        assert not isinstance(val, str)
+        assert "msg1" in val
+        assert "msg2" in val
+
+    def test_processes_notifications_for_multiple_jobs(self, db0_fixture):
+        job1 = _make_started_job()
+        job2 = _make_started_job()
+        queue = StatekPushQueue()
+        queue.push_to_job_console(job=job1, message="for-job1")
+        queue.push_to_job_console(job=job2, message="for-job2")
+
+        process_push_notifications()
+
+        assert job1.py_env.push_log[0] == "for-job1"
+        assert job2.py_env.push_log[0] == "for-job2"
+
+    def test_respects_max_count(self, db0_fixture):
+        job = _make_started_job()
+        queue = StatekPushQueue()
+        for i in range(10):
+            queue.push_to_job_console(job=job, message=f"msg{i}")
+
+        process_push_notifications(step_size=3, max_count=5)
+
+        remaining = queue.pop_from_job_console(100)
+        assert len(remaining) == 5
+
+    def test_ignores_exception_from_push_to_console(self, db0_fixture):
+        job = _make_started_job()
+        queue = StatekPushQueue()
+        queue.push_to_job_console(job=job, message="hello")
+
+        original = job.__class__.push_to_console
+
+        def raising_push(self, message):  # pylint: disable=unused-argument
+            raise RuntimeError("Object has been deleted")
+
+        job.__class__.push_to_console = raising_push
+
+        try:
+            # Should not propagate the exception
+            process_push_notifications()
+        finally:
+            job.__class__.push_to_console = original

@@ -590,6 +590,18 @@ def get_current_agent():
     return ctx.get('agent')
 
 
+def get_current_job():
+    """Retrieve the Job from the current execution context (_STATEK_CTX).
+
+    Returns:
+        The Job object from _STATEK_CTX, or None if not available.
+    """
+    ctx = next(iter(find_locals(var_name='_STATEK_CTX')), None)
+    if not isinstance(ctx, dict):
+        return None
+    return ctx.get('job')
+
+
 def get_current_agent_name() -> Optional[str]:
     """Get the current agent's type name without module qualifiers.
 

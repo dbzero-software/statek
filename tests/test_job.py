@@ -189,6 +189,58 @@ class TestJob:
         expected = "> Out5"
         assert result == expected
 
+    def test_get_next_prompt_push_log_none_no_change(self, job_factory):
+        """No push_log → behaviour is unchanged."""
+        job = job_factory()
+        job.py_env.console_append("Out1")
+        result = job.get_next_prompt()
+        assert result == "Test task\n> Out1"
+
+    def test_get_next_prompt_first_prompt_push_log_appended(self, job_factory):
+        """First prompt: push_log message is appended after console output."""
+        job = job_factory()
+        job.py_env.console_append("Out1")
+        job.push_to_console("user message")  # key=1
+        result = job.get_next_prompt()
+        assert "Out1" in result
+        assert "user message" in result
+
+    def test_get_next_prompt_first_prompt_push_log_order(self, job_factory):
+        """First prompt: push_log message appears after console output."""
+        job = job_factory()
+        job.py_env.console_append("Out1")
+        job.push_to_console("user message")
+        result = job.get_next_prompt()
+        assert result.index("Out1") < result.index("user message")
+
+    def test_get_next_prompt_subsequent_prompt_push_log_at_from_pos(self, job_factory):
+        """Subsequent prompt: push_log entry at from_pos is included."""
+        job = job_factory()
+        job.py_env.console = ["c1", "c2"]
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp"))
+        job.push_to_console("pushed msg")  # key=2 (console len=2)
+        result = job.get_next_prompt()
+        assert "pushed msg" in result
+
+    def test_get_next_prompt_subsequent_prompt_push_log_before_from_pos_excluded(self, job_factory):
+        """Subsequent prompt: push_log entry with key < from_pos is excluded."""
+        job = job_factory()
+        job.py_env.console = ["c1", "c2"]
+        job.push_to_console("early msg")     # key=2 (console len=2 at push time)
+        job.py_env.console.append("c3")      # console grows to 3
+        job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp"))
+        result = job.get_next_prompt()
+        assert "early msg" not in result
+
+    def test_get_next_prompt_push_log_list_values_included(self, job_factory):
+        """Multiple pushes at same position (stored as list) are all included."""
+        job = job_factory()
+        job.push_to_console("msg1")  # key=0
+        job.push_to_console("msg2")  # key=0, becomes list
+        result = job.get_next_prompt()
+        assert "msg1" in result
+        assert "msg2" in result
+
 
 class TestJobGetChatHistory:
     """Test cases for Job.get_chat_history method."""

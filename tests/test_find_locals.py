@@ -1,5 +1,5 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable
-from statek.utils import find_locals, get_current_agent, get_current_agent_name
+from statek.utils import find_locals, get_current_agent, get_current_agent_name, get_current_job
 from statek.system import inject_context
 
 
@@ -208,6 +208,35 @@ class TestGetCurrentAgentName:
 
         def fn(**kwargs):  # pylint: disable=unused-argument
             return get_current_agent_name()
+
+        result = inject_context(fn, {"_STATEK_CTX": ctx})()
+        assert result is None
+
+
+class TestGetCurrentJob:
+    """Tests for get_current_job() helper."""
+
+    def test_returns_none_without_context(self):
+        """get_current_job returns None when no _STATEK_CTX is available."""
+        assert get_current_job() is None
+
+    def test_returns_job_via_local_context(self):
+        """get_current_job retrieves the job object from _STATEK_CTX."""
+        mock_job = object()
+        ctx = {"job": mock_job}
+
+        def fn(**kwargs):  # pylint: disable=unused-argument
+            return get_current_job()
+
+        result = inject_context(fn, {"_STATEK_CTX": ctx})()
+        assert result is mock_job
+
+    def test_returns_none_when_ctx_has_no_job_key(self):
+        """get_current_job returns None when _STATEK_CTX exists but has no 'job' key."""
+        ctx = {}
+
+        def fn(**kwargs):  # pylint: disable=unused-argument
+            return get_current_job()
 
         result = inject_context(fn, {"_STATEK_CTX": ctx})()
         assert result is None
