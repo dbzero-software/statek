@@ -3,8 +3,9 @@ import asyncio
 import functools
 import inspect
 import types as _types_module
-from functools import wraps
 from copy import copy
+from datetime import date, datetime, time as _time
+from functools import wraps
 import nest_asyncio
 import dbzero as db0
 from .future import get_any_future, get_all_future
@@ -53,6 +54,34 @@ def _expects_non_string_type(annotation) -> bool:
     return False
 
 
+_ISO_PARSEABLE_TYPES = (datetime, date, _time)
+
+
+def _try_iso_parse(value: str, annotation):
+    """Try parsing *value* as an ISO date/time for the given annotation.
+
+    Iterates candidate types extracted from the annotation (plain type or union)
+    in declaration order and returns the first successful parse, or ``None`` if
+    no candidate type succeeds.
+    """
+    if isinstance(annotation, type):
+        candidates = [annotation]
+    elif _UnionType is not None and isinstance(annotation, _UnionType):
+        candidates = [a for a in annotation.__args__ if isinstance(a, type)]
+    elif getattr(annotation, '__origin__', None) is Union:
+        candidates = [a for a in annotation.__args__ if isinstance(a, type)]
+    else:
+        return None
+
+    for typ in candidates:
+        if typ in _ISO_PARSEABLE_TYPES:
+            try:
+                return typ.fromisoformat(value)
+            except (ValueError, TypeError):
+                continue
+    return None
+
+
 def _rebuild_args(sig, converted):
     """Rebuild args and kwargs tuples from a converted bound-arguments dict."""
     new_args = []
@@ -99,10 +128,15 @@ def _bind_by_name(f, args, kwargs):
         if (isinstance(value, str)
                 and _expects_non_string_type(annotation)
                 and not db0.is_enum(annotation)):  # pylint: disable=no-member
-            matches = list(find_locals(var_name=value))
-            if matches:
-                converted[name] = matches[0]
+            parsed = _try_iso_parse(value, annotation)
+            if parsed is not None:
+                converted[name] = parsed
                 changed = True
+            else:
+                matches = list(find_locals(var_name=value))
+                if matches:
+                    converted[name] = matches[0]
+                    changed = True
 
     if not changed:
         return args, kwargs
