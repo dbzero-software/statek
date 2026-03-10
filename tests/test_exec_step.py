@@ -2,6 +2,7 @@
 # pylint: disable=too-many-lines
 
 from dataclasses import dataclass
+from datetime import date, datetime
 import pytest
 import dbzero as db0
 
@@ -1110,3 +1111,108 @@ class TestExecStepStringNameResolution:
 
         assert job.py_env.console is not None
         assert any("got_string:MemoObject" in line for line in job.py_env.console)
+
+
+# ---------------------------------------------------------------------------
+# Module-level @tool for ISO date/datetime parsing tests.
+# ---------------------------------------------------------------------------
+
+@tool
+def _date_tool(when: date, **kwargs):  # pylint: disable=unused-argument
+    """Receives a date argument and prints it.
+
+    Args:
+        when: The date value.
+
+    Returns:
+        None.
+    """
+    print(f"date:{when!r}")
+
+
+@tool
+def _datetime_tool(when: datetime, **kwargs):  # pylint: disable=unused-argument
+    """Receives a datetime argument and prints it.
+
+    Args:
+        when: The datetime value.
+
+    Returns:
+        None.
+    """
+    print(f"datetime:{when!r}")
+
+
+@tool
+def _date_or_datetime_tool(when: date | datetime, **kwargs):  # pylint: disable=unused-argument
+    """Receives a date or datetime argument and prints its type and value.
+
+    Args:
+        when: The date or datetime value.
+
+    Returns:
+        None.
+    """
+    print(f"type:{type(when).__name__} value:{when!r}")
+
+
+class TestExecStepIsoDateParsing:
+    """Tests for _bind_by_name parsing ISO date/datetime strings."""
+
+    def _make_job(self, tools, context=None):
+        agent = Agent(
+            role="iso_date_parse_test",
+            _system_prompt="Test",
+            _tools=tools,
+            _X__context=context or {},
+        )
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        return Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+    @pytest.mark.asyncio
+    async def test_plain_date_annotation_parses_iso_string(self, db0_fixture):  # pylint: disable=unused-argument
+        """A string ISO date is converted to date when annotation is date."""
+        job = self._make_job(tools=[_date_tool])
+        await exec_step('_date_tool("2026-03-10")', job)
+        assert job.py_env.console is not None
+        assert any("date:datetime.date(2026, 3, 10)" in line for line in job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_plain_datetime_annotation_parses_iso_string(self, db0_fixture):  # pylint: disable=unused-argument
+        """A string ISO datetime is converted to datetime when annotation is datetime."""
+        job = self._make_job(tools=[_datetime_tool])
+        await exec_step('_datetime_tool("2026-03-10T12:30:00")', job)
+        assert job.py_env.console is not None
+        assert any("datetime:datetime.datetime(2026, 3, 10, 12, 30)" in line
+                   for line in job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_union_date_or_datetime_date_string_uses_first_match(self, db0_fixture):  # pylint: disable=unused-argument
+        """For date | datetime union, a date-only string is parsed as date (first in union)."""
+        job = self._make_job(tools=[_date_or_datetime_tool])
+        await exec_step('_date_or_datetime_tool("2026-03-10")', job)
+        assert job.py_env.console is not None
+        assert any("type:date" in line for line in job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_union_datetime_string_falls_back_to_datetime(  # pylint: disable=unused-argument
+            self, db0_fixture):
+        """For date | datetime union, a full datetime string falls back to datetime."""
+        job = self._make_job(tools=[_date_or_datetime_tool])
+        await exec_step('_date_or_datetime_tool("2026-03-10T15:00:00")', job)
+        assert job.py_env.console is not None
+        assert any("type:datetime" in line for line in job.py_env.console)
+
+    @pytest.mark.asyncio
+    async def test_non_date_string_still_resolves_via_find_locals(self, db0_fixture):  # pylint: disable=unused-argument
+        """Non-ISO strings for date annotation still fall back to find_locals resolution."""
+        d = date(2025, 1, 1)
+        job = self._make_job(tools=[_date_tool], context={"my_date": d})
+        await exec_step('_date_tool("my_date")', job)
+        assert job.py_env.console is not None
+        assert any("date:datetime.date(2025, 1, 1)" in line for line in job.py_env.console)
