@@ -47,6 +47,27 @@ class CodeBlock:
     code: Optional[str] = None
     tool_calls: Optional[Sequence[CallSpec]] = None
 
+    def __eq__(self, other):
+        if isinstance(other, CodeBlock):
+            if self.code != other.code:
+                return False
+            self_tcs = list(self.tool_calls) if self.tool_calls else []
+            other_tcs = list(other.tool_calls) if other.tool_calls else []
+            if len(self_tcs) != len(other_tcs):
+                return False
+            return all(
+                a.id == b.id and a.func_name == b.func_name
+                and a.args == b.args and a.kwargs == b.kwargs
+                for a, b in zip(self_tcs, other_tcs)
+            )
+        if isinstance(other, str) and not self.tool_calls:
+            return self.code == other
+        return NotImplemented
+
+    def __hash__(self):
+        tcs = tuple(self.tool_calls) if self.tool_calls else ()
+        return hash((self.code, tcs))
+
 _STATEK_TOOL_MARKER = "#STATEK: as tool"
 
 
