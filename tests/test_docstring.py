@@ -408,6 +408,39 @@ class TestFormatDocstring:
         # self should not appear in signature
         assert "self" not in result
 
+    def test_format_var_args_only_no_docstring_args(self):
+        """Wrapper with *args but no documented Args shows empty signature."""
+        def wrapper(*_tool_args, **_tool_kwargs):
+            """Do something.
+
+            Returns:
+                str: A result.
+            """
+
+        result = format_docstring(parse_docstring(wrapper), brief=True, py_syntax=True)
+        assert "_tool_args" not in result
+        assert "_tool_kwargs" not in result
+        assert "def wrapper()" in result
+
+    def test_format_var_args_only_with_docstring_args(self):
+        """Wrapper with *args should build signature from documented Args."""
+        def wrapper(*_tool_args, **_tool_kwargs):
+            """Retrieve chat history.
+
+            Args:
+                limit (int): Maximum number of messages to return.
+                offset (int): Starting position in the history.
+
+            Returns:
+                list: The chat messages.
+            """
+
+        result = format_docstring(parse_docstring(wrapper), brief=False, py_syntax=True)
+        assert "_tool_args" not in result
+        assert "def wrapper(limit: int, offset: int):" in result
+        assert "limit (int):" in result
+        assert "offset (int):" in result
+
 
 # --- Dataclass field extraction fixtures ---
 

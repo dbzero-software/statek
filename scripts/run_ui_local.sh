@@ -40,6 +40,9 @@ echo "Starting Statek Dashboard..."
 python3 -m web_ui.main \
     --host "${STATEK_UI_HOST:-0.0.0.0}" \
     --port "${STATEK_UI_PORT:-8765}" \
+    --import selltime.ai.statek_root \
+    --import selltime.ai.selltime_coordinator \
+    --import selltime.ai.selltime_dispatcher \
     > "$LOG_FILE" 2>&1 &
 
 WEBUI_PID=$!

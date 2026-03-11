@@ -1,10 +1,12 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 import re
 from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import block_comment, find_locals, _get_class_name
 from statek.system import tool
 from statek.docstring import parse_tool_docstring, format_docstring
+from statek.utils import CodeBlock
 from statek.executors.job import JobDef, parse_warmup_code
 from statek.settings import get_statek_logger
 
@@ -276,10 +278,44 @@ class Agent:
                     self.context[tool_name] = tool_or_name
 
 @db0.memo
+@dataclass
+class WarmupDef:
+    """Holds warmup code blocks retrieved from configuration files."""
+    warmup_code: Optional[Union[str, CodeBlock, Sequence[Union[str, CodeBlock]]]] = None
+
+
+@db0.memo
+@dataclass
 class SupervisedAgent(Agent):
     """
     Base class for implementing agents initiated and supervised by other agents or system functions
     """
+    warmup_def: Optional[WarmupDef] = None
+
+    def update_warmup_def(self, unparsed_warmup_def: str) -> bool:
+        """Set or update warmup_def only if it has changed.
+
+        Parses the input through parse_warmup_code before comparing with the
+        current warmup_def's warmup_code.
+
+        Args:
+            unparsed_warmup_def: Raw warmup code string, or None.
+
+        Returns:
+            True if warmup_def was updated, False if it was already up to date.
+        """
+        new_value = parse_warmup_code(unparsed_warmup_def)
+        if new_value is None and self.warmup_def is None:
+            return False
+        if new_value is None:
+            self.warmup_def = None
+            STATEK_LOGGER.debug("Agent '%s' warmup_def cleared", self.role)
+            return True
+        if self.warmup_def is not None and self.warmup_def.warmup_code == new_value:
+            return False
+        self.warmup_def = WarmupDef(warmup_code=new_value)
+        STATEK_LOGGER.debug("Agent '%s' warmup_def updated", self.role)
+        return True
 
     def create_job_def(
         self,
@@ -302,8 +338,55 @@ class SupervisedAgent(Agent):
         # kwargs become job_params
         job_params = kwargs if kwargs else None
 
+        combined = self._combine_warmup_code(warmup_code)
+
         return JobDef(
             agent=self,
             job_params=job_params,
-            warmup_code=parse_warmup_code(warmup_code)
+            warmup_code=combined
         )
+
+    def _combine_warmup_code(self, warmup_code):
+        """Combine dynamic warmup_code with agent's warmup_def blocks.
+
+        Dynamic warmup_code comes first, followed by warmup_def blocks.
+
+        Returns:
+            Combined warmup code, or None if both are absent.
+        """
+        dynamic = parse_warmup_code(warmup_code)
+        agent_warmup = self.warmup_def.warmup_code if self.warmup_def else None
+
+        if dynamic is None and agent_warmup is None:
+            return None
+        if dynamic is None:
+            return agent_warmup
+        if agent_warmup is None:
+            return dynamic
+
+        # Both present — combine into a list (dynamic first, then agent's)
+        def _as_list(val):
+            if isinstance(val, (str, CodeBlock)):
+                return [val]
+            return list(val)
+
+        return _as_list(dynamic) + _as_list(agent_warmup)
+
+
+def update_warmup_defs(path: Path):
+    """Load warmup definitions from .py files and apply to matching SupervisedAgents.
+
+    Files are matched to agents by convention: the filename (without .py) must
+    equal the agent's role (e.g. information_retriever.py -> role "information_retriever").
+
+    Args:
+        path: Directory to scan for warmup definition files.
+    """
+    agents_by_role = {agent.role: agent for agent in db0.find(SupervisedAgent)}  # pylint: disable=no-member
+    for py_file in path.glob("*.py"):
+        role = py_file.stem
+        agent = agents_by_role.get(role)
+        if agent is None:
+            continue
+        content = py_file.read_text(encoding="utf-8")
+        agent.update_warmup_def(content)
