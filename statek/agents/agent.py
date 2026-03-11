@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
@@ -48,9 +48,9 @@ class Agent:
     _system_prompt: str  # f-string with the {tools} placeholder
     _tools: List[Callable]
     # NOTE: dynamically created tools are stored by their name
-    _tools_by_name: Optional[List[str]] = [] 
+    _tools_by_name: Optional[List[str]] = field(default_factory=list)
     # Internal tools (name starts with '_'): available in execution context but not reported to LLM
-    _internal_tools: Optional[List[Callable]] = []
+    _internal_tools: Optional[List[Callable]] = field(default_factory=list)
     _metadata: Optional[Dict[str, str]] = None  # prompt meta-data as key/value pairs
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
 
