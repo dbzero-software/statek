@@ -627,6 +627,114 @@ class TestAgentAllTools:
         assert app_t in all_t
 
 
+class TestAppendTool:
+    """Tests for Agent.append_tool method."""
+
+    def test_append_callable_with_arguments(self, agent):
+        """append_tool accepts a callable tool that has parameters."""
+        @tool
+        def greet(name: str, greeting: str = "hello", **kwargs):
+            """Greet someone.
+
+            Args:
+                name: The person's name.
+                greeting: The greeting word.
+            """
+            return f"{greeting} {name}"
+
+        agent.append_tool(greet)
+        assert greet in agent.all_tools
+
+    def test_appended_tool_with_args_callable(self, agent):
+        """A tool with arguments appended via append_tool remains callable."""
+        @tool
+        def add(a: int, b: int, **kwargs):
+            """Add two numbers.
+
+            Args:
+                a: First number.
+                b: Second number.
+            """
+            return a + b
+
+        agent.append_tool(add)
+        assert add(a=2, b=3) == 5
+
+    def test_append_by_name(self, agent):
+        """append_tool with a string name adds it to _tools_by_name."""
+        agent.append_tool("some_tool")
+        assert "some_tool" in agent._tools_by_name
+
+    def test_append_by_name_resolved_via_context(self, agent):
+        """A tool added by name is resolved from context in all_tools."""
+        @tool
+        def ctx_tool(x: int, **kwargs):
+            """A context tool.
+
+            Args:
+                x: A number.
+            """
+            return x
+
+        agent.append_tool("ctx_tool")
+        agent.context["ctx_tool"] = ctx_tool
+        assert ctx_tool in agent.all_tools
+
+    def test_append_internal_callable(self, agent):
+        """Callable with '_' prefix name is available in all_tools."""
+        @tool
+        def _secret(x: str, **kwargs):
+            """Internal tool.
+
+            Args:
+                x: Input.
+            """
+            return x
+
+        agent.append_tool(_secret)
+        assert _secret in agent.all_tools
+
+    def test_append_internal_by_name(self, agent):
+        """String name starting with '_' resolves from context into all_tools."""
+        @tool
+        def _hidden(**kwargs):
+            """Hidden tool."""
+            return "hidden"
+
+        agent.context["_hidden"] = _hidden
+        agent.append_tool("_hidden")
+        assert _hidden in agent.all_tools
+
+    def test_append_system_tool_with_args(self, agent):
+        """A system tool with arguments is included in system_tools after append."""
+        @tool(system=True)
+        def sys_info(detail: str, **kwargs):
+            """System info tool.
+
+            Args:
+                detail: Detail level.
+            """
+            return detail
+
+        agent.append_tool(sys_info)
+        assert sys_info in agent.system_tools
+
+    def test_append_app_tool_not_in_system_tools(self, agent):
+        """A non-system tool with arguments is NOT in system_tools."""
+        @tool
+        def app_info(detail: str, **kwargs):
+            """App info tool.
+
+            Args:
+                detail: Detail level.
+            """
+            return detail
+
+        agent.append_tool(app_info)
+        assert app_info not in agent.system_tools
+        assert app_info in agent.all_tools
+
+
 class TestGetNextRequestAvailableTools:
     """Tests that get_next_request includes available_tools."""
 

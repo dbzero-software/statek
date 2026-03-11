@@ -387,6 +387,28 @@ class TestCreateTool:
 
         create_tool('add_tool2', add, 'Adds two numbers', context, 5, 3)
 
+    def test_create_tool_ignores_extra_positional_args(self):
+        """Test that created tool ignores positional args passed by the LLM."""
+        def add(a, b):
+            return a + b
+
+        tool_func = create_tool('add_tool', add, 'Adds two numbers', {}, 5, 3)
+
+        # LLM may pass positional args that the bound tool doesn't need
+        assert tool_func(10) == 8
+        assert tool_func(10, 20) == 8
+
+    def test_create_tool_ignores_extra_keyword_args(self):
+        """Test that created tool ignores keyword args passed by the LLM."""
+        def add(a, b):
+            return a + b
+
+        tool_func = create_tool('add_tool', add, 'Adds two numbers', {}, 5, 3)
+
+        assert tool_func(count=10) == 8
+        assert tool_func(10, count=20) == 8
+
+
 class TestGetUnpackSize:
     """Test cases for get_unpack_size function."""
 

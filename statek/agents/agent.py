@@ -51,6 +51,7 @@ class Agent:
     _tools_by_name: Optional[List[str]] = field(default_factory=list)
     # Internal tools (name starts with '_'): available in execution context but not reported to LLM
     _internal_tools: Optional[List[Callable]] = field(default_factory=list)
+    _internal_tools_by_name: Optional[List[str]] = field(default_factory=list)
     _metadata: Optional[Dict[str, str]] = None  # prompt meta-data as key/value pairs
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
 
@@ -221,6 +222,11 @@ class Agent:
                     result.append(fn)
         if self._internal_tools:
             result.extend(self._internal_tools)
+        if self._internal_tools_by_name:
+            for tool_name in self._internal_tools_by_name:
+                fn = self.context.get(tool_name)
+                if fn is not None:
+                    result.append(fn)
         return result
 
     @property
@@ -247,17 +253,27 @@ class Agent:
         """
         if isinstance(tool_or_name, str):
             if tool_or_name.startswith('_'):
-                fn = self.context.get(tool_or_name)
-                if fn is not None:
-                    self._internal_tools.append(fn)
+                self._internal_tools_by_name.append(tool_or_name)
             else:
                 self._tools_by_name.append(tool_or_name)
         else:
             tool_name = getattr(tool_or_name, '__name__', '')
             if tool_name.startswith('_'):
-                self._internal_tools.append(tool_or_name)
+                try:
+                    self._internal_tools.append(tool_or_name)
+                except RuntimeError:
+                    # db0 rejects nested/decorated functions in persistent lists;
+                    # fall back to name-based registration via context.
+                    self._internal_tools_by_name.append(tool_name)
+                    self.context[tool_name] = tool_or_name
             else:
-                self._tools.append(tool_or_name)
+                try:
+                    self._tools.append(tool_or_name)
+                except RuntimeError:
+                    # db0 rejects nested/decorated functions in persistent lists;
+                    # fall back to name-based registration via context.
+                    self._tools_by_name.append(tool_name)
+                    self.context[tool_name] = tool_or_name
 
 @db0.memo
 class SupervisedAgent(Agent):
