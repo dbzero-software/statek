@@ -222,3 +222,25 @@ class TestResearcher:
         assert tool1 in researcher._tools  # pylint: disable=protected-access
         assert tool2 in researcher._tools  # pylint: disable=protected-access
         assert tool3 in researcher._tools  # pylint: disable=protected-access
+
+    def test_researcher_default_role(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test Researcher uses 'researcher' as default role."""
+        researcher = Researcher(send_message=sync_send_message)
+        assert researcher.role == "researcher"
+
+    def test_researcher_custom_role(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test Researcher accepts a custom role name."""
+        researcher = Researcher(send_message=sync_send_message, role="knowledge_expert")
+        assert researcher.role == "knowledge_expert"
+
+    def test_researcher_custom_role_with_tools(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test Researcher with custom role retains all tools."""
+        researcher = Researcher(
+            send_message=sync_send_message,
+            tools=[mock_tool],
+            role="domain_expert"
+        )
+        assert researcher.role == "domain_expert"
+        assert mock_tool in researcher._tools  # pylint: disable=protected-access
+        assert 'ask' in researcher.context
+        assert 'answer' in researcher.context

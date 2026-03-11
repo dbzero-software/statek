@@ -1,5 +1,5 @@
 """Tests for run_job_step resumption after FutureError."""
-# pylint: disable=no-member,R0903
+# pylint: disable=no-member,R0903,C0415
 
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -668,6 +668,146 @@ class TestRunJobStepWarmupException:
         assert result2 is True
         assert job.status == JobStatus.DONE
         assert job_def.has_errors() is True
+
+
+class TestRunJobStepEmptyLLMSubmission:
+    """Tests that run_job_step prints error when LLM submits empty code."""
+
+    @pytest.mark.asyncio
+    async def test_empty_string_response_prints_error(self, db0_fixture):  # pylint: disable=unused-argument
+        """LLM responding with empty string prints error to console."""
+        agent = Agent(role="empty_resp", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        job = Job(
+            job_def=job_def, model_family="test", model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+        # Simulate LLM having returned empty code
+        from tests.conftest import create_chat_log_item
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=""))
+
+        mock_response = LLM_Response(
+            text="exit('done')", session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        assert "Error: no code submitted." in console_text
+
+    @pytest.mark.asyncio
+    async def test_comment_only_response_prints_error(self, db0_fixture):  # pylint: disable=unused-argument
+        """LLM responding with only comments prints error to console."""
+        agent = Agent(role="comment_resp", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        job = Job(
+            job_def=job_def, model_family="test", model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+        from tests.conftest import create_chat_log_item
+        comment_code = "# just a comment\n# another comment"
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0, llm_resp=comment_code))
+
+        mock_response = LLM_Response(
+            text="exit('done')", session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        assert "Error: no code submitted." in console_text
+
+    @pytest.mark.asyncio
+    async def test_block_comment_only_response_prints_error(self, db0_fixture):  # pylint: disable=unused-argument
+        """LLM responding with only block comments (docstrings) prints error to console."""
+        agent = Agent(role="block_comment_resp", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        job = Job(
+            job_def=job_def, model_family="test", model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+        from tests.conftest import create_chat_log_item
+        block_comment = '"""This is a block comment"""'
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0, llm_resp=block_comment))
+
+        mock_response = LLM_Response(
+            text="exit('done')", session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        assert "Error: no code submitted." in console_text
+
+    @pytest.mark.asyncio
+    async def test_codeblock_with_tool_calls_no_error(self, db0_fixture):  # pylint: disable=unused-argument
+        """CodeBlock with tool calls but no code should NOT print error."""
+        call_spec = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={})
+        warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
+        agent = Agent(role="tool_no_error", _system_prompt="Test", _tools=[])
+        agent.context["my_tool"] = lambda: "tool_result"
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_blocks)
+        job = Job(
+            job_def=job_def, model_family="test", model="test-model",
+            job_status=JobStatus.READY,
+        )
+
+        await run_job_step(job)
+
+        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        assert "Error: no code submitted." not in console_text
+
+    @pytest.mark.asyncio
+    async def test_valid_code_no_error(self, db0_fixture):  # pylint: disable=unused-argument
+        """Normal code response should NOT print error."""
+        agent = Agent(role="valid_code", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        job = Job(
+            job_def=job_def, model_family="test", model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+        from tests.conftest import create_chat_log_item
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp='exit("done")'))
+
+        await run_job_step(job)
+
+        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        assert "Error: no code submitted." not in console_text
 
 
 class TestRunJobStepEmptyCodeBlock:
