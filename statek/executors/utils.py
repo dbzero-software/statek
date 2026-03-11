@@ -464,6 +464,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     example:
         see: experiments/ai/run_job_step.ipynb
     """
+
     # Step 0: Check harness constraints before step
     harness = get_llm_harness()
     harness.check_before_step(job)
@@ -481,8 +482,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     else:
         # Step 4: Update status READY -> WARMING_UP or SUSPENDED -> STARTED
         # Store whether we're resuming from SUSPENDED before changing status
-        resuming_from_suspended = job.status == JobStatus.SUSPENDED
-        
         if job.status == JobStatus.READY:
             job.set_status(JobStatus.WARMING_UP)
         elif job.status == JobStatus.SUSPENDED:
@@ -539,6 +538,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 # Critical job definition failure — terminate job and record error
                 job.job_def.set_error(e)
                 job.set_status(JobStatus.DONE)
+                # Provide minimal context for error handlers
+                _STATEK_CTX = {'job': job} 
+                handle_critical_error(e)
                 return True
             # Non-warmup exception: print error so the LLM can see and recover
             error_msg = f"{type(e).__name__}: {e}"

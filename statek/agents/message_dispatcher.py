@@ -45,7 +45,7 @@ class MessageDispatcher(SupervisedAgent):
         self.dispatch_to = dispatch_to
 
         # Initialize with basic tools; routing tools are registered below by name
-        basic_tools = [docs]
+        basic_tools = [docs, chat_history, start_new_thread, dispatch_to]
         # Call parent constructor
         super().__init__(
             role=role,
@@ -53,11 +53,6 @@ class MessageDispatcher(SupervisedAgent):
             _tools=basic_tools,
         )
 
-        # Register dynamically-wrapped routing tools by name; their implementations
-        # are populated in init_context() where the stored callables are available.
-        self.append_tool('chat_history')
-        self.append_tool('start_new_chat_thread')
-        self.append_tool('dispatch_to')
 
     def init_context(self):
         if self._X__context is None:
