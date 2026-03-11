@@ -380,7 +380,7 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
     # Capture the bound kwargs
     bound_kwargs = kwargs
 
-    def tool_func(**_tool_kwargs):
+    def tool_func(*_tool_args, **_tool_kwargs):
         # Call the function with bound arguments
         return callable(*args, **bound_kwargs)
 
