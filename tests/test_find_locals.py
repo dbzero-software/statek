@@ -3,7 +3,10 @@ from typing import Tuple
 import pytest
 import dbzero as db0
 from statek.utils import find_locals, get_current_agent, get_current_agent_name, get_current_job
-from statek.system import inject_context
+from statek.system import inject_context, tool
+from statek.executors.utils import exec_step
+from statek.executors.job import Job, JobDef, JobStatus
+from statek.agents.agent import Agent
 from statek.future import FutureResult, temporal
 from statek.exceptions import FutureError
 
@@ -137,7 +140,6 @@ class TestFindLocals:
         results = list(find_locals(var_name='nonexistent'))
 
         assert len(results) == 0
-
 
     def test_find_by_type_and_name(self):
         """Test finding variables by both type and name."""
@@ -439,3 +441,61 @@ class TestFindLocalsWithFutures:
 
         with pytest.raises(FutureError):
             list(find_locals(var_type=str, var_name='elem_name'))
+
+
+# --- Async tool using find_locals, for exec_step integration tests ---
+
+@tool
+async def _async_find_local_tool(var_name: str, **kwargs):
+    """Async tool that uses find_locals to locate a variable by name."""
+    results = list(find_locals(var_name=var_name))
+    if results:
+        return results[0]
+    return None
+
+
+def _make_job_with_tools(role, tools):
+    """Create a job with the given agent tools."""
+    agent = Agent(role=role, _system_prompt="Test", _tools=tools)
+    job_def = JobDef(agent=agent, job_params={"goal": "Test"}, warmup_code=None)
+    return Job(
+        job_def=job_def,
+        model_family="test",
+        model="test-model",
+        job_status=JobStatus.READY,  # pylint: disable=no-member
+    )
+
+
+class TestFindLocalsFromAsyncToolInExecStep:
+    """Tests for find_locals working inside an async @tool called from exec_step."""
+
+    @pytest.mark.asyncio
+    async def test_async_tool_finds_variable_from_prior_exec_step(self, db0_fixture):
+        """Async tool using find_locals locates a variable initialized in a prior exec_step."""
+        job = _make_job_with_tools("async_find_local", [_async_find_local_tool])
+
+        await exec_step('greeting = "hello world"', job)
+        await exec_step('result = _async_find_local_tool(var_name="greeting")', job)
+
+        assert job.py_env.local_state['result'] == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_async_tool_finds_variable_from_same_exec_step(self, db0_fixture):
+        """Async tool using find_locals locates a variable initialized in the same exec_step."""
+        job = _make_job_with_tools("async_find_local_same", [_async_find_local_tool])
+
+        await exec_step(
+            'greeting = "hello world"\nresult = _async_find_local_tool(var_name="greeting")',
+            job,
+        )
+
+        assert job.py_env.local_state['result'] == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_async_tool_returns_none_for_missing_variable(self, db0_fixture):
+        """Async tool using find_locals returns None when the variable does not exist."""
+        job = _make_job_with_tools("async_find_local_miss", [_async_find_local_tool])
+
+        await exec_step('result = _async_find_local_tool(var_name="nonexistent")', job)
+
+        assert job.py_env.local_state['result'] is None
