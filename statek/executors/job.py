@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import re
 import traceback as _traceback_module
-from typing import List, Optional, Iterable, Dict, Any, Sequence, Union
+from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Union
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
@@ -155,6 +155,24 @@ class JobDef:
 
 
 @memo
+@dataclass
+class ErrorHandler:
+    """Holds an error-handling callable together with the context it should be called with.
+
+    The ``__call__`` method forwards the underlying handler with ``context`` and an
+    optional exception, suppressing any exception the handler itself might raise.
+    """
+    error_handler: Callable
+    context: Any
+
+    def __call__(self, error: Optional[Exception] = None):
+        try:
+            self.error_handler(self.context, error=error)
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+
+@memo
 class Job:
     """
     A single "job" is a stateful class representing the current state of a single unit-of-work, being performed end-to-end by a single agent. By a "job" we might mean either a very simple operation such as answering a basic question ("Hey, what day of week is today") or a complex task involving retrieving information from external systems, communicating with external actors, waiting for approvals etc. - before the final response is generated.
@@ -198,6 +216,8 @@ class Job:
         self.warmup_block_num = warmup_block_num
         # Error information if the job failed
         self.error: Optional[JobDefError] = error
+        # Registered error handlers (ErrorHandler instances)
+        self.error_handlers: List[ErrorHandler] = []
         # Console position recorded after each warmup block completes
         self.warmup_console_positions: List[int] = []
         # Total context bytes used by this job so far
@@ -211,6 +231,28 @@ class Job:
         if self.logs_path and self.job_def.agent is not None:
             self._log(self.job_def.agent.system_prompt(job_params=self.job_def.job_params))
             self._log(self.job_def.prompt())
+
+    def add_error_handler(self, error_handler: Callable, context: Any) -> None:
+        """Register an error handler with this job.
+
+        Args:
+            error_handler: The error-handling callable (must satisfy the
+                error-handler protocol, i.e. decorated with
+                ``@statek.error_handler``).
+            context: The context value passed as the first argument when the
+                handler is invoked.
+        """
+        self.error_handlers.append(ErrorHandler(error_handler=error_handler, context=context))
+
+    def notify_handlers(self, error: Optional[Exception] = None) -> None:
+        """Invoke all registered error handlers and clear the handler list.
+
+        Args:
+            error: Optional exception that caused the job to terminate.
+        """
+        handlers, self.error_handlers = self.error_handlers, []
+        for handler in handlers:
+            handler(error=error)
 
     @property
     def logs_path(self) -> Optional[str]:

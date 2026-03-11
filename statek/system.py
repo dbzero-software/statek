@@ -8,9 +8,9 @@ from datetime import date, datetime, time as _time
 from functools import wraps
 import nest_asyncio
 import dbzero as db0
-from .future import get_any_future, get_all_future
+from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
-from .utils import find_locals, get_current_agent_name
+from .utils import find_locals, get_current_agent_name, get_current_job
 
 
 _TOOL_REGISTRY: list[Callable] = []
@@ -175,7 +175,7 @@ def _convert_enum_args(f, args, kwargs):
     return _rebuild_args(sig, converted)
 
 
-def tool(f=None, *, system: bool = False):
+def tool(f=None, *, system: bool = False, error_handler=None): # pylint: disable=W0621
     """Marks a function as a tool for LLM agent.
 
     Can be used as ``@tool`` or ``@tool(system=True)``.
@@ -183,9 +183,23 @@ def tool(f=None, *, system: bool = False):
     Args:
         system: When True, the tool is classified as a system-level tool
             (e.g. docs, brief) rather than an application-level tool.
+        error_handler: Optional error-handling callable to associate with this
+            tool.  Must be decorated with :func:`error_handler` and satisfy the
+            error-handler protocol (name starting with ``_``, accepting
+            ``(context, error=None)``).  When provided, the handler is
+            registered on the current job (via ``job.add_error_handler``) with
+            the tool's return value as context, just before the value is
+            returned to the caller.
     """
 
     def _decorate(func):
+        if error_handler is not None and not is_valid_error_handler(error_handler):
+            raise TypeError(
+                "error_handler passed to @tool must be decorated with @error_handler "
+                "and satisfy the error-handler protocol: name starting with '_', "
+                "accepting (context, error=None)."
+            )
+
         # Check if the function signature includes **kwargs
         sig = inspect.signature(func)
         has_var_keyword = any(
@@ -214,6 +228,15 @@ def tool(f=None, *, system: bool = False):
             else:
                 # If func is sync, just call it
                 result = func(*args, **kwargs)
+
+            if error_handler is not None:
+                job = get_current_job()
+                if job is not None:
+                    if isinstance(result, FutureResult):
+                        result.bind_error_handler(error_handler, job)
+                    else:
+                        job.add_error_handler(error_handler, result)
+
             return result
 
         wrapper.tool_system = system
@@ -225,6 +248,70 @@ def tool(f=None, *, system: bool = False):
         return _decorate
     # Called as @tool (without parentheses)
     return _decorate(f)
+
+
+def error_handler(func: Callable) -> Callable:
+    """Marks a callable as an error handler.
+
+    An error handler is called when a job must be terminated with an error,
+    allowing the application to notify users awaiting a response.
+
+    The decorated function must accept ``(context, error=None)`` and its name
+    must start with a single underscore ``_``.  Any exception raised by the
+    handler at call time is suppressed automatically.
+
+    Args:
+        func: The callable to mark as an error handler.
+
+    Returns:
+        The wrapped callable with ``is_error_handler = True`` set.
+    """
+    @functools.wraps(func)
+    def wrapper(context, error=None):
+        try:
+            func(context, error=error)
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+    wrapper.is_error_handler = True
+    return wrapper
+
+
+def is_valid_error_handler(funct: Callable) -> bool:
+    """Return True if *funct* satisfies the error-handler protocol.
+
+    A valid error handler must:
+
+    * Be decorated with :func:`error_handler` (``is_error_handler`` attribute
+      is ``True``).
+    * Have a name starting with a single underscore ``_``.
+    * Accept exactly two parameters where the second (``error``) has a default
+      value (i.e. is optional).
+
+    Args:
+        funct: The callable to inspect.
+
+    Returns:
+        ``True`` if all criteria are met, ``False`` otherwise.
+    """
+    if not (callable(funct)
+            and getattr(funct, 'is_error_handler', False)
+            and funct.__name__.startswith('_')):
+        return False
+    try:
+        sig = inspect.signature(funct)
+        params = [
+            p for p in sig.parameters.values()
+            if p.kind not in {inspect.Parameter.VAR_KEYWORD,
+                               inspect.Parameter.VAR_POSITIONAL}
+        ]
+        if len(params) != 2:
+            return False
+        if params[1].default is inspect.Parameter.empty:
+            return False
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def find_tools(scope: Optional[str] = None) -> Iterable[Callable]:

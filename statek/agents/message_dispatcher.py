@@ -43,14 +43,20 @@ class MessageDispatcher(SupervisedAgent):
         self.start_new_thread = start_new_thread
         self.dispatch_to = dispatch_to
 
-        # Initialize with basic tools (docs)
-        basic_tools = [docs, chat_history, start_new_thread, dispatch_to]
+        # Initialize with basic tools; routing tools are registered below by name
+        basic_tools = [docs]
         # Call parent constructor
         super().__init__(
             role="message_dispatcher",
             _system_prompt=None, # Prompt is readed in StatekSetings
             _tools=basic_tools,
         )
+
+        # Register dynamically-wrapped routing tools by name; their implementations
+        # are populated in init_context() where the stored callables are available.
+        self.append_tool('chat_history')
+        self.append_tool('start_new_chat_thread')
+        self.append_tool('dispatch_to')
 
     def init_context(self):
         if self._X__context is None:
@@ -73,6 +79,7 @@ class MessageDispatcher(SupervisedAgent):
         def chat_history_impl():
             return self.chat_history()
 
+        # Populate context; registration was done once in __init__ via append_tool('chat_history')
         create_tool(
             tool_name='chat_history',
             callable=chat_history_impl,
@@ -94,6 +101,7 @@ class MessageDispatcher(SupervisedAgent):
         def start_new_thread_impl():
             return self.start_new_thread()
 
+        # Populate context; registration was done once in __init__
         create_tool(
             tool_name='start_new_chat_thread',
             callable=start_new_thread_impl,
@@ -116,6 +124,7 @@ class MessageDispatcher(SupervisedAgent):
         def dispatch_to_impl():
             return self.dispatch_to()
 
+        # Populate context; registration was done once in __init__ via append_tool('dispatch_to')
         create_tool(
             tool_name='dispatch_to',
             callable=dispatch_to_impl,

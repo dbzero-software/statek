@@ -48,6 +48,9 @@ class Coordinator(SupervisedAgent):
             _tools=basic_tools,
         )
 
+        # Register find_agents by name; implementation is populated in init_context()
+        self.append_tool('find_agents')
+
     def init_context(self):
         if self._X__context is None:
             super().init_context()

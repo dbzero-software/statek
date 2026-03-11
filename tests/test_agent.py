@@ -5,6 +5,10 @@ from statek.agents.agent import Agent
 from tests.conftest import clock, docs, exit_tool
 
 
+def _internal_tool(**kwargs):  # pylint: disable=unused-argument
+    """An internal tool that should not appear in the system prompt."""
+
+
 class TestAgent:
     """Test cases for Agent class."""
 
@@ -100,3 +104,15 @@ class TestAgent:
         assert mock_fmt.called
         _, call_kwargs = mock_fmt.call_args
         assert call_kwargs.get('agent') == 'Agent'
+
+    def test_internal_tool_excluded_from_system_prompt(self, db0_fixture):  # pylint: disable=unused-argument
+        """Tools with names starting with '_' are not reported in the system prompt."""
+        agent = Agent(role="test", _system_prompt="{tools}", _tools=[_internal_tool])
+
+        assert "_internal_tool" not in agent.system_prompt()
+
+    def test_internal_tool_included_in_all_tools(self, db0_fixture):  # pylint: disable=unused-argument
+        """Tools with names starting with '_' are available in all_tools (execution context)."""
+        agent = Agent(role="test", _system_prompt="{tools}", _tools=[_internal_tool])
+
+        assert _internal_tool in agent.all_tools
