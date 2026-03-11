@@ -50,6 +50,11 @@ class Researcher(SupervisedAgent):
             _tools=basic_tools,
         )
 
+        # Register dynamically created tools by name; their implementations are
+        # populated in init_context() where send_message closure is available.
+        self.append_tool('ask')
+        self.append_tool('answer')
+
     def init_context(self):
         if self._X__context is None:
             super().init_context()
@@ -115,5 +120,5 @@ class Researcher(SupervisedAgent):
         answer_impl.__name__ = 'answer'
         answer_impl.__doc__ = docstring
 
-        # Store in context
+        # Store in context; registration was done once in __init__ via append_tool('answer')
         self._X__context['answer'] = answer_impl

@@ -72,15 +72,44 @@ class FutureResult:
     """Continuation condition"""
     __check_condition: Callable = None
     __fetch_result: Callable = None
+    """Deferred error-handler registration (set by bind_error_handler)"""
+    __pending_error_handler: Callable = None
+    __pending_error_handler_job: Any = None
 
     def set_complement_functions(self, complement: Callable, condition: Callable):
         self.__check_condition = condition
         self.__fetch_result = complement
 
+    def bind_error_handler(self, error_handler: Callable, job: Any) -> None:
+        """Attach an error handler to be registered when value is first retrieved.
+
+        The handler is registered on *job* (via ``job.add_error_handler``) with the
+        resolved value as context the first time ``.value`` returns successfully.
+        Subsequent accesses to ``.value`` do not re-register the handler.
+
+        Args:
+            error_handler: A callable satisfying the error-handler protocol.
+            job: The Job instance on which to register the handler.
+        """
+        self.__pending_error_handler = error_handler
+        self.__pending_error_handler_job = job
+
     @property
     def value(self):
-        """Retrieve result (if available) or raise FutureError"""
-        return self.__fetch_result(self)
+        """Retrieve result (if available) or raise FutureError.
+
+        On the first successful retrieval, any pending error handler bound via
+        :meth:`bind_error_handler` is registered on the associated job with the
+        resolved value as context.
+        """
+        result = self.__fetch_result(self)
+        if self.__pending_error_handler is not None:
+            self.__pending_error_handler_job.add_error_handler(
+                self.__pending_error_handler, result
+            )
+            self.__pending_error_handler = None
+            self.__pending_error_handler_job = None
+        return result
 
     def check_condition(self):
         """Check if completion condition was met"""

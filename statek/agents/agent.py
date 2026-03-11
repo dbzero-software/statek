@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
@@ -48,7 +48,9 @@ class Agent:
     _system_prompt: str  # f-string with the {tools} placeholder
     _tools: List[Callable]
     # NOTE: dynamically created tools are stored by their name
-    _tools_by_name: Optional[List[str]] = None
+    _tools_by_name: Optional[List[str]] = field(default_factory=list)
+    # Internal tools (name starts with '_'): available in execution context but not reported to LLM
+    _internal_tools: Optional[List[Callable]] = field(default_factory=list)
     _metadata: Optional[Dict[str, str]] = None  # prompt meta-data as key/value pairs
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
 
@@ -78,6 +80,15 @@ class Agent:
                 self.update_metadata(prompt_def.metadata)
         self.append_tool(list_of_examples)
         self.append_tool(show_example)
+
+        # Migrate any '_'-prefixed tools passed directly to _tools into _internal_tools
+        internal = [fn for fn in self._tools if fn.__name__.startswith('_')]
+        if internal:
+            if not self._internal_tools:
+                self._internal_tools = []
+            for fn in internal:
+                self._tools.remove(fn)
+                self._internal_tools.append(fn)
 
 
     def update_system_prompt(self, new_prompt: str) -> bool:
@@ -201,13 +212,15 @@ class Agent:
 
     @property
     def all_tools(self) -> List[Callable]:
-        """Return all tools assigned to this agent (both _tools list and named context tools)."""
+        """Return all tools assigned to this agent (both regular and internal)."""
         result = list(self._tools)
         if self._tools_by_name:
             for tool_name in self._tools_by_name:
                 fn = self.context.get(tool_name)
                 if fn is not None:
                     result.append(fn)
+        if self._internal_tools:
+            result.extend(self._internal_tools)
         return result
 
     @property
@@ -225,15 +238,26 @@ class Agent:
         """
         Add a tool to the agent's toolset.
 
+        Tools whose name starts with '_' are registered as internal tools:
+        available in the job's local execution context but not reported to the LLM
+        (i.e. excluded from {tools}, {brief_tools} and {detailed_tools} placeholders).
+
         Args:
             tool_or_name: a callable or the name of a callable to be added as a tool
         """
         if isinstance(tool_or_name, str):
-            if not self._tools_by_name:
-                self._tools_by_name = []
-            self._tools_by_name.append(tool_or_name)
+            if tool_or_name.startswith('_'):
+                fn = self.context.get(tool_or_name)
+                if fn is not None:
+                    self._internal_tools.append(fn)
+            else:
+                self._tools_by_name.append(tool_or_name)
         else:
-            self._tools.append(tool_or_name)
+            tool_name = getattr(tool_or_name, '__name__', '')
+            if tool_name.startswith('_'):
+                self._internal_tools.append(tool_or_name)
+            else:
+                self._tools.append(tool_or_name)
 
 @db0.memo
 class SupervisedAgent(Agent):

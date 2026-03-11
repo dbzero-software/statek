@@ -21,7 +21,7 @@ from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
-from statek.utils import CodeBlock, CallSpec, format_default_llm_repr
+from statek.utils import CodeBlock, CallSpec, format_default_llm_repr, get_current_job
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -160,7 +160,10 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     # Merge agent's private context if available
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         global_context.update(job.job_def.agent.context)
-    for tool in job.job_def.agent._tools:
+    all_direct_tools = list(job.job_def.agent._tools)
+    if job.job_def.agent._internal_tools:
+        all_direct_tools.extend(job.job_def.agent._internal_tools)
+    for tool in all_direct_tools:
         global_context[tool.__name__] = inject_context(tool, global_context)
 
     # Create custom functions
@@ -629,8 +632,26 @@ def unsuspend_jobs():
             job.set_status(JobStatus.STARTED)
 
 
+def handle_critical_error(error: Optional[Exception] = None) -> None:
+    """Handle a critical job-terminating error by invoking registered error handlers.
+
+    Locates the current job from the execution context (via ``_STATEK_CTX``) and
+    calls :meth:`~statek.executors.job.Job.notify_handlers` so that every registered
+    error handler is invoked with the supplied exception.
+
+    If no job is found in the current context the function is a no-op.
+
+    Args:
+        error: The exception that caused the critical failure, or ``None``.
+    """
+    job = get_current_job()
+    if job is not None:
+        job.notify_handlers(error=error)
+
+
 async def job_worker(semaphore, job: Job, provider: str = None):
     async with semaphore:
+        _STATEK_CTX = {'job': job}  # noqa: F841 — makes job accessible to handle_critical_error
         try:
             # Log which agent is running this job
             agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
@@ -649,6 +670,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             job.py_env.exit_status = f"Error: {e}"
             job.console_append(error_msg, error_message=error_msg)
             job.set_status(JobStatus.DONE)
+            handle_critical_error(e)
         except Exception as e:
             # If job fails, write full stack trace to console and set status to DONE
             import traceback
@@ -656,6 +678,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             statek_log(error_msg, level='debug')
             job.console_append(error_msg, error_message=error_msg)
             job.set_status(JobStatus.DONE)
+            handle_critical_error(e)
 
 async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     start_jobs_func: Callable = None, auto_terminate: bool = False):

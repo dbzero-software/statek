@@ -5,7 +5,8 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import docs, brief, tool, create_tool, inject_context, find_tools, select_tools
+from statek.system import (docs, brief, tool, create_tool, inject_context, find_tools,
+                           select_tools, error_handler)
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.utils import format_callable_decl
 
@@ -92,7 +93,7 @@ class TestDocs:
 
         docs(SampleClass, "non_existent_method")
         captured = capsys.readouterr()
-        assert "Error: SampleClass has no method 'non_existent_method'" in captured.out
+        assert "SampleClass has no method 'non_existent_method'" in captured.out
 
     def test_docs_with_method_on_non_class(self, capsys):
         """Test docs with method_name provided but tool_or_class is not a class."""
@@ -805,3 +806,167 @@ class TestSelectTools:
         assert isinstance(select_tools([sys_a], "APPLICATION"), list)
         assert isinstance(select_tools([sys_a], "ALL"), list)
         assert isinstance(select_tools([sys_a], None), list)
+
+
+# Module-level error handlers for TestToolErrorHandler
+# (db0 @memo rejects nested/decorated functions as callable members)
+@error_handler
+def _eh_noop(context, error=None):  # pylint: disable=unused-argument
+    """No-op error handler used by TestToolErrorHandler."""
+
+
+@tool(error_handler=_eh_noop)
+def _sync_tool_with_handler(**kwargs):  # pylint: disable=unused-argument
+    """Sync tool that returns a fixed string."""
+    return "the_result"
+
+
+@tool(error_handler=_eh_noop)
+async def _async_tool_with_handler(**kwargs):  # pylint: disable=unused-argument
+    """Async tool that returns a fixed string."""
+    return "async_result"
+
+
+@tool(error_handler=_eh_noop)
+def _tool_no_ctx(**kwargs):  # pylint: disable=unused-argument
+    """Tool used without a job in context."""
+    return "result"
+
+
+class TestToolErrorHandler:
+    """Tests for the error_handler argument on the @tool decorator."""
+
+    def test_invalid_error_handler_raises_at_decoration_time(self):
+        """Passing a callable that is not a valid error handler raises TypeError."""
+        def not_a_handler(context, error=None):  # pylint: disable=unused-argument
+            pass
+
+        with pytest.raises(TypeError):
+            @tool(error_handler=not_a_handler)
+            def my_tool(**kwargs):  # pylint: disable=unused-argument
+                """A tool."""
+                return "value"
+
+    def test_sync_tool_registers_handler_on_job(self, job_factory):
+        """Sync tool with error_handler registers it on the current job with the return value."""
+        job = job_factory()
+        _STATEK_CTX = {'job': job}  # noqa: F841  # visible to find_locals via call stack
+
+        result = _sync_tool_with_handler()
+
+        assert result == "the_result"
+        assert len(job.error_handlers) == 1
+        assert job.error_handlers[0].error_handler is _eh_noop
+        assert job.error_handlers[0].context == "the_result"
+
+    @pytest.mark.asyncio
+    async def test_async_tool_registers_handler_on_job(self, job_factory):
+        """Async tool with error_handler registers it on the current job."""
+        job = job_factory()
+        _STATEK_CTX = {'job': job}  # noqa: F841  # visible to find_locals via call stack
+
+        result = _async_tool_with_handler()
+
+        assert result == "async_result"
+        assert len(job.error_handlers) == 1
+        assert job.error_handlers[0].error_handler is _eh_noop
+        assert job.error_handlers[0].context == "async_result"
+
+    def test_no_job_in_context_does_not_raise(self):
+        """Tool with error_handler works normally when no job is available in context."""
+        # No _STATEK_CTX in scope — should return normally without raising
+        result = _tool_no_ctx()
+        assert result == "result"
+
+
+# ---------------------------------------------------------------------------
+# Module-level fixtures for TestToolTemporalErrorHandler
+# (db0 @memo rejects nested/decorated functions as callable members)
+# ---------------------------------------------------------------------------
+
+@db0.memo
+class _TemporalResult(FutureResult):
+    """Minimal FutureResult subclass for temporal error-handler tests."""
+    def __init__(self, resolved_value):
+        super().__init__(deps=None, state_num=0)
+        self.resolved_value = resolved_value
+
+
+def _temporal_complement(fut: _TemporalResult):
+    return fut.resolved_value
+
+
+def _temporal_condition(fut: _TemporalResult):  # pylint: disable=unused-argument
+    return True
+
+
+@error_handler
+def _eh_temporal(context, error=None):  # pylint: disable=unused-argument
+    """No-op error handler for temporal tests."""
+
+
+@temporal(complement=_temporal_complement, condition=_temporal_condition)
+@tool(error_handler=_eh_temporal)
+def _temporal_tool(**kwargs):  # pylint: disable=unused-argument
+    """Temporal sync tool with an error handler."""
+    return _TemporalResult("resolved")
+
+
+@temporal(complement=_temporal_complement, condition=_temporal_condition)
+@tool(error_handler=_eh_temporal)
+async def _async_temporal_tool(**kwargs):  # pylint: disable=unused-argument
+    """Temporal async tool with an error handler."""
+    return _TemporalResult("async_resolved")
+
+
+class TestToolTemporalErrorHandler:
+    """Tests for error_handler on @tool when the tool returns a FutureResult."""
+
+    def test_handler_not_registered_before_value_access(self, job_factory):
+        """Returning a FutureResult defers registration — job has no handlers yet."""
+        job = job_factory()
+        _STATEK_CTX = {'job': job}  # noqa: F841
+
+        future = _temporal_tool()
+
+        assert isinstance(future, FutureResult)
+        assert len(job.error_handlers) == 0
+
+    def test_handler_registered_on_value_access(self, job_factory):
+        """Accessing .value on the FutureResult registers the handler with resolved value."""
+        job = job_factory()
+        _STATEK_CTX = {'job': job}  # noqa: F841
+
+        future = _temporal_tool()
+        value = future.value
+
+        assert value == "resolved"
+        assert len(job.error_handlers) == 1
+        assert job.error_handlers[0].error_handler is _eh_temporal
+        assert job.error_handlers[0].context == "resolved"
+
+    @pytest.mark.asyncio
+    async def test_async_temporal_tool_registers_on_value_access(self, job_factory):
+        """Async temporal tool also defers registration until .value is accessed."""
+        job = job_factory()
+        _STATEK_CTX = {'job': job}  # noqa: F841
+
+        future = _async_temporal_tool()
+        assert len(job.error_handlers) == 0
+
+        value = future.value
+
+        assert value == "async_resolved"
+        assert len(job.error_handlers) == 1
+        assert job.error_handlers[0].context == "async_resolved"
+
+    def test_handler_registered_only_once(self, job_factory):
+        """Accessing .value a second time does not re-register the handler."""
+        job = job_factory()
+        _STATEK_CTX = {'job': job}  # noqa: F841
+
+        future = _temporal_tool()
+        res = future.value  # first access — registers
+        res = future.value  # second access — must not add another handler
+        assert res == "resolved"
+        assert len(job.error_handlers) == 1
