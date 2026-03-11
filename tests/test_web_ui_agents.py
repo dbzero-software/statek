@@ -1,6 +1,27 @@
 """Tests for the web_ui agents page helper functions."""
 
-from web_ui.pages.agents import _get_tool_info, _get_tool_signature
+from web_ui.pages.agents import _format_warmup_code, _get_tool_info, _get_tool_signature
+
+
+class _FakeCodeBlock:  # pylint: disable=too-few-public-methods
+    """Duck-typed stand-in for CodeBlock (avoids db0 initialization)."""
+    def __init__(self, code=None, tool_calls=None):
+        self.code = code
+        self.tool_calls = tool_calls
+
+
+class _FakeCallSpec:  # pylint: disable=too-few-public-methods
+    """Duck-typed stand-in for CallSpec."""
+    def __init__(self, func_name, args=None, kwargs=None):
+        self.func_name = func_name
+        self.args = args or []
+        self.kwargs = kwargs or {}
+
+    def format(self) -> str:
+        """Format as a human-friendly function call string."""
+        parts = [repr(a) for a in self.args]
+        parts += [f"{k}={v!r}" for k, v in self.kwargs.items()]
+        return f"{self.func_name}({', '.join(parts)})"
 
 
 def _tool_with_full_docs(value: str) -> str:
@@ -83,3 +104,50 @@ class TestGetToolSignature:
     def test_non_callable_returns_str(self):
         result = _get_tool_signature("mytool")  # type: ignore[arg-type]
         assert result == 'mytool'
+
+
+class TestFormatWarmupCode:
+    def test_none_returns_none(self):
+        assert _format_warmup_code(None) is None
+
+    def test_plain_string(self):
+        assert _format_warmup_code("x = 1") == "x = 1"
+
+    def test_code_block_code_only(self):
+        cb = _FakeCodeBlock(code="x = 1")
+        result = _format_warmup_code(cb)
+        assert "x = 1" in result
+
+    def test_code_block_with_tool_calls(self):
+        cs = _FakeCallSpec(func_name="my_tool", args=["a"], kwargs={"k": "v"})
+        cb = _FakeCodeBlock(code="x = 1", tool_calls=[cs])
+        result = _format_warmup_code(cb)
+        assert "x = 1" in result
+        assert "my_tool('a', k='v')  #STATEK: as tool" in result
+
+    def test_code_block_tool_call_no_args(self):
+        cs = _FakeCallSpec(func_name="do_stuff")
+        cb = _FakeCodeBlock(code="", tool_calls=[cs])
+        result = _format_warmup_code(cb)
+        assert "do_stuff()  #STATEK: as tool" in result
+
+    def test_list_of_strings(self):
+        result = _format_warmup_code(["block1", "block2"])
+        assert "Block 1" in result
+        assert "block1" in result
+        assert "Block 2" in result
+        assert "block2" in result
+
+    def test_list_with_mixed_types(self):
+        cb = _FakeCodeBlock(code="y = 2")
+        result = _format_warmup_code(["x = 1", cb])
+        assert "Block 1" in result
+        assert "x = 1" in result
+        assert "Block 2" in result
+        assert "y = 2" in result
+
+    def test_empty_string_returns_none(self):
+        assert _format_warmup_code("") is None
+
+    def test_empty_list_returns_none(self):
+        assert _format_warmup_code([]) is None

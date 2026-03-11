@@ -597,7 +597,8 @@ def format_docstring(docstring: FuncDocString | ClassDocString,
 def _format_func_docstring(docstring: FuncDocString, brief: bool, py_syntax: bool) -> str:
     """Format a function docstring."""
     # Get signature from source function
-    sig_str = _format_signature(docstring.source, docstring.name, py_syntax)
+    sig_str = _format_signature(docstring.source, docstring.name, py_syntax,
+                                doc_args=docstring.args)
 
     if py_syntax:
         return _format_func_py_syntax(docstring, sig_str, brief)
@@ -756,13 +757,28 @@ def _get_member_functions(cls: type) -> List[Callable]:
     return members
 
 
-def _format_signature(func: Callable, name: str, include_types: bool) -> str:
+def _params_from_doc_args(doc_args: List[ArgDocString],
+                          include_types: bool) -> List[str]:
+    """Build signature parameter strings from parsed docstring args."""
+    params = []
+    for arg in doc_args:
+        if include_types and arg.type:
+            params.append(f"{arg.name}: {arg.type}")
+        else:
+            params.append(arg.name)
+    return params
+
+
+def _format_signature(func: Callable, name: str, include_types: bool,
+                      doc_args: Optional[List[ArgDocString]] = None) -> str:
     """Format a function signature.
 
     Args:
         func: The source function
         name: The function name
         include_types: Whether to include type annotations
+        doc_args: Parsed docstring args used as fallback when the function
+            signature contains only variadic parameters
 
     Returns:
         Formatted signature string
@@ -781,7 +797,7 @@ def _format_signature(func: Callable, name: str, include_types: bool) -> str:
     for param_name, param in sig.parameters.items():
         if param_name in ('self', 'cls'):
             continue
-        if param.kind == inspect.Parameter.VAR_KEYWORD:
+        if param.kind in _SKIP_PARAM_KINDS:
             continue
 
         if include_types and param_name in hints:
@@ -797,6 +813,10 @@ def _format_signature(func: Callable, name: str, include_types: bool) -> str:
                 param_str += f"={_format_default(param.default)}"
 
         params.append(param_str)
+
+    # Fallback: when function only has *args/**kwargs, build from docstring args
+    if not params and doc_args:
+        params = _params_from_doc_args(doc_args, include_types)
 
     params_str = ", ".join(params)
 

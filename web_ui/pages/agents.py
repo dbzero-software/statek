@@ -1,12 +1,48 @@
 """Agents list page for the Statek web UI."""
 
 import traceback
-from typing import Callable
+from typing import Callable, Optional
 
 import dbzero as db0
 from nicegui import ui
 
+from statek.agents.agent import SupervisedAgent
 from web_ui.model_bindings import get_all_agents
+
+
+def _format_warmup_code(warmup_code) -> Optional[str]:
+    """Format warmup_code for display as a readable string.
+
+    Returns None if warmup_code is empty/None.
+    """
+    if warmup_code is None:
+        return None
+    if isinstance(warmup_code, str):
+        return warmup_code or None
+    if hasattr(warmup_code, 'code'):
+        return _format_code_block(warmup_code)
+    # Sequence of str/CodeBlock
+    if not warmup_code:
+        return None
+    parts = []
+    for i, block in enumerate(warmup_code, 1):
+        header = f"# --- Block {i} ---"
+        if hasattr(block, 'code'):
+            parts.append(f"{header}\n{_format_code_block(block)}")
+        else:
+            parts.append(f"{header}\n{block}")
+    return "\n\n".join(parts)
+
+
+def _format_code_block(cb) -> str:
+    """Format a single CodeBlock for display."""
+    parts = []
+    if cb.code:
+        parts.append(cb.code)
+    if cb.tool_calls:
+        for tc in cb.tool_calls:
+            parts.append(f"{tc.format()}  #STATEK: as tool")
+    return "\n".join(parts) if parts else ""
 
 
 def _get_tool_info(fn) -> tuple[str | None, str | None, str | None]:
@@ -142,6 +178,13 @@ def _render_agent_card_content(agent) -> None:
                         with ui.row().classes('items-start gap-2'):
                             ui.label(f'{key}:').classes('text-xs font-semibold text-gray-600 w-32 shrink-0')
                             ui.label(str(value)).classes('text-xs text-gray-700 font-mono break-all')
+
+        # Warmup Code
+        if isinstance(agent, SupervisedAgent) and agent.warmup_def is not None:
+            formatted = _format_warmup_code(agent.warmup_def.warmup_code)
+            if formatted:
+                with ui.expansion('Warmup Code', icon='play_arrow').props('dense').classes('w-full'):
+                    ui.code(formatted, language='python').classes('w-full text-xs')
 
         # System prompt
         if system_prompt:

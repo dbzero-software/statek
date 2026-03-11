@@ -97,8 +97,11 @@ def parse_func_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-
         name = call.func.attr
     else:
         raise ValueError(f"Unsupported function expression: {input!r}")
-    args = [ast.literal_eval(arg) for arg in call.args]
-    kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords} or None
+    args = [arg.id if isinstance(arg, ast.Name) else ast.literal_eval(arg) for arg in call.args]
+    kwargs = {
+        kw.arg: kw.value.id if isinstance(kw.value, ast.Name) else ast.literal_eval(kw.value)
+        for kw in call.keywords
+    } or None
     return ParsedFuncCall(name=name, args=args, kwargs=kwargs)
 
 

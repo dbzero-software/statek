@@ -53,11 +53,26 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument('--port', type=int, default=int(os.environ.get('STATEK_UI_PORT', '8765')))
     parser.add_argument('--db0-path', default=os.environ.get('DBZERO_ROOT', '.dbzero_data'),
                         help='Path to the db0 data directory')
+    parser.add_argument('--import', dest='imports', action='append', default=[],
+                        metavar='MODULE',
+                        help='Import a module so db0 can deserialize its @db0.memo classes '
+                             '(may be repeated, e.g. --import selltime.agents)')
     args, _ = parser.parse_known_args()
     return args
 
 
 _args = _parse_args()
+
+# Eagerly import modules so db0 can deserialize their @db0.memo classes
+# (e.g. agent subclasses defined in external projects).
+import importlib  # pylint: disable=wrong-import-position,wrong-import-order
+
+for _mod_name in _args.imports:
+    try:
+        importlib.import_module(_mod_name)
+        log.info('Imported external module: %s', _mod_name)
+    except Exception:  # pylint: disable=broad-except
+        log.warning('Failed to import external module: %s', _mod_name, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

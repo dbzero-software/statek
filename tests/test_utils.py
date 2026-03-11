@@ -909,6 +909,24 @@ def test_parse_func_call_bool_arg():
     assert result == ParsedFuncCall(name='toggle', args=[True], kwargs=None)
 
 
+def test_parse_func_call_variable_name_arg():
+    """Variable names in args/kwargs are preserved as strings."""
+    result = parse_func_call('docs(OnCallCalendar)')
+    assert result == ParsedFuncCall(name='docs', args=['OnCallCalendar'], kwargs=None)
+
+
+def test_parse_func_call_variable_name_kwarg():
+    """Variable names in kwargs are preserved as strings."""
+    result = parse_func_call('run(target=MyModel)')
+    assert result == ParsedFuncCall(name='run', args=[], kwargs={'target': 'MyModel'})
+
+
+def test_parse_func_call_mixed_literal_and_variable_args():
+    """Literal and variable arguments can be mixed."""
+    result = parse_func_call('show(MyClass, 5)')
+    assert result == ParsedFuncCall(name='show', args=['MyClass', 5], kwargs=None)
+
+
 def test_parse_func_call_bare_name_raises():
     """A bare name (not a call) raises an exception."""
     with pytest.raises(Exception):
@@ -978,11 +996,4 @@ def test_parse_warmup_block_multiple_tool_calls():
     assert len(result.tool_calls) == 2
     assert result.tool_calls[0].name == 'list_of_examples'
     assert result.tool_calls[1].name == 'show_example'
-
-
-def test_parse_warmup_block_returns_named_tuple():
-    """Result is a ParsedWarmupBlock namedtuple."""
-    result = parse_warmup_block("x = 1")
     assert isinstance(result, ParsedWarmupBlock)
-    assert hasattr(result, 'code')
-    assert hasattr(result, 'tool_calls')
