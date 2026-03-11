@@ -209,6 +209,27 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
                 del local_context[key]
 
 
+def _is_empty_code(code_str: Optional[str]) -> bool:
+    """Check if code string contains no executable statements.
+
+    Returns True when code_str is None, empty, whitespace-only, or contains
+    only comments and/or string literals (block comments).
+    """
+    if not code_str or not code_str.strip():
+        return True
+    try:
+        tree = ast.parse(code_str)
+    except SyntaxError:
+        return False
+    # After parsing, only Expr nodes with Constant values (string literals / block comments)
+    # remain — everything else is a real statement.
+    for node in tree.body:
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            return False
+    return True
+
+
 async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) -> bool:
     """
     Execute a single step of code within the job's Python environment.
@@ -475,6 +496,12 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             chat_style = get_statek_settings().chat_style
             log_code = f"```python\n{code_str}\n```" if chat_style == ChatStyle.MARKDOWN else code_str  # pylint: disable=no-member
             job._log(log_code)  # pylint: disable=protected-access
+
+        # Check for empty code submission (no executable code and no tool calls)
+        has_tool_calls = isinstance(code, CodeBlock) and code.tool_calls
+        if not has_tool_calls and _is_empty_code(code_str):
+            error_msg = "Error: no code submitted."
+            job.console_append(error_msg, error_message=error_msg)
 
         # Step 5: Execute tool calls if code block contains them and it's not a continuation
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:

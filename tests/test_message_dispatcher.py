@@ -100,3 +100,32 @@ class TestMessageDispatcher:
         # Verify result
         assert result == MOCK_HISTORY_DATA
         assert len(result) == 2
+
+    def test_message_dispatcher_default_role(self, db0_fixture, create_dispatcher):  # pylint: disable=unused-argument,redefined-outer-name
+        """Test MessageDispatcher uses 'message_dispatcher' as default role."""
+        dispatcher = create_dispatcher()
+        assert dispatcher.role == "message_dispatcher"
+
+    def test_message_dispatcher_custom_role(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test MessageDispatcher accepts a custom role name."""
+        dispatcher = MessageDispatcher(
+            chat_history=mock_chat_history,
+            start_new_thread=mock_start_new_thread,
+            dispatch_to=mock_dispatch_to,
+            role="email_router"
+        )
+        assert dispatcher.role == "email_router"
+
+    def test_message_dispatcher_custom_role_retains_tools(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test MessageDispatcher with custom role retains all context tools."""
+        dispatcher = MessageDispatcher(
+            chat_history=mock_chat_history,
+            start_new_thread=mock_start_new_thread,
+            dispatch_to=mock_dispatch_to,
+            role="custom_dispatcher"
+        )
+        assert dispatcher.role == "custom_dispatcher"
+        context = dispatcher.context
+        assert 'chat_history' in context
+        assert 'start_new_chat_thread' in context
+        assert 'dispatch_to' in context

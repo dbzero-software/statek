@@ -1,7 +1,7 @@
 """Tests for Agent class."""
 
 from unittest.mock import patch
-from statek.agents.agent import Agent
+from statek.agents.agent import Agent, SupervisedAgent
 from tests.conftest import clock, docs, exit_tool
 
 
@@ -116,3 +116,23 @@ class TestAgent:
         agent = Agent(role="test", _system_prompt="{tools}", _tools=[_internal_tool])
 
         assert _internal_tool in agent.all_tools
+
+    def test_agent_role_used_in_context(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test that agent role is stored in context as agent_name."""
+        agent = Agent(role="custom_role", _system_prompt="test", _tools=[])
+        assert agent.context["agent_name"] == "custom_role"
+
+
+class TestSupervisedAgentCustomRole:
+    """Test cases for SupervisedAgent with custom role support."""
+
+    def test_supervised_agent_default_role(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test SupervisedAgent stores provided role."""
+        agent = SupervisedAgent(role="test_role", _system_prompt="test", _tools=[])
+        assert agent.role == "test_role"
+
+    def test_supervised_agent_role_in_job_def(self, db0_fixture):  # pylint: disable=unused-argument
+        """Test that custom role propagates to job definitions."""
+        agent = SupervisedAgent(role="custom_worker", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def()
+        assert job_def.agent.role == "custom_worker"

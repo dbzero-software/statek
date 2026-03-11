@@ -28,13 +28,15 @@ class Researcher(SupervisedAgent):
     send_message: Callable = None
     additional_tools: Iterable[Callable] = None
 
-    def __init__(self, send_message: Callable, tools: Iterable[Callable] = None):
+    def __init__(self, send_message: Callable, tools: Iterable[Callable] = None,
+                 role: str = "researcher"):
         """
         Initialize the Researcher agent.
 
         Args:
             send_message: User communication function (can be regular, async, or temporal)
             tools: Additional task-specific tools available to the researcher
+            role: Custom role name (default: "researcher")
         """
         # Store send_message and tools
         self.send_message = send_message
@@ -45,7 +47,7 @@ class Researcher(SupervisedAgent):
 
         # Call parent constructor
         super().__init__(
-            role="researcher",
+            role=role,
             _system_prompt=None, # Prompt is readed in StatekSetings
             _tools=basic_tools,
         )

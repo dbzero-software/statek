@@ -29,14 +29,15 @@ class MessageDispatcher(SupervisedAgent):
     dispatch_to: Callable = None
 
     def __init__(self, chat_history: Callable, start_new_thread: Callable,
-                 dispatch_to: Callable):
+                 dispatch_to: Callable, role: str = "message_dispatcher"):
         """
         Initialize the MessageDispatcher agent.
-        
+
         Args:
             chat_history: Callable for retrieving the chat communication history
             start_new_thread: Callable for starting a new chat thread
             dispatch_to: Callable for dispatching the analyzed message to a specific thread
+            role: Custom role name (default: "message_dispatcher")
         """
         # Store the callables
         self.chat_history = chat_history
@@ -47,7 +48,7 @@ class MessageDispatcher(SupervisedAgent):
         basic_tools = [docs]
         # Call parent constructor
         super().__init__(
-            role="message_dispatcher",
+            role=role,
             _system_prompt=None, # Prompt is readed in StatekSetings
             _tools=basic_tools,
         )

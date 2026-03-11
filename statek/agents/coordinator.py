@@ -25,12 +25,13 @@ class Coordinator(SupervisedAgent):
 
     task_agents: Dict[str, Agent] = None
 
-    def __init__(self, task_agents: Dict[str, Agent]):
+    def __init__(self, task_agents: Dict[str, Agent], role: str = "coordinator"):
         """
         Initialize the Coordinator agent.
 
         Args:
             task_agents: Dictionary of available task-specialized agents (by role)
+            role: Custom role name (default: "coordinator")
         """
         # Import here to avoid circular dependency
         from statek.task import delegate_task # pylint: disable=import-outside-toplevel
@@ -43,7 +44,7 @@ class Coordinator(SupervisedAgent):
 
         # Call parent constructor
         super().__init__(
-            role="coordinator",
+            role=role,
             _system_prompt=None, # Prompt is readed in StatekSetings
             _tools=basic_tools,
         )
