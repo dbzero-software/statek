@@ -377,3 +377,65 @@ class TestFindLocalsWithFutures:
         results = list(find_locals(var_type=str))
 
         assert "hello" in results
+
+    def test_by_type_skips_unresolved_future_element_silently(self, db0_fixture):
+        """find_locals by type silently skips unresolved FutureElement instances."""
+        fut = _make_tuple_future(("hello", 42), ready=False)
+        elem_str, elem_int = fut  # noqa: F841
+
+        results = list(find_locals(var_type=str))
+
+        assert "hello" not in results
+
+    def test_by_type_does_not_yield_future_element_wrapper(self, db0_fixture):
+        """find_locals by type does not yield the FutureElement wrapper itself."""
+        from statek.future import FutureElement  # pylint: disable=import-outside-toplevel
+        fut = _make_tuple_future(("hello", 42), ready=True)
+        elem_str, elem_int = fut  # noqa: F841
+
+        results = list(find_locals(var_type=str))
+
+        assert not any(isinstance(r, FutureElement) for r in results)
+
+    def test_by_name_resolves_ready_future_element(self, db0_fixture):
+        """find_locals resolves a FutureElement when searching by name."""
+        fut = _make_tuple_future(("Alice", 99), ready=True)
+        elem_name, elem_age = fut  # noqa: F841
+
+        results = list(find_locals(var_name='elem_name'))
+
+        assert results == ["Alice"]
+
+    def test_by_name_raises_when_future_element_not_ready(self, db0_fixture):
+        """find_locals raises FutureError when the named FutureElement is not ready."""
+        fut = _make_tuple_future(("Alice", 99), ready=False)
+        elem_name, elem_age = fut  # noqa: F841
+
+        with pytest.raises(FutureError):
+            list(find_locals(var_name='elem_name'))
+
+    def test_by_name_and_type_resolves_future_element_type_matches(self, db0_fixture):
+        """find_locals resolves FutureElement by name+type when types match."""
+        fut = _make_tuple_future(("Alice", 99), ready=True)
+        elem_name, elem_age = fut  # noqa: F841
+
+        results = list(find_locals(var_type=str, var_name='elem_name'))
+
+        assert results == ["Alice"]
+
+    def test_by_name_and_type_resolves_future_element_type_mismatch(self, db0_fixture):
+        """find_locals returns nothing when resolved FutureElement type doesn't match."""
+        fut = _make_tuple_future(("Alice", 99), ready=True)
+        elem_name, elem_age = fut  # noqa: F841
+
+        results = list(find_locals(var_type=int, var_name='elem_name'))
+
+        assert not results
+
+    def test_by_name_and_type_raises_when_future_element_not_ready(self, db0_fixture):
+        """find_locals raises FutureError by-name even when var_type is specified."""
+        fut = _make_tuple_future(("Alice", 99), ready=False)
+        elem_name, elem_age = fut  # noqa: F841
+
+        with pytest.raises(FutureError):
+            list(find_locals(var_type=str, var_name='elem_name'))
