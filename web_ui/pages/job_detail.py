@@ -107,28 +107,32 @@ def _get_code_str(llm_resp) -> str:
     return str(llm_resp)
 
 
-def _get_tool_data_for_block(code_block, tool_log, key: int) -> list:
+def _get_tool_data_for_block(code_block, py_env, key: int) -> list:
     """Return [(call_spec, result_str), ...] for a code block's tool calls.
 
     Args:
         code_block: str or CodeBlock-like; tool calls come from code_block.tool_calls
-        tool_log: dict mapping int key -> str or list[str], or None
-        key: the tool_log key to look up results under
+        py_env: PyEnv instance (or duck-typed equivalent) with get_tool_result()
+        key: the console position key to look up results under
 
     Returns:
         List of (call_spec, result_str) pairs. Empty if no tool calls or no log entry.
     """
     if not hasattr(code_block, 'tool_calls') or not code_block.tool_calls:
         return []
-    if tool_log is None or key not in tool_log:
+    if py_env is None:
         return []
     call_specs = list(code_block.tool_calls)
-    raw = tool_log[key]
-    results = [raw] if isinstance(raw, str) else list(raw)
-    return [
-        (cs, results[i] if i < len(results) else '')
-        for i, cs in enumerate(call_specs)
-    ]
+    result = []
+    for i, cs in enumerate(call_specs):
+        try:
+            tool_result = py_env.get_tool_result(key, i)
+        except KeyError:
+            return []
+        except IndexError:
+            tool_result = ''
+        result.append((cs, tool_result))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -141,21 +145,46 @@ def _build_raw_repr(job) -> str:
 
     def _to_display(obj, depth=0):
         if depth > 4:
-            return repr(obj)
+            try:
+                return repr(obj)
+            except Exception as exc:  # pylint: disable=broad-except
+                return f'(Error rendering repr: {exc})'
         if obj is None or isinstance(obj, (bool, int, float, str)):
             return obj
         if isinstance(obj, (list, tuple)):
-            converted = [_to_display(x, depth + 1) for x in obj]
+            converted = []
+            for x in obj:
+                try:
+                    converted.append(_to_display(x, depth + 1))
+                except Exception as exc:  # pylint: disable=broad-except
+                    converted.append(f'(Error: {exc})')
             return converted if isinstance(obj, list) else tuple(converted)
         if isinstance(obj, dict):
-            return {str(k): _to_display(v, depth + 1) for k, v in obj.items()}
+            result = {}
+            for k, v in obj.items():
+                try:
+                    result[str(k)] = _to_display(v, depth + 1)
+                except Exception as exc:  # pylint: disable=broad-except
+                    result[str(k)] = f'(Error: {exc})'
+            return result
         try:
             attrs = vars(obj)
         except TypeError:
-            return repr(obj)
+            try:
+                return repr(obj)
+            except Exception as exc:  # pylint: disable=broad-except
+                return f'(Error rendering repr: {exc})'
+        converted_attrs = {}
+        for k, v in attrs.items():
+            if k.startswith('__'):
+                continue
+            try:
+                converted_attrs[k] = _to_display(v, depth + 1)
+            except Exception as exc:  # pylint: disable=broad-except
+                converted_attrs[k] = f'(Error: {exc})'
         return {
             '__type__': type(obj).__name__,
-            **{k: _to_display(v, depth + 1) for k, v in attrs.items() if not k.startswith('__')},
+            **converted_attrs,
         }
 
     try:
@@ -228,13 +257,12 @@ def _build_md_content(
     if warmup_blocks:
         parts.append('---\n')
         parts.append('## Warmup\n')
-        tool_log = getattr(job.py_env, 'tool_log', None)
         for i, (block, (from_pos, to_pos)) in enumerate(zip(warmup_blocks, warmup_ranges)):
             label = f'Warmup Code {i + 1}/{len(warmup_blocks)}' if len(warmup_blocks) > 1 else 'Warmup Code'
             parts.append(f'### {label}\n')
             code = _get_code_str(block)
             parts.append(_md_code_fence(code or '(empty)', 'python'))
-            tool_data = _get_tool_data_for_block(block, tool_log, 0)
+            tool_data = _get_tool_data_for_block(block, job.py_env, 0)
             if tool_data:
                 parts.append('\n**Tool Calls**\n')
                 for cs, result in tool_data:
@@ -251,7 +279,6 @@ def _build_md_content(
     if job.chat_log:
         parts.append('---\n')
         exceptions = getattr(job.py_env, 'exceptions', None) or {}
-        tool_log = getattr(job.py_env, 'tool_log', None)
         for i, (chat_item, (from_pos, to_pos)) in enumerate(zip(job.chat_log, turn_ranges)):
             ts = getattr(chat_item, 'timestamp', None)
             ts_str = f' — {ts.strftime("%H:%M:%S")}' if ts else ''
@@ -260,7 +287,7 @@ def _build_md_content(
             code = _get_code_str(chat_item.llm_resp)
             parts.append(_md_code_fence(code or '(empty)', 'python'))
 
-            tool_data = _get_tool_data_for_block(chat_item.llm_resp, tool_log, i + 1)
+            tool_data = _get_tool_data_for_block(chat_item.llm_resp, job.py_env, i + 1)
             if tool_data:
                 parts.append(f'\n### Tool Call{"s" if len(tool_data) != 1 else ""}\n')
                 for cs, result in tool_data:
@@ -419,12 +446,11 @@ def _render_tool_calls(tool_data: list) -> None:
 
 def _render_warmup_section(job, blocks: list, ranges: list[tuple[int, int]]) -> None:
     """Render all warmup blocks with their console output."""
-    tool_log = getattr(job.py_env, 'tool_log', None)
     for i, (block, (from_pos, to_pos)) in enumerate(zip(blocks, ranges)):
         code = _get_code_str(block)
         console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
         block_label = f'Warmup Code {i + 1} / {len(blocks)}' if len(blocks) > 1 else 'Warmup Code'
-        tool_data = _get_tool_data_for_block(block, tool_log, 0)
+        tool_data = _get_tool_data_for_block(block, job.py_env, 0)
 
         with ui.column().classes('w-full gap-2'):
             _render_code_block(code, _CODE_WARMUP_BG, block_label.lower())
@@ -447,9 +473,8 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
 
     exceptions = getattr(job.py_env, 'exceptions', None) or {}
     has_error = turn_idx in exceptions
-    tool_log = getattr(job.py_env, 'tool_log', None)
     # tool_log key for LLM turn i is i+1 (stored after append_chat_log, len=i+1)
-    tool_data = _get_tool_data_for_block(chat_item.llm_resp, tool_log, turn_idx + 1)
+    tool_data = _get_tool_data_for_block(chat_item.llm_resp, job.py_env, turn_idx + 1)
 
     with ui.column().classes('w-full gap-2'):
         # Section header
@@ -706,6 +731,13 @@ def create_job_detail_dialog(job) -> None:
                 # ── Raw tab ──────────────────────────────────────────────────
                 with ui.tab_panel(tab_raw).classes('px-0'):
                     raw_repr = _build_raw_repr(job)
+                    raw_html = raw_repr.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    import re  # pylint: disable=import-outside-toplevel
+                    raw_html = re.sub(
+                        r'\(Error[^)]*\)',
+                        lambda m: f'<span style="color: #b71c1c; font-weight: 600">{m.group()}</span>',
+                        raw_html,
+                    )
                     ui.html(
                         f'<pre style="'
                         f'white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word;'
@@ -714,7 +746,7 @@ def create_job_detail_dialog(job) -> None:
                         f'color: #263238; background: #f5f5f5;'
                         f'border: 1px solid #e0e0e0; border-radius: 6px;'
                         f'padding: 16px; margin: 0; width: 100%; box-sizing: border-box;'
-                        f'">{raw_repr.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</pre>'
+                        f'">{raw_html}</pre>'
                     ).classes('w-full')
 
     dlg.open()

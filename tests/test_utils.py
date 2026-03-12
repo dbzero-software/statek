@@ -7,7 +7,8 @@ import pytest
 from statek.utils import (format_callable_decl, format_tool_spec,
                           prompt_append_console, block_comment, strip_markup,
                           parse_func_call, ParsedFuncCall,
-                          parse_warmup_block, ParsedWarmupBlock)
+                          parse_warmup_block, ParsedWarmupBlock,
+                          CodeBlock, CallSpec)
 from statek.future import temporal, FutureResult
 from statek.settings import ChatStyle
 
@@ -997,3 +998,37 @@ def test_parse_warmup_block_multiple_tool_calls():
     assert result.tool_calls[0].name == 'list_of_examples'
     assert result.tool_calls[1].name == 'show_example'
     assert isinstance(result, ParsedWarmupBlock)
+
+
+# --- CodeBlock.get_tool_call_id tests ---
+
+
+def test_get_tool_call_id_found(db0_fixture):
+    """get_tool_call_id returns the index when the CallSpec is present."""
+    cs0 = CallSpec(id="STATEK-001", func_name="foo")
+    cs1 = CallSpec(id="STATEK-002", func_name="bar", args=[1])
+    block = CodeBlock(code="x = 1", tool_calls=[cs0, cs1])
+    assert block.get_tool_call_id(cs0) == 0
+    assert block.get_tool_call_id(cs1) == 1
+
+
+def test_get_tool_call_id_not_found(db0_fixture):
+    """get_tool_call_id returns None when the CallSpec is not in tool_calls."""
+    cs0 = CallSpec(id="STATEK-001", func_name="foo")
+    cs_other = CallSpec(id="STATEK-999", func_name="baz")
+    block = CodeBlock(code="x = 1", tool_calls=[cs0])
+    assert block.get_tool_call_id(cs_other) is None
+
+
+def test_get_tool_call_id_no_tool_calls(db0_fixture):
+    """get_tool_call_id returns None when tool_calls is None."""
+    cs = CallSpec(id="STATEK-001", func_name="foo")
+    block = CodeBlock(code="x = 1")
+    assert block.get_tool_call_id(cs) is None
+
+
+def test_get_tool_call_id_empty_tool_calls(db0_fixture):
+    """get_tool_call_id returns None when tool_calls is empty."""
+    cs = CallSpec(id="STATEK-001", func_name="foo")
+    block = CodeBlock(code="x = 1", tool_calls=[])
+    assert block.get_tool_call_id(cs) is None

@@ -505,15 +505,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 5: Execute tool calls if code block contains them and it's not a continuation
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
-            tool_results = []
             for call_spec in code.tool_calls:
                 result = await exec_tool(call_spec, job)
-                tool_results.append(result)
-            key = len(job.chat_log)
-            if job.py_env.tool_log is None:
-                job.py_env.tool_log = {}
-            job.py_env.tool_log[key] = tool_results[0] if len(tool_results) == 1 else tool_results
-            for call_spec, result in zip(code.tool_calls, tool_results):
+                job.py_env.push_tool_result(result)
                 job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
 
         # Step 6: Execute the code using exec_step

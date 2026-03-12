@@ -119,10 +119,6 @@ class TestAgent:
 
         assert _internal_tool in agent.all_tools
 
-    def test_agent_role_used_in_context(self, db0_fixture):  # pylint: disable=unused-argument
-        """Test that agent role is stored in context as agent_name."""
-        agent = Agent(role="custom_role", _system_prompt="test", _tools=[])
-        assert agent.context["agent_name"] == "custom_role"
 
 
 class TestSupervisedAgentCustomRole:

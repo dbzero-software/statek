@@ -542,6 +542,41 @@ class TestRunJobStepToolCallLogging:
         assert tool_marker_pos < open_tag_pos
 
 
+class TestMultiBlockWarmupToolLog:
+    """Tests that multiple warmup blocks with tool calls get separate tool_log keys."""
+
+    @pytest.mark.asyncio
+    async def test_two_warmup_blocks_store_separate_tool_log_keys(self, db0_fixture):  # pylint: disable=unused-argument
+        """Each warmup CodeBlock with tool calls stores its result under its own key.
+
+        The first block includes a print statement that produces a console entry,
+        so len(console) differs between blocks, giving each a unique tool_log key.
+        """
+        cs1 = CallSpec(id="STATEK-001", func_name="tool_a", args=[], kwargs={})
+        cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
+        block1 = CodeBlock(code='print("setup")', tool_calls=[cs1])
+        block2 = CodeBlock(code='exit("ok")', tool_calls=[cs2])
+        agent = Agent(role="multi_warmup_tl", _system_prompt="Test", _tools=[])
+        agent.context["tool_a"] = lambda: "alpha"
+        agent.context["tool_b"] = lambda: "beta"
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=[block1, block2])
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        # Execute first warmup block (tool_a at console pos 0, then print adds entry)
+        await run_job_step(job)
+        # Execute second warmup block (tool_b at console pos 1)
+        await run_job_step(job)
+
+        assert job.py_env.tool_log is not None
+        # Block 0 result at key 0 (console was empty before block 0 ran)
+        assert 0 in job.py_env.tool_log
+        assert "'alpha'" in job.py_env.tool_log[0]
+        # Block 1 result at key 1 (console had 1 entry from block 0's print)
+        assert 1 in job.py_env.tool_log
+        assert "'beta'" in job.py_env.tool_log[1]
+
+
 class TestRunJobStepWarmupException:
     """Tests for critical failure handling when warmup code raises a non-FutureError exception."""
 

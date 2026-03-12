@@ -622,32 +622,45 @@ class Job:
                 """Build Dict[CallParams, str] from a CodeBlock and its tool_log entry."""
                 if not isinstance(code_block, CodeBlock) or not code_block.tool_calls:
                     return None
-                if self.py_env.tool_log is None or log_key not in self.py_env.tool_log:
-                    return None
                 call_specs = list(code_block.tool_calls)
-                raw = self.py_env.tool_log[log_key]
-                results = [raw] if isinstance(raw, str) else list(raw)
                 tool_calls_dict = {}
                 for i, cs in enumerate(call_specs):
+                    try:
+                        result = self.py_env.get_tool_result(log_key, i)
+                    except KeyError:
+                        return None
+                    except IndexError:
+                        result = ""
                     cp = CallParams(
                         call_id=cs.id, name=cs.func_name,
                         args=list(cs.args) if cs.args else [],
                         kwargs=dict(cs.kwargs) if cs.kwargs else {}
                     )
-                    tool_calls_dict[cp] = results[i] if i < len(results) else ""
+                    tool_calls_dict[cp] = result
                 return tool_calls_dict if tool_calls_dict else None
 
             def _get_step_tool_calls(k):
-                """Return tool_calls for the k-th ChatStepData (k=0 = first user-only step)."""
+                """Return tool_calls for the k-th ChatStepData (k=0 = first user-only step).
+
+                The tool_log key is the console length at the time the tools
+                executed (i.e. the console position *before* the block ran).
+                """
                 if k == 0:
                     return None
                 if k <= num_warmup:
-                    # Warmup block at index k-1; all warmup tool results share tool_log key 0
-                    return _make_tool_calls(warmup_blocks[k - 1], 0)
-                # LLM turn: (k - num_warmup - 1)-th chat_log item, tool_log key = k - num_warmup
+                    # Warmup block k-1: console pos before it ran
+                    block_idx = k - 1
+                    log_key = (
+                        self.warmup_console_positions[block_idx - 1]
+                        if block_idx > 0 else 0
+                    )
+                    return _make_tool_calls(warmup_blocks[block_idx], log_key)
+                # LLM turn: console_pos recorded at response time equals
+                # len(console) when the next step executes tools
                 turn_idx = k - num_warmup - 1
                 if turn_idx < len(self.chat_log):
-                    return _make_tool_calls(self.chat_log[turn_idx].llm_resp, k - num_warmup)
+                    log_key = self.chat_log[turn_idx].console_pos
+                    return _make_tool_calls(self.chat_log[turn_idx].llm_resp, log_key)
                 return None
 
             if not history_strings:

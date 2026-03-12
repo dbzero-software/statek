@@ -9,12 +9,15 @@ These tools are registered on every Agent instance from Agent.__post_init__. The
 in agent.py resolve agent_name at call time via find_locals() and delegate here.
 """
 
+import logging
 import os
 from typing import Optional
 
 from statek.executors.example import load_examples, format_example
 from statek.settings import get_statek_settings
 from statek.system import tool
+
+log = logging.getLogger('statek')
 
 
 def _get_examples_dir() -> Optional[str]:
@@ -41,19 +44,25 @@ def list_of_examples(agent_name: str, start_index: int = 0, limit: int = 10, **k
         list_of_examples(agent_name="information_retriever", start_index=10, limit=5)
     """
     examples_dir = _get_examples_dir()
+    log.debug("#list_of_examples: examples_dir=%s", examples_dir)
     if not examples_dir:
+        log.debug("#list_of_examples: no examples_dir configured")
         print("# No examples found")
         return
     path = os.path.join(examples_dir, agent_name)
+    log.debug("#list_of_examples: resolved path=%s", path)
     if not os.path.isdir(path):
+        log.debug("#list_of_examples: directory does not exist: %s", path)
         print("# No examples found")
         return
     examples = load_examples(path)
     total = len(examples)
+    log.debug("#list_of_examples: loaded %d examples from %s", total, path)
     print(f"# Example ID: Example name ({total} total)")
     for i, ex in enumerate(examples[start_index:start_index + limit]):
         idx = start_index + i
         name = ex.example_metadata.get("name", "")
+        log.debug("#list_of_examples: [%d] %s", idx, name)
         print(f"{idx}: {name}")
 
 @tool(system=True)
@@ -74,24 +83,32 @@ def show_example(agent_name: str, example_id: int, **kwargs):  # pylint: disable
         show_example(agent_name="information_retriever", example_id=3)
     """
     examples_dir = _get_examples_dir()
+    log.debug("#list_of_examples: show_example examples_dir=%s", examples_dir)
     if not examples_dir:
+        log.debug("#list_of_examples: no examples_dir configured")
         print("# No examples found")
         return
     path = os.path.join(examples_dir, agent_name)
+    log.debug("#list_of_examples: show_example resolved path=%s", path)
     if not os.path.isdir(path):
+        log.debug("#list_of_examples: directory does not exist: %s", path)
         print("# No examples found")
         return
     examples = load_examples(path)
+    log.debug("#list_of_examples: loaded %d examples, requested id=%d", len(examples), example_id)
     if example_id < 0 or example_id >= len(examples):
+        log.debug("#list_of_examples: example_id %d out of range (total: %d)",
+                  example_id, len(examples))
         print(f"# Example {example_id} not found (total: {len(examples)})")
         return
     settings = get_statek_settings()
     style = settings.examples_style or settings.chat_style
     example = examples[example_id]
+    name = example.example_metadata.get("name", "")
+    log.debug("#list_of_examples: showing example [%d] %s", example_id, name)
     if settings.xml_box_example:
         print(format_example(example, style, xml_tags={"example": settings.xml_box_example}))
     else:
-        name = example.example_metadata.get("name", "")
         print(f"# --- EXAMPLE: {name} ---")
         print(format_example(example, style))
         print("# --- END OF EXAMPLE ---")

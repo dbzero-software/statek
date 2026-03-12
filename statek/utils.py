@@ -67,6 +67,15 @@ class CodeBlock:
             return self.code == other
         return NotImplemented
 
+    def get_tool_call_id(self, call_spec: CallSpec) -> Optional[int]:
+        """Return the index of *call_spec* in tool_calls, or None if absent."""
+        if not self.tool_calls:
+            return None
+        for idx, tc in enumerate(self.tool_calls):
+            if tc is call_spec:
+                return idx
+        return None
+
     def __hash__(self):
         tcs = tuple(self.tool_calls) if self.tool_calls else ()
         return hash((self.code, tcs))

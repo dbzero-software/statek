@@ -57,6 +57,10 @@ def _parse_args() -> argparse.Namespace:
                         metavar='MODULE',
                         help='Import a module so db0 can deserialize its @db0.memo classes '
                              '(may be repeated, e.g. --import selltime.agents)')
+    parser.add_argument('--open-prefix', dest='open_prefixes', action='append', default=[],
+                        metavar='PREFIX',
+                        help='Open an additional db0 prefix for read access '
+                             '(may be repeated, e.g. --open-prefix /Org/proj/env/data)')
     args, _ = parser.parse_known_args()
     return args
 
@@ -82,6 +86,9 @@ for _mod_name in _args.imports:
 @app.on_startup
 def startup():
     db0.init(_args.db0_path, prefix=STATEK_PREFIX, read_write=False)
+    for prefix in _args.open_prefixes:
+        db0.open(prefix, "r")
+        log.info('Opened additional prefix (read-only): %s', prefix)
     log.info('db0 initialised (read-only): path=%s prefix=%s', _args.db0_path, STATEK_PREFIX)
     log.info('db0 prefixes: %s', list(db0.get_prefixes()))
 

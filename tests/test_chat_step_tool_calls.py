@@ -100,7 +100,7 @@ class TestGetNextRequestToolCalls:
         cs = CallSpec(id="T-001", func_name="do_thing", args=[], kwargs={"n": 5})
         block = CodeBlock(code="x = 1", tool_calls=[cs])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
-        job.py_env.tool_log = {1: "'thing_done'"}
+        job.py_env.tool_log = {0: "'thing_done'"}
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -133,7 +133,7 @@ class TestGetNextRequestToolCalls:
         cs_llm = CallSpec(id="T-001", func_name="llm_tool", args=[], kwargs={})
         block = CodeBlock(code="run()", tool_calls=[cs_llm])
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp=block))
-        job.py_env.tool_log = {0: "'warmup_result'", 1: "'llm_result'"}
+        job.py_env.tool_log = {0: "'warmup_result'", 2: "'llm_result'"}
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -151,16 +151,16 @@ class TestGetNextRequestToolCalls:
         assert llm_step.tool_calls[lkey] == "'llm_result'"
 
     def test_second_llm_turn_tool_calls_assigned_correctly(self, db0_fixture):
-        """Second LLM turn's tool_calls come from tool_log[2], not tool_log[1]."""
+        """Second LLM turn's tool_calls use console_pos as key, not turn index."""
         job = _make_job(_make_agent("tc9"), started=True)
 
-        # Turn 0: plain string (no tool calls)
+        # Turn 0: plain string (no tool calls), console_pos=0
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="x = 1"))
-        # Turn 1: CodeBlock with tool call
+        # Turn 1: CodeBlock with tool call, console_pos=2 (after turn 0 added 2 lines)
         cs = CallSpec(id="T-002", func_name="second_tool", args=[], kwargs={})
         block = CodeBlock(code="y = 2", tool_calls=[cs])
-        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
-        job.py_env.tool_log = {2: "'second_result'"}  # key=2 for second LLM turn
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp=block))
+        job.py_env.tool_log = {2: "'second_result'"}  # key = console_pos of this turn
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -169,3 +169,57 @@ class TestGetNextRequestToolCalls:
         key = next(iter(steps_with_tools[0].tool_calls))
         assert key.name == "second_tool"
         assert steps_with_tools[0].tool_calls[key] == "'second_result'"
+
+    def test_two_warmup_blocks_each_get_own_tool_calls(self, db0_fixture):
+        """Two warmup CodeBlocks with tool calls each populate their own tool_calls."""
+        cs1 = CallSpec(id="STATEK-001", func_name="tool_a", args=[], kwargs={})
+        cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
+        block1 = CodeBlock(code="", tool_calls=[cs1])
+        block2 = CodeBlock(code="", tool_calls=[cs2])
+        job = _make_job(_make_agent("tc_multi_wu"), warmup_code=[block1, block2])
+        # Block 0 ran at console pos 0, block 1 ran at console pos 1
+        job.py_env.tool_log = {0: "'alpha'", 1: "'beta'"}
+        job.py_env.console = ["tool_a_output", "tool_b_output"]
+        job.warmup_block_num = 1
+        job.warmup_console_positions = [1, 2]
+
+        history = list(job.get_next_request()["chat_history"])
+
+        steps_with_tools = [s for s in history if s.tool_calls is not None]
+        assert len(steps_with_tools) == 2
+        names = {}
+        for step in steps_with_tools:
+            for k, v in step.tool_calls.items():
+                names[k.name] = v
+        assert names["tool_a"] == "'alpha'"
+        assert names["tool_b"] == "'beta'"
+
+    def test_two_warmup_blocks_and_llm_turn_all_correct(self, db0_fixture):
+        """Two warmup blocks + LLM turn all get correct tool_calls from tool_log."""
+        cs1 = CallSpec(id="STATEK-001", func_name="warmup_a", args=[], kwargs={})
+        cs2 = CallSpec(id="STATEK-002", func_name="warmup_b", args=[], kwargs={})
+        block1 = CodeBlock(code="", tool_calls=[cs1])
+        block2 = CodeBlock(code="", tool_calls=[cs2])
+        job = _make_job(_make_agent("tc_multi_wu_llm"), warmup_code=[block1, block2],
+                        started=True)
+        job.warmup_block_num = 1
+        # Each warmup block added 1 console entry
+        job.warmup_console_positions = [1, 2]
+        job.py_env.console = ["wu_a_out", "wu_b_out", "llm_line"]
+        cs_llm = CallSpec(id="T-001", func_name="llm_tool", args=[], kwargs={})
+        llm_block = CodeBlock(code="run()", tool_calls=[cs_llm])
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp=llm_block))
+        # Block 0 at console pos 0, block 1 at console pos 1, LLM turn at console pos 2
+        job.py_env.tool_log = {0: "'wu_alpha'", 1: "'wu_beta'", 2: "'llm_result'"}
+
+        history = list(job.get_next_request()["chat_history"])
+
+        steps_with_tools = [s for s in history if s.tool_calls is not None]
+        assert len(steps_with_tools) == 3
+        names = {}
+        for step in steps_with_tools:
+            for k, v in step.tool_calls.items():
+                names[k.name] = v
+        assert names["warmup_a"] == "'wu_alpha'"
+        assert names["warmup_b"] == "'wu_beta'"
+        assert names["llm_tool"] == "'llm_result'"
