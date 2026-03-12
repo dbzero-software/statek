@@ -46,7 +46,7 @@ statek = ["*.json"]
 dependencies = {file = ["requirements.txt"]}
 
 [tool.pylint.messages_control]
-disable = ["C0111", "C0103", "R0801", "R0902"]
+disable = ["C0111", "C0103", "R0801", "R0902", "R0903"]
 
 [tool.pylint.format]
 max-line-length = 100
