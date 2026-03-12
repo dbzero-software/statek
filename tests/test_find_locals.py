@@ -5,13 +5,9 @@ import pytest
 import dbzero as db0
 from statek.utils import find_locals, get_current_agent, get_current_agent_name, get_current_job
 from statek.system import inject_context, tool
-<<<<<<< Updated upstream
-from statek.executors.utils import exec_step
+from statek.executors.utils import exec_step, _smart_call
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
-=======
-from statek.executors.utils import _smart_call
->>>>>>> Stashed changes
 from statek.future import FutureResult, temporal
 from statek.exceptions import FutureError
 
