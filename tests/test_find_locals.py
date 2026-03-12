@@ -1,10 +1,11 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable,protected-access
 from typing import Tuple
+import asyncio
 import pytest
 import dbzero as db0
 from statek.utils import find_locals, get_current_agent, get_current_agent_name, get_current_job
 from statek.system import inject_context, tool
-from statek.executors.utils import exec_step
+from statek.executors.utils import exec_step, _smart_call
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
 from statek.future import FutureResult, temporal
@@ -499,3 +500,103 @@ class TestFindLocalsFromAsyncToolInExecStep:
         await exec_step('result = _async_find_local_tool(var_name="nonexistent")', job)
 
         assert job.py_env.local_state['result'] is None
+
+class TestFindLocalsInAsyncTools:
+    """Tests that find_locals works correctly in both sync and async @tool functions.
+
+    The key scenario: a variable is defined in the calling frame (e.g., inside LLM-executed
+    code), but the @tool async function cannot reach that frame via stack traversal because
+    asyncio internals consume ~5 extra frames between the coroutine and the calling code.
+
+    The fix ensures inject_context captures the live call-stack context before the coroutine
+    is launched, so find_locals can retrieve variables regardless of asyncio frame overhead.
+    """
+
+    def _make_sync_tool(self):
+        @tool
+        def sync_tool(**kwargs):  # pylint: disable=unused-variable
+            return list(find_locals(var_name='message'))
+        return inject_context(sync_tool, {})
+
+    def _make_async_tool(self):
+        @tool
+        async def async_tool(**kwargs):  # pylint: disable=unused-variable
+            return list(find_locals(var_name='message'))
+        return inject_context(async_tool, {})
+
+    def test_sync_tool_finds_variable_from_calling_frame(self):
+        """find_locals in a sync @tool finds a variable defined in the calling async frame.
+
+        Baseline: sync tools work via direct frame traversal.
+        """
+        wrapped = self._make_sync_tool()
+
+        async def run():
+            message = 'Hello'  # noqa: F841
+            def do_call():
+                # intermediate frame — message is one level up in run()
+                return _smart_call(wrapped)
+            return do_call()
+
+        result = asyncio.run(run())
+        assert result == ['Hello']
+
+    def test_async_tool_finds_variable_from_calling_frame(self):
+        """find_locals in an async @tool finds a variable defined in the calling async frame.
+
+        This is the key regression test. Without the fix, asyncio consumes ~5 extra frames
+        via run_until_complete, pushing the calling frame beyond max_frames=10.
+        """
+        wrapped = self._make_async_tool()
+
+        async def run():
+            message = 'Hello'  # noqa: F841
+            def do_call():
+                # intermediate frame — message is one level up in run()
+                return _smart_call(wrapped)
+            return do_call()
+
+        result = asyncio.run(run())
+        assert result == ['Hello']
+
+    def test_sync_tool_finds_named_parameter(self):
+        """find_locals finds a named parameter passed directly to a sync @tool."""
+        @tool
+        def param_sync_tool(message: str, **kwargs):  # pylint: disable=unused-variable
+            return list(find_locals(var_name='message'))
+
+        result = inject_context(param_sync_tool, {})("Hello")
+        assert result == ["Hello"]
+
+    def test_async_tool_finds_named_parameter(self):
+        """find_locals finds a named parameter passed directly to an async @tool."""
+        @tool
+        async def param_async_tool(message: str, **kwargs):  # pylint: disable=unused-variable
+            return list(find_locals(var_name='message'))
+
+        async def run():
+            return inject_context(param_async_tool, {})("Hello")
+
+        result = asyncio.run(run())
+        assert result == ["Hello"]
+
+    def test_sync_tool_finds_variable_from_injected_context(self):
+        """find_locals finds a variable pre-captured in the injected context (sync tool)."""
+        @tool
+        def ctx_sync_tool(**kwargs):  # pylint: disable=unused-variable
+            return list(find_locals(var_name='message'))
+
+        result = inject_context(ctx_sync_tool, {"message": "from_context"})()
+        assert result == ["from_context"]
+
+    def test_async_tool_finds_variable_from_injected_context(self):
+        """find_locals finds a variable pre-captured in the injected context (async tool)."""
+        @tool
+        async def ctx_async_tool(**kwargs):  # pylint: disable=unused-variable
+            return list(find_locals(var_name='message'))
+
+        async def run():
+            return inject_context(ctx_async_tool, {"message": "from_context"})()
+
+        result = asyncio.run(run())
+        assert result == ["from_context"]
