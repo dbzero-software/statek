@@ -641,7 +641,7 @@ def get_current_agent_name() -> Optional[str]:
     return _get_class_name(agent)
 
 
-def _collect_aggregated_locals(start_frame, max_frames: int = 10) -> dict:
+def _collect_aggregated_locals(start_frame, max_frames: int = 40) -> dict:
     """Collect and merge locals from up to max_frames call-stack frames."""
     aggregated: dict = {}
     frames = []
