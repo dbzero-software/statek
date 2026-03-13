@@ -36,13 +36,26 @@ fi
 
 set -a; . "$ENV_FILE"; set +a
 
+DATA_PREFIX="/${STATEK_ORG_NAME}/${STATEK_PROJECT_NAME}/${STATEK_ENV}/data"
+
+# Build --open-prefix flags from STATEK_OPEN_PREFIXES (colon-separated) + DATA_PREFIX
+OPEN_PREFIX_ARGS="--open-prefix ${DATA_PREFIX}"
+if [ -n "${STATEK_OPEN_PREFIXES:-}" ]; then
+    IFS=':' read -ra _PREFIXES <<< "$STATEK_OPEN_PREFIXES"
+    for _p in "${_PREFIXES[@]}"; do
+        [ -n "$_p" ] && OPEN_PREFIX_ARGS="$OPEN_PREFIX_ARGS --open-prefix $_p"
+    done
+fi
+
 echo "Starting Statek Dashboard..."
 python3 -m web_ui.main \
     --host "${STATEK_UI_HOST:-0.0.0.0}" \
     --port "${STATEK_UI_PORT:-8765}" \
+    --db0-path /selltime_data/ \
     --import selltime.ai.statek_root \
     --import selltime.ai.selltime_coordinator \
     --import selltime.ai.selltime_dispatcher \
+    $OPEN_PREFIX_ARGS \
     > "$LOG_FILE" 2>&1 &
 
 WEBUI_PID=$!

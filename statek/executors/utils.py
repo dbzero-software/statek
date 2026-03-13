@@ -16,6 +16,7 @@ from statek.future import FutureResult
 from statek.exceptions import FutureError
 from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
+from statek.executors.chat_log_item import WarmupLogItem
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
@@ -432,13 +433,24 @@ def _log_pending_console(job: Job):
 
     Determines from_pos based on job state:
     - After LLM turns: from last chat_log item's console_pos
-    - After warmup: from last warmup_console_positions entry
+    - After warmup: from the next element's console_pos (or current console length)
     - Initial state: from 0
     """
     if job.chat_log:
-        from_pos = job.chat_log[-1].console_pos
-    elif job.warmup_console_positions:
-        from_pos = job.warmup_console_positions[-1]
+        last = job.chat_log[-1]
+        if isinstance(last, WarmupLogItem):
+            # If a following element exists its console_pos marks where the
+            # warmup batch ended (it was already logged by _log_console_batch).
+            # Otherwise the batch has not been logged yet (e.g. early exit
+            # during warmup), so start from the WarmupLogItem's own position.
+            last_idx = len(job.chat_log) - 1
+            from_pos = (
+                job.chat_log[last_idx + 1].console_pos
+                if last_idx + 1 < len(job.chat_log)
+                else last.console_pos
+            )
+        else:
+            from_pos = last.console_pos
     else:
         from_pos = 0
     to_pos = len(job.py_env.console) if job.py_env.console else 0
@@ -490,6 +502,15 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Extract the code string (CodeBlock stores code + tool_calls; exec needs the string)
         code_str = code.code if isinstance(code, CodeBlock) else code
 
+        # Create WarmupLogItem before warmup block execution
+        if job.status == JobStatus.WARMING_UP:
+            block_num = job.warmup_block_num if job.warmup_block_num is not None else 0
+            warmup_log_item = WarmupLogItem(
+                console_pos=len(job.py_env.console) if job.py_env.console else 0,
+                warmup_block_num=block_num
+            )
+            job.chat_log.append(warmup_log_item)
+
         # Log warmup block before execution
         if job.status == JobStatus.WARMING_UP and code_str:
             chat_style = get_statek_settings().chat_style
@@ -503,16 +524,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             job.console_append(error_msg, error_message=error_msg)
 
         # Step 5: Execute tool calls if code block contains them and it's not a continuation
+        # Determine which chat_log_item to store results in
+        last_chat_log_item = job.chat_log[-1] if job.chat_log else None
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
-            tool_results = []
             for call_spec in code.tool_calls:
                 result = await exec_tool(call_spec, job)
-                tool_results.append(result)
-            key = len(job.chat_log)
-            if job.py_env.tool_log is None:
-                job.py_env.tool_log = {}
-            job.py_env.tool_log[key] = tool_results[0] if len(tool_results) == 1 else tool_results
-            for call_spec, result in zip(code.tool_calls, tool_results):
+                if last_chat_log_item is not None:
+                    last_chat_log_item.push_tool_result(result)
                 job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
 
         # Step 6: Execute the code using exec_step
@@ -556,11 +574,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 8: Handle warmup block progression or transition to STARTED
         if job.status == JobStatus.WARMING_UP:
-            # Capture from_pos before recording, then log this block's console slice
-            warmup_batch_from = job.warmup_console_positions[-1] if job.warmup_console_positions else 0
-            # Record console position after this block so chat history can interleave correctly
-            job.record_warmup_console_pos()
-            job._log_console_batch(warmup_batch_from, job.warmup_console_positions[-1])  # pylint: disable=protected-access
+            # Log this warmup block's console slice
+            warmup_batch_from = warmup_log_item.console_pos
+            warmup_batch_to = len(job.py_env.console) if job.py_env.console else 0
+            job._log_console_batch(warmup_batch_from, warmup_batch_to)  # pylint: disable=protected-access
             if job.has_more_warmup_blocks():
                 # Advance to next warmup block, stay in WARMING_UP
                 job.advance_warmup_block()

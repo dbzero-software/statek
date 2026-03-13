@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
-from statek.utils import block_comment, find_locals, _get_class_name
+from statek.utils import block_comment, get_current_agent, _get_class_name
 from statek.system import tool
 from statek.docstring import parse_tool_docstring, format_docstring
 from statek.utils import CodeBlock
@@ -24,7 +24,9 @@ def list_of_examples(start_index: int = 0, limit: int = 10, **kwargs):  # pylint
         limit: Maximum number of examples to show (default: 10).
     """
     from statek.agents.list_of_examples import list_of_examples as _impl  # pylint: disable=import-outside-toplevel
-    agent_name = next(iter(find_locals(var_name="agent_name")), None)
+    agent = get_current_agent()
+    agent_name = agent.role if agent else None
+    STATEK_LOGGER.debug("list_of_examples invoked for agent: %s", agent_name)
     _impl(agent_name, start_index, limit)
 
 
@@ -36,8 +38,8 @@ def show_example(example_id: int, **kwargs):  # pylint: disable=unused-argument
         example_id: Index of the example to show (as listed by list_of_examples).
     """
     from statek.agents.list_of_examples import show_example as _impl  # pylint: disable=import-outside-toplevel
-    agent_name = next(iter(find_locals(var_name="agent_name")), None)
-    _impl(agent_name, example_id)
+    agent = get_current_agent()
+    _impl(agent.role if agent else None, example_id)
 
 
 @db0.memo
@@ -202,7 +204,6 @@ class Agent:
         """Initialize context. Override in subclasses to add agent-specific context."""
         if self._X__context is None:
             self._X__context = {}
-        self._X__context["agent_name"] = self.role
 
     @property
     def context(self) -> Optional[Dict]:

@@ -7,7 +7,7 @@ import dbzero as db0
 class PyEnv:
     """
         This is a class representing the state of execution of the LLM-submitted Python code.
-        It holds the job-specific global / local variables (agent’s state)
+        It holds the job-specific global / local variables (agent's state)
         as well as the instruction ID to continue from (in case of suspended or failed executions).
     """
     # The LLM program's global state (its persistent part)
@@ -18,8 +18,6 @@ class PyEnv:
     console: List[str] = None
     # Optional error message by chat_log item ID
     exceptions: Dict[int, str] = None
-    # Optional log of tool results by console log-ID
-    tool_log: Dict[int, Union[str, List[str]]] = None
     # Messages pushed into the console of an active job
     push_log: Dict[int, Union[str, List[str]]] = None
     # The next instruction ID for continuation

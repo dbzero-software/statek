@@ -1,6 +1,10 @@
 """Tests for the web_ui job detail helper functions."""
+# pylint: disable=unused-argument
 
 from unittest.mock import MagicMock, PropertyMock
+from statek.pyenv import PyEnv
+from statek.utils import CodeBlock, CallSpec
+from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 from web_ui.pages.job_detail import (
     _get_console_slice,
     _get_warmup_blocks,
@@ -11,6 +15,7 @@ from web_ui.pages.job_detail import (
     _get_system_prompt,
     _build_md_content,
     _build_raw_repr,
+    _build_raw_html,
 )
 
 # aliases used in _call_build_md helper
@@ -19,33 +24,56 @@ _warmup_ranges = _get_warmup_console_ranges
 _turn_ranges = _get_turn_console_ranges
 
 
-class _FakeCodeBlock:  # pylint: disable=too-few-public-methods
-    """Duck-typed stand-in for statek.utils.CodeBlock (avoids db0 initialization)."""
-    def __init__(self, code=None, tool_calls=None):
-        self.code = code
-        self.tool_calls = tool_calls
 
-
-class _FakeCallSpec:  # pylint: disable=too-few-public-methods
-    """Duck-typed stand-in for statek.utils.CallSpec."""
-    def __init__(self, func_name, args=None, kwargs=None):
-        self.id = 'fake-id'
-        self.func_name = func_name
-        self.args = args or []
-        self.kwargs = kwargs or {}
-
-    def format(self) -> str:
-        parts = [repr(a) for a in self.args]
-        parts += [f"{k}={v!r}" for k, v in self.kwargs.items()]
-        return f"{self.func_name}({', '.join(parts)})"
-
-
-def _make_chat_log_item(console_pos: int, llm_resp, timestamp=None):
+def _make_chat_log_item(console_pos: int, llm_resp, timestamp=None, tool_log=None):
     item = MagicMock()
     item.console_pos = console_pos
     item.llm_resp = llm_resp
     if timestamp is not None:
         item.timestamp = timestamp
+    # Make it look like an LLM_LogItem for isinstance checks
+    item.__class__ = LLM_LogItem
+    # Add tool_log support
+    if tool_log is not None:
+        item.tool_log = tool_log
+        # Add get_tool_result method
+        def _get_tool_result(tool_call_id):
+            if item.tool_log is None:
+                raise KeyError(tool_call_id)
+            if isinstance(item.tool_log, str):
+                if tool_call_id != 0:
+                    raise IndexError(f"tool_call_id {tool_call_id} out of range")
+                return item.tool_log
+            return item.tool_log[tool_call_id]
+        item.get_tool_result = _get_tool_result
+    else:
+        item.tool_log = None
+        def _get_tool_result_empty(tool_call_id):
+            raise KeyError(tool_call_id)
+        item.get_tool_result = _get_tool_result_empty
+    return item
+
+
+def _make_warmup_log_item(block_num, tool_log=None):
+    """Create a mock WarmupLogItem."""
+    item = MagicMock()
+    item.warmup_block_num = block_num
+    item.tool_log = tool_log
+    item.__class__ = WarmupLogItem
+    if tool_log is not None:
+        def _get_tool_result(tool_call_id):
+            if item.tool_log is None:
+                raise KeyError(tool_call_id)
+            if isinstance(item.tool_log, str):
+                if tool_call_id != 0:
+                    raise IndexError(f"tool_call_id {tool_call_id} out of range")
+                return item.tool_log
+            return item.tool_log[tool_call_id]
+        item.get_tool_result = _get_tool_result
+    else:
+        def _get_tool_result_empty(tool_call_id):
+            raise KeyError(tool_call_id)
+        item.get_tool_result = _get_tool_result_empty
     return item
 
 
@@ -59,7 +87,8 @@ def _make_job(
     job_def = MagicMock()
     job_def.warmup_code = warmup_code
     job.job_def = job_def
-    job.warmup_console_positions = warmup_console_positions or []
+    positions = warmup_console_positions or []
+    job._warmup_end_positions = MagicMock(return_value=positions)  # pylint: disable=protected-access
     job.chat_log = chat_log or []
     py_env = MagicMock()
     py_env.console = console
@@ -110,21 +139,21 @@ class TestGetWarmupBlocks:
         blocks = _get_warmup_blocks(job)
         assert blocks == ['x = 1']
 
-    def test_single_code_block(self):
-        cb = _FakeCodeBlock(code='x = 1')
+    def test_single_code_block(self, db0_fixture):
+        cb = CodeBlock(code='x = 1')
         job = _make_job(warmup_code=cb)
         blocks = _get_warmup_blocks(job)
         assert blocks == [cb]
 
-    def test_list_of_blocks(self):
-        cb1 = _FakeCodeBlock(code='a = 1')
+    def test_list_of_blocks(self, db0_fixture):
+        cb1 = CodeBlock(code='a = 1')
         cb2 = 'b = 2'
         job = _make_job(warmup_code=[cb1, cb2])
         blocks = _get_warmup_blocks(job)
         assert blocks == [cb1, cb2]
 
-    def test_tuple_of_blocks(self):
-        cb = _FakeCodeBlock(code='a = 1')
+    def test_tuple_of_blocks(self, db0_fixture):
+        cb = CodeBlock(code='a = 1')
         job = _make_job(warmup_code=(cb, 'b = 2'))
         blocks = _get_warmup_blocks(job)
         assert blocks == [cb, 'b = 2']
@@ -236,75 +265,75 @@ class TestGetCodeStr:
     def test_plain_string(self):
         assert _get_code_str('print("hello")') == 'print("hello")'
 
-    def test_code_block_with_code(self):
-        cb = _FakeCodeBlock(code='x = 1')
+    def test_code_block_with_code(self, db0_fixture):
+        cb = CodeBlock(code='x = 1')
         assert _get_code_str(cb) == 'x = 1'
 
-    def test_code_block_with_none_code(self):
-        cb = _FakeCodeBlock(code=None)
+    def test_code_block_with_none_code(self, db0_fixture):
+        cb = CodeBlock(code=None)
         assert _get_code_str(cb) == ''
 
     def test_none_returns_empty(self):
         assert _get_code_str(None) == ''
-
-    def test_code_block_with_list_code(self):
-        cb = _FakeCodeBlock(code=['line1\n', 'line2\n'])
-        assert _get_code_str(cb) == 'line1\nline2\n'
 
     def test_list_of_strings(self):
         assert _get_code_str(['x = 1\n', 'y = 2\n']) == 'x = 1\ny = 2\n'
 
 
 class TestGetToolDataForBlock:
-    def test_plain_string_returns_empty(self):
-        assert _get_tool_data_for_block('some code', {}, 0) == []
+    def test_plain_string_returns_empty(self, db0_fixture):
+        item = _make_chat_log_item(console_pos=0, llm_resp='some code')
+        assert not _get_tool_data_for_block('some code', item)
 
-    def test_code_block_no_tool_calls_returns_empty(self):
-        cb = _FakeCodeBlock(code='x = 1', tool_calls=None)
-        assert _get_tool_data_for_block(cb, {}, 0) == []
+    def test_code_block_no_tool_calls_returns_empty(self, db0_fixture):
+        cb = CodeBlock(code='x = 1', tool_calls=None)
+        item = _make_chat_log_item(console_pos=0, llm_resp=cb)
+        assert not _get_tool_data_for_block(cb, item)
 
-    def test_code_block_empty_tool_calls_returns_empty(self):
-        cb = _FakeCodeBlock(code='x = 1', tool_calls=[])
-        assert _get_tool_data_for_block(cb, {}, 0) == []
+    def test_code_block_empty_tool_calls_returns_empty(self, db0_fixture):
+        cb = CodeBlock(code='x = 1', tool_calls=[])
+        item = _make_chat_log_item(console_pos=0, llm_resp=cb)
+        assert not _get_tool_data_for_block(cb, item)
 
-    def test_tool_log_none_returns_empty(self):
-        cs = _FakeCallSpec('search', args=['query'])
-        cb = _FakeCodeBlock(tool_calls=[cs])
-        assert _get_tool_data_for_block(cb, None, 0) == []
+    def test_chat_log_item_none_returns_empty(self, db0_fixture):
+        cs = CallSpec(id='T', func_name='search', args=['query'])
+        cb = CodeBlock(tool_calls=[cs])
+        assert not _get_tool_data_for_block(cb, None)
 
-    def test_key_missing_from_tool_log_returns_empty(self):
-        cs = _FakeCallSpec('search', args=['query'])
-        cb = _FakeCodeBlock(tool_calls=[cs])
-        assert _get_tool_data_for_block(cb, {}, 0) == []
+    def test_tool_log_missing_returns_empty(self, db0_fixture):
+        cs = CallSpec(id='T', func_name='search', args=['query'])
+        cb = CodeBlock(tool_calls=[cs])
+        item = _make_chat_log_item(console_pos=0, llm_resp=cb)
+        assert not _get_tool_data_for_block(cb, item)
 
-    def test_single_tool_call_with_string_result(self):
-        cs = _FakeCallSpec('search', args=['query'])
-        cb = _FakeCodeBlock(tool_calls=[cs])
-        tool_log = {1: 'result text'}
-        data = _get_tool_data_for_block(cb, tool_log, 1)
+    def test_single_tool_call_with_string_result(self, db0_fixture):
+        cs = CallSpec(id='T', func_name='search', args=['query'])
+        cb = CodeBlock(tool_calls=[cs])
+        item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log='result text')
+        data = _get_tool_data_for_block(cb, item)
         assert data == [(cs, 'result text')]
 
-    def test_single_tool_call_result_stored_as_list(self):
-        cs = _FakeCallSpec('fetch', kwargs={'url': 'http://x'})
-        cb = _FakeCodeBlock(tool_calls=[cs])
-        tool_log = {0: ['fetched content']}
-        data = _get_tool_data_for_block(cb, tool_log, 0)
+    def test_single_tool_call_result_stored_as_list(self, db0_fixture):
+        cs = CallSpec(id='T', func_name='fetch', kwargs={'url': 'http://x'})
+        cb = CodeBlock(tool_calls=[cs])
+        item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log=['fetched content'])
+        data = _get_tool_data_for_block(cb, item)
         assert data == [(cs, 'fetched content')]
 
-    def test_multiple_tool_calls(self):
-        cs1 = _FakeCallSpec('search', args=['q1'])
-        cs2 = _FakeCallSpec('fetch', args=['url1'])
-        cb = _FakeCodeBlock(tool_calls=[cs1, cs2])
-        tool_log = {2: ['res1', 'res2']}
-        data = _get_tool_data_for_block(cb, tool_log, 2)
+    def test_multiple_tool_calls(self, db0_fixture):
+        cs1 = CallSpec(id='T', func_name='search', args=['q1'])
+        cs2 = CallSpec(id='T', func_name='fetch', args=['url1'])
+        cb = CodeBlock(tool_calls=[cs1, cs2])
+        item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log=['res1', 'res2'])
+        data = _get_tool_data_for_block(cb, item)
         assert data == [(cs1, 'res1'), (cs2, 'res2')]
 
-    def test_fewer_results_than_calls_uses_empty_string(self):
-        cs1 = _FakeCallSpec('a')
-        cs2 = _FakeCallSpec('b')
-        cb = _FakeCodeBlock(tool_calls=[cs1, cs2])
-        tool_log = {0: ['only one result']}
-        data = _get_tool_data_for_block(cb, tool_log, 0)
+    def test_fewer_results_than_calls_uses_empty_string(self, db0_fixture):
+        cs1 = CallSpec(id='T', func_name='a')
+        cs2 = CallSpec(id='T', func_name='b')
+        cb = CodeBlock(tool_calls=[cs1, cs2])
+        item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log=['only one result'])
+        data = _get_tool_data_for_block(cb, item)
         assert data == [(cs1, 'only one result'), (cs2, '')]
 
 
@@ -313,12 +342,10 @@ def _make_job_for_md(  # pylint: disable=too-many-arguments,too-many-positional-
     warmup_console_positions=None,
     chat_log=None,
     console=None,
-    tool_log=None,
     exceptions=None,
 ):
     job = _make_job(warmup_code, warmup_console_positions, chat_log, console)
-    job.py_env.tool_log = tool_log
-    job.py_env.exceptions = exceptions or {}
+    job.py_env = PyEnv(console=console, exceptions=exceptions or {})
     return job
 
 
@@ -345,18 +372,18 @@ def _call_build_md(job, **kwargs):
 
 
 class TestBuildMdContent:
-    def test_includes_title(self):
+    def test_includes_title(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job)
         assert '# Job Detail' in md
 
-    def test_includes_uuid_and_status(self):
+    def test_includes_uuid_and_status(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job, uuid_str='abc-123', status_str='running')
         assert 'abc-123' in md
         assert 'running' in md
 
-    def test_includes_agent_model_cost_turns(self):
+    def test_includes_agent_model_cost_turns(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job, agent_role='analyst', model='gpt-4', total_cost=1.5, num_turns=7)
         assert 'analyst' in md
@@ -364,69 +391,69 @@ class TestBuildMdContent:
         assert '1.5' in md
         assert '7' in md
 
-    def test_includes_system_prompt_section_when_present(self):
+    def test_includes_system_prompt_section_when_present(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job, system_prompt='You are a helpful assistant.')
         assert 'System Prompt' in md
         assert 'You are a helpful assistant.' in md
 
-    def test_omits_system_prompt_section_when_empty(self):
+    def test_omits_system_prompt_section_when_empty(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job, system_prompt='')
         assert 'System Prompt' not in md
 
-    def test_includes_initial_prompt_when_present(self):
+    def test_includes_initial_prompt_when_present(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job, initial_prompt='Analyse this data.')
         assert 'Initial Prompt' in md
         assert 'Analyse this data.' in md
 
-    def test_omits_initial_prompt_when_empty(self):
+    def test_omits_initial_prompt_when_empty(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job, initial_prompt='')
         assert 'Initial Prompt' not in md
 
-    def test_includes_warmup_code(self):
+    def test_includes_warmup_code(self, db0_fixture):
         job = _make_job_for_md(warmup_code='x = 1', warmup_console_positions=[1], console=['ok\n'])
         md = _call_build_md(job)
         assert 'Warmup' in md
         assert 'x = 1' in md
 
-    def test_includes_warmup_console_output(self):
+    def test_includes_warmup_console_output(self, db0_fixture):
         job = _make_job_for_md(warmup_code='x = 1', warmup_console_positions=[1], console=['ok\n'])
         md = _call_build_md(job)
         assert 'ok' in md
 
-    def test_includes_llm_turn_section(self):
+    def test_includes_llm_turn_section(self, db0_fixture):
         chat_item = _make_chat_log_item(console_pos=0, llm_resp='result = 42')
         job = _make_job_for_md(chat_log=[chat_item], console=['done\n'])
         md = _call_build_md(job)
         assert 'Turn 1' in md
         assert 'result = 42' in md
 
-    def test_includes_turn_console_output(self):
+    def test_includes_turn_console_output(self, db0_fixture):
         chat_item = _make_chat_log_item(console_pos=0, llm_resp='x = 1')
         job = _make_job_for_md(chat_log=[chat_item], console=['output line\n'])
         md = _call_build_md(job)
         assert 'output line' in md
 
-    def test_includes_tool_calls_in_turn(self):
-        cs = _FakeCallSpec('search', args=['query'])
-        cb = _FakeCodeBlock(code='search("query")', tool_calls=[cs])
-        chat_item = _make_chat_log_item(console_pos=0, llm_resp=cb)
-        job = _make_job_for_md(chat_log=[chat_item], tool_log={1: 'result text'})
+    def test_includes_tool_calls_in_turn(self, db0_fixture):
+        cs = CallSpec(id='T', func_name='search', args=['query'])
+        cb = CodeBlock(code='search("query")', tool_calls=[cs])
+        chat_item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log='result text')
+        job = _make_job_for_md(chat_log=[chat_item])
         md = _call_build_md(job)
         assert 'Tool Call' in md
         assert 'search' in md
         assert 'result text' in md
 
-    def test_includes_error_indicator_in_turn(self):
+    def test_includes_error_indicator_in_turn(self, db0_fixture):
         chat_item = _make_chat_log_item(console_pos=0, llm_resp='bad code')
         job = _make_job_for_md(chat_log=[chat_item], exceptions={0: 'NameError: x'})
         md = _call_build_md(job)
         assert 'NameError: x' in md
 
-    def test_multiple_turns_all_included(self):
+    def test_multiple_turns_all_included(self, db0_fixture):
         item1 = _make_chat_log_item(console_pos=0, llm_resp='step_one()')
         item2 = _make_chat_log_item(console_pos=1, llm_resp='step_two()')
         job = _make_job_for_md(chat_log=[item1, item2], console=['a\n', 'b\n'])
@@ -436,11 +463,57 @@ class TestBuildMdContent:
         assert 'step_one()' in md
         assert 'step_two()' in md
 
-    def test_returns_string(self):
+    def test_returns_string(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job)
         assert isinstance(md, str)
         assert len(md) > 0
+
+    def test_warmup_tool_calls_use_correct_key_per_block(self, db0_fixture):  # pylint: disable=too-many-locals
+        """Each warmup block should look up tool results from its WarmupLogItem."""
+        cs1 = CallSpec(id='T', func_name='list_of_examples')
+        cs2 = CallSpec(id='T', func_name='docs', args=['get_user_calendar'])
+        block1 = 'print("hello")'
+        block2 = 'print("world")'
+        block3 = 'print("setup")'
+        block4 = CodeBlock(code=None, tool_calls=[cs1])
+        block5 = CodeBlock(code=None, tool_calls=[cs2])
+        warmup_code = [block1, block2, block3, block4, block5]
+        console = ['hello\n', 'world\n', 'setup\n', 'tool_output\n']
+        positions = [1, 2, 3, 4, 4]
+
+        # Create WarmupLogItems for the tool-call blocks
+        warmup_item_3 = _make_warmup_log_item(3, tool_log='examples_result')
+        warmup_item_4 = _make_warmup_log_item(4, tool_log='docs_result')
+
+        job = _make_job_for_md(
+            warmup_code=warmup_code,
+            warmup_console_positions=positions,
+            console=console,
+        )
+        job.chat_log = [warmup_item_3, warmup_item_4]
+        md = _call_build_md(job)
+        assert 'examples_result' in md
+        assert 'docs_result' in md
+
+    def test_warmup_single_tool_block_at_nonzero_pos(self, db0_fixture):
+        """A single warmup tool block after code blocks uses correct WarmupLogItem."""
+        cs = CallSpec(id='T', func_name='my_tool')
+        block1 = 'print("init")'
+        block2 = CodeBlock(code=None, tool_calls=[cs])
+        console = ['init\n']
+        positions = [1, 1]
+
+        warmup_item = _make_warmup_log_item(1, tool_log='tool_result_here')
+
+        job = _make_job_for_md(
+            warmup_code=[block1, block2],
+            warmup_console_positions=positions,
+            console=console,
+        )
+        job.chat_log = [warmup_item]
+        md = _call_build_md(job)
+        assert 'tool_result_here' in md
 
 
 def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, raw_prompt=None,
@@ -524,7 +597,6 @@ class _StubPyEnv:  # pylint: disable=too-few-public-methods
     def __init__(self):
         self.console = ['line1\n', 'line2\n']
         self.exceptions = {0: 'NameError: x'}
-        self.tool_log = {1: 'result'}
         self.global_state = {'key': 'value'}
         self.local_state = {}
 
@@ -538,11 +610,13 @@ class _StubJob:  # pylint: disable=too-few-public-methods
         self.context_bytes = 1024
         self.total_bytes_sent = 512
         self.total_bytes_received = 512
-        self.warmup_console_positions = [2]
         self.next_instr_num = None
         self.warmup_block_num = None
         self.chat_log = []
         self.py_env = _StubPyEnv()
+
+    def _warmup_end_positions(self):
+        return [2]
 
 
 class TestBuildRawRepr:
@@ -595,7 +669,75 @@ class TestBuildRawRepr:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_includes_warmup_console_positions(self):
+    def test_includes_chat_log(self):
         job = _StubJob()
         result = _build_raw_repr(job)
-        assert 'warmup_console_positions' in result
+        assert 'chat_log' in result
+
+    def test_partial_error_shows_good_attrs_and_inline_error(self):
+        """When one attribute fails, other attributes still render."""
+        class _ExplodingList(list):
+            """A list whose iteration raises, simulating a broken db0 object."""
+            def __iter__(self):
+                raise RuntimeError('Prefix: 999 not found')
+        class _PartialJob:  # pylint: disable=too-few-public-methods
+            def __init__(self):
+                self.good_field = 'hello'
+                self.bad_field = _ExplodingList([1, 2, 3])
+        result = _build_raw_repr(_PartialJob())
+        assert 'hello' in result
+        assert 'good_field' in result
+        assert '(Error' in result
+        assert 'Prefix: 999 not found' in result
+
+
+class TestBuildRawHtml:
+    def test_returns_string(self):
+        job = _StubJob()
+        result = _build_raw_html(job)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_includes_model_field(self):
+        job = _StubJob()
+        result = _build_raw_html(job)
+        assert 'model' in result
+        assert 'claude-3-opus' in result
+
+    def test_includes_console_content(self):
+        job = _StubJob()
+        result = _build_raw_html(job)
+        assert 'line1' in result
+
+    def test_list_items_have_alternating_backgrounds(self):
+        job = _StubJob()
+        result = _build_raw_html(job)
+        assert '#f0f0f0' in result  # even bg
+        assert '#e0e0e0' in result  # odd bg
+
+    def test_includes_type_names(self):
+        job = _StubJob()
+        result = _build_raw_html(job)
+        assert '_StubJob' in result
+
+    def test_handles_error_gracefully(self):
+        class _BadJob:  # pylint: disable=too-few-public-methods
+            @property
+            def __dict__(self):
+                raise RuntimeError('no vars')
+        result = _build_raw_html(_BadJob())
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_errors_highlighted(self):
+        class _ExplodingList(list):
+            def __iter__(self):
+                raise RuntimeError('Prefix: 999 not found')
+        class _PartialJob:  # pylint: disable=too-few-public-methods
+            def __init__(self):
+                self.good_field = 'hello'
+                self.bad_field = _ExplodingList([1, 2, 3])
+        result = _build_raw_html(_PartialJob())
+        assert 'hello' in result
+        assert 'Error' in result
+        assert '#b71c1c' in result  # error color

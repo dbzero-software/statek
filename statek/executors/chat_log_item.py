@@ -1,17 +1,71 @@
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Union
+from typing import List, Optional, Union
 import dbzero as db0
 
 from statek.utils import CodeBlock
 
 
-@db0.memo
+@db0.memo(no_default_tags=True)
 @dataclass
 class ChatLogItem:
-    # The console's position before execution of the llm_resp code
+    # The console's position before execution of this item's code
     console_pos: int
-    # Response received from the LLM — plain code string or CodeBlock with tool calls
-    llm_resp: Union[str, CodeBlock]
-    # Date and time of receiving the response (generating this log item)
+    # Optional log of tool results (single string or list of strings)
+    tool_log: Optional[Union[str, List[str]]] = None
+    # Date and time of generating this log item
     timestamp: datetime = field(default_factory=datetime.now)
+
+    def push_tool_result(self, tool_result: str) -> int:
+        """Append a tool result to tool_log and return its index.
+
+        Args:
+            tool_result: the tool-generated result string
+
+        Returns:
+            The index of the appended result within tool_log.
+        """
+        if self.tool_log is None:
+            self.tool_log = tool_result
+            return 0
+        if isinstance(self.tool_log, str):
+            self.tool_log = [self.tool_log, tool_result]
+            return 1
+        self.tool_log.append(tool_result)
+        return len(self.tool_log) - 1
+
+    def get_tool_result(self, tool_call_id: int) -> str:
+        """Retrieve a tool result by index.
+
+        Args:
+            tool_call_id: the index of the tool call within tool_log
+
+        Returns:
+            The tool result string.
+
+        Raises:
+            KeyError: if tool_log is None
+            IndexError: if tool_call_id is out of range
+        """
+        if self.tool_log is None:
+            raise KeyError(tool_call_id)
+        if isinstance(self.tool_log, str):
+            if tool_call_id != 0:
+                raise IndexError(
+                    f"tool_call_id {tool_call_id} out of range for single result")
+            return self.tool_log
+        return self.tool_log[tool_call_id]
+
+
+@db0.memo(no_default_tags=True)
+@dataclass
+class LLM_LogItem(ChatLogItem):
+    # Response received from the LLM — plain code string or CodeBlock with tool calls
+    llm_resp: Union[str, CodeBlock] = None
+
+
+@db0.memo(no_default_tags=True)
+@dataclass
+class WarmupLogItem(ChatLogItem):
+    # 0-based index into JobDef.warmup_code
+    warmup_block_num: int = 0

@@ -2,7 +2,7 @@
 
 # pylint: disable=no-member
 
-from tests.conftest import create_chat_log_item
+from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.example import Example, extract_example, format_example
 from statek.executors.job import Job, JobStatus, JobDef
 from statek.agents.agent import Agent
@@ -118,11 +118,11 @@ class TestExtractWarmupItems:
         assert result.warmup_items[5] == "2"
 
     def test_multiple_warmup_blocks_per_block_console(self, job_def_factory):
-        """When warmup_console_positions are tracked, each block gets its own console slice."""
+        """When warmup end positions are derived, each block gets its own console slice."""
         job_def = job_def_factory(warmup_code=["print('a')", "print('b')", "print('c')"])
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
         job.py_env.console = ["a", "b", "c"]
-        job.warmup_console_positions = [1, 2, 3]
+        set_warmup_positions(job, [1, 2, 3])
         result = extract_example(job, "x")
         assert result.warmup_items == ["print('a')", "a", "print('b')", "b", "print('c')", "c"]
 
