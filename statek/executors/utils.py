@@ -602,9 +602,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 11: Run the request with LLM API - await response
     response = await llm_api.process_request(**request)
 
-    # Refresh byte stats from LLM API response
-    job.total_bytes_sent = response.stats.total_bytes_sent
-    job.total_bytes_received = response.stats.total_bytes_received
+    # add byte stats from LLM API response
+    job.total_bytes_sent += response.stats.total_bytes_sent
+    job.total_bytes_received += response.stats.total_bytes_received
     job.context_bytes = job.total_bytes_sent + job.total_bytes_received
     if response.stats.cost is not None:
         job.total_cost += response.stats.cost
