@@ -457,7 +457,8 @@ def _build_md_content(
             label = f'Warmup Code {i + 1}/{len(warmup_blocks)}' if len(warmup_blocks) > 1 else 'Warmup Code'
             parts.append(f'### {label}\n')
             code = _get_code_str(block)
-            parts.append(_md_code_fence(code or '(empty)', 'python'))
+            if code.strip():
+                parts.append(_md_code_fence(code, 'python'))
             tool_data = _get_tool_data_for_block(block, warmup_items.get(i))
             if tool_data:
                 parts.append('\n**Tool Calls**\n')
@@ -651,15 +652,17 @@ def _render_warmup_section(job, blocks: list, ranges: list[tuple[int, int]]) -> 
         tool_data = _get_tool_data_for_block(block, warmup_items.get(i))
 
         with ui.column().classes('w-full gap-2'):
-            _render_code_block(code, _CODE_WARMUP_BG, block_label.lower())
+            if code.strip():
+                _render_code_block(code, _CODE_WARMUP_BG, block_label.lower())
 
             if tool_data:
                 _render_tool_calls(tool_data)
 
-            with ui.expansion('Console Output', icon='terminal', value=True).props('dense').classes(
-                'w-full rounded border border-gray-200'
-            ):
-                _render_console_output(console_out)
+            if console_out.strip():
+                with ui.expansion('Console Output', icon='terminal', value=True).props('dense').classes(
+                    'w-full rounded border border-gray-200'
+                ):
+                    _render_console_output(console_out)
 
 
 def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: int) -> None:

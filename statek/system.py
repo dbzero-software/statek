@@ -175,6 +175,23 @@ def _convert_enum_args(f, args, kwargs):
     return _rebuild_args(sig, converted)
 
 
+def docs_style(f=None, *, brief_types: bool = False):
+    """Customizes how docstring tools (brief, docs) display a function.
+
+    Args:
+        brief_types: When True, the ``brief`` tool includes parameter type
+            annotations in the function signature.  Default is False.
+    """
+
+    def _decorate(func):
+        func._docs_style = {"brief_types": brief_types}  # pylint: disable=protected-access
+        return func
+
+    if f is None:
+        return _decorate
+    return _decorate(f)
+
+
 def tool(f=None, *, system: bool = False, error_handler=None): # pylint: disable=W0621
     """Marks a function as a tool for LLM agent.
 

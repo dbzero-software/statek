@@ -1692,3 +1692,124 @@ class TestParseClassTags:
 
         result = parse_tool_docstring(Sim)
         assert result.tags == ["particle_type"]
+
+
+class TestDocsStyle:
+    """Test cases for docs_style decorator."""
+
+    def test_brief_types_false_by_default(self):
+        """By default, brief format excludes types from signature."""
+        def render_calendar(month: 'date') -> str:  # pylint: disable=unused-argument
+            """Renders a calendar view.
+
+            Args:
+                month (date): The month to render.
+
+            Returns:
+                str: Calendar output.
+            """
+
+        result = format_docstring(parse_docstring(render_calendar),
+                                  brief=True, py_syntax=False)
+        assert "render_calendar(month)" in result
+        assert "date" not in result.split('\n', maxsplit=1)[0]
+
+    def test_brief_types_true_shows_types(self):
+        """With brief_types=True, brief format includes types in signature."""
+        from statek.system import docs_style  # pylint: disable=import-outside-toplevel
+
+        @docs_style(brief_types=True)
+        def render_calendar(month: 'date') -> str:  # pylint: disable=unused-argument
+            """Renders a calendar view.
+
+            Args:
+                month (date): The month to render.
+
+            Returns:
+                str: Calendar output.
+            """
+
+        result = format_docstring(parse_docstring(render_calendar),
+                                  brief=True, py_syntax=False)
+        assert "render_calendar(month: date)" in result
+
+    def test_brief_types_true_does_not_affect_docs(self):
+        """docs_style(brief_types=True) should not change full docs output."""
+        from statek.system import docs_style  # pylint: disable=import-outside-toplevel
+
+        @docs_style(brief_types=True)
+        def render_calendar(month: 'date') -> str:  # pylint: disable=unused-argument
+            """Renders a calendar view.
+
+            Args:
+                month (date): The month to render.
+
+            Returns:
+                str: Calendar output.
+            """
+
+        # Full docs always include types regardless of docs_style
+        result = format_docstring(parse_docstring(render_calendar),
+                                  brief=False, py_syntax=True)
+        assert "def render_calendar(month: date) -> str:" in result
+
+    def test_docs_style_preserves_function_metadata(self):
+        """docs_style should preserve function name, docstring, etc."""
+        from statek.system import docs_style  # pylint: disable=import-outside-toplevel
+
+        @docs_style(brief_types=True)
+        def my_func(x: int) -> int:
+            """My function.
+
+            Args:
+                x (int): Input.
+
+            Returns:
+                int: Output.
+            """
+            return x
+
+        assert my_func.__name__ == "my_func"
+        assert "My function." in my_func.__doc__
+        assert my_func(5) == 5
+
+    def test_docs_style_works_with_tool_decorator(self):
+        """docs_style should work when combined with @tool."""
+        from statek.system import docs_style, tool  # pylint: disable=import-outside-toplevel
+
+        @tool
+        @docs_style(brief_types=True)
+        def styled_tool(month: 'date', **kwargs) -> str:  # pylint: disable=unused-argument
+            """A styled tool.
+
+            Args:
+                month (date): The month.
+
+            Returns:
+                str: Result.
+            """
+
+        result = format_docstring(parse_tool_docstring(styled_tool),
+                                  brief=True, py_syntax=False)
+        assert "styled_tool(month: date)" in result
+
+    def test_docs_style_default_brief_types_false(self):
+        """docs_style() with no args should default brief_types to False."""
+        from statek.system import docs_style  # pylint: disable=import-outside-toplevel
+
+        @docs_style()
+        def my_func(x: int) -> int:
+            """My function.
+
+            Args:
+                x (int): Input.
+
+            Returns:
+                int: Output.
+            """
+            return x
+
+        result = format_docstring(parse_docstring(my_func),
+                                  brief=True, py_syntax=False)
+        assert "my_func(x)" in result
+        assert "int" not in result.split('\n', maxsplit=1)[0]
