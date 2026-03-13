@@ -75,8 +75,8 @@ class TestExceptionCountExcludesWarmup:
             LLM_LogItem(console_pos=5),
             LLM_LogItem(console_pos=10),
         ]
-        # Exceptions at indices 1, 2 (both LLM items)
-        job = make_job(items, exceptions={1: "err1", 2: "err2"})
+        # Exceptions keyed by console_pos of LLM items
+        job = make_job(items, exceptions={5: "err1", 10: "err2"})
         assert job.exception_count == 2
 
     def test_only_warmup_exceptions(self, db0_fixture, make_job):  # pylint: disable=unused-argument
@@ -85,8 +85,8 @@ class TestExceptionCountExcludesWarmup:
             WarmupLogItem(console_pos=5, warmup_block_num=1),
             LLM_LogItem(console_pos=10),
         ]
-        # Exceptions at indices 0, 1 (both warmup items)
-        job = make_job(items, exceptions={0: "err1", 1: "err2"})
+        # Exceptions keyed by console_pos of warmup items
+        job = make_job(items, exceptions={0: "err1", 5: "err2"})
         assert job.exception_count == 0
 
     def test_mixed_exceptions(self, db0_fixture, make_job):  # pylint: disable=unused-argument
@@ -99,7 +99,7 @@ class TestExceptionCountExcludesWarmup:
             LLM_LogItem(console_pos=4),
             LLM_LogItem(console_pos=5),
         ]
-        # Exceptions at indices 0,1 (warmup) and 4 (LLM)
+        # Exceptions keyed by console_pos: 0,1 (warmup) and 4 (LLM)
         job = make_job(items, exceptions={0: "warmup_err", 1: "warmup_err", 4: "llm_err"})
         assert job.exception_count == 1
 
@@ -114,7 +114,7 @@ class TestMaxConsecutiveExceptionsExcludesWarmup:
             LLM_LogItem(console_pos=2),
             LLM_LogItem(console_pos=3),
         ]
-        # LLM items at indices 1,2,3 — exceptions at 1,2
+        # Exceptions keyed by console_pos of LLM items at pos 1,2
         job = make_job(items, exceptions={1: "e1", 2: "e2"})
         assert job.max_consecutive_exceptions == 2
 
@@ -125,7 +125,7 @@ class TestMaxConsecutiveExceptionsExcludesWarmup:
             LLM_LogItem(console_pos=1),
             LLM_LogItem(console_pos=2),
         ]
-        # Exception at warmup index 0 and LLM index 1
+        # Exception keyed by console_pos: warmup at 0, LLM at 1
         job = make_job(items, exceptions={0: "warmup", 1: "llm"})
         assert job.max_consecutive_exceptions == 1
 
@@ -135,5 +135,6 @@ class TestMaxConsecutiveExceptionsExcludesWarmup:
             WarmupLogItem(console_pos=1, warmup_block_num=1),
             LLM_LogItem(console_pos=2),
         ]
+        # Exceptions keyed by console_pos of warmup items
         job = make_job(items, exceptions={0: "e1", 1: "e2"})
         assert job.max_consecutive_exceptions == 0
