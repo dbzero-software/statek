@@ -1,6 +1,7 @@
 """Tests for run_job_step resumption after FutureError."""
 # pylint: disable=no-member,R0903,C0415
 
+import json as json_lib
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,7 +13,9 @@ from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.utils import run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
-from statek.llm_api import LLM_Response, LLM_Stats, CallParams
+from statek.llm_harness import LLM_Harness
+from statek.llm_api import LLM_Response, LLM_Stats, CallParams, OpenRouter_API
+from statek.settings import LLM_API_Settings
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -205,6 +208,79 @@ class TestRunJobStepToolCallResponse:
         llm_resp = job.chat_log[0].llm_resp
         assert isinstance(llm_resp, str)
         assert llm_resp == "x = 42"
+
+
+class TestRunJobStepHarnessIsolation:
+    """Tests that harness token usage is isolated per job."""
+
+    @pytest.mark.asyncio
+    async def test_two_jobs_same_harness_do_not_share_approx_token_usage(
+        self, job_def_factory, db0_fixture
+    ):  # pylint: disable=unused-argument
+        """Job2 must be checked against its own bytes (1200), not cumulative (2200)."""
+        job1 = Job(
+            job_def=job_def_factory(warmup_code=None),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+        job2 = Job(
+            job_def=job_def_factory(warmup_code=None),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+
+        harness = LLM_Harness(
+            max_turns=100,
+            max_exceptions=100,
+            max_consecutive_exceptions=100,
+            max_token_usage=400,
+        )
+
+        api = OpenRouter_API(
+            settings=LLM_API_Settings(
+                api_url="https://openrouter.ai/api/v1/chat/completions",
+                api_key="test-key",
+                default_model="gpt-4o",
+            ),
+            model="gpt-4o",
+        )
+
+        target_totals = [1000, 1200]
+        response_texts = ["x = 1", "x = 2"]
+        call_index = {"value": 0}
+
+        async def fake_post(self_, url, json=None, headers=None):  # pylint: disable=unused-argument,redefined-builtin
+            idx = call_index["value"]
+            call_index["value"] += 1
+
+            sent_bytes = len(json_lib.dumps(json).encode("utf-8"))
+            recv_bytes = max(target_totals[idx] - sent_bytes, 0)
+
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b"x" * recv_bytes
+            mock_resp.json.return_value = {
+                "choices": [{"message": {"content": response_texts[idx]}}],
+                "usage": {},
+            }
+            return mock_resp
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=harness), \
+             patch("httpx.AsyncClient.post", fake_post):
+            mock_llm_api_cls.get.return_value = api
+
+            result1 = await run_job_step(job1, provider="OPENROUTER")
+            result2 = await run_job_step(job2, provider="OPENROUTER")
+
+        assert result1 is False
+        assert result2 is False
+        assert job1.total_bytes_sent + job1.total_bytes_received == 1000
+        assert job2.total_bytes_sent + job2.total_bytes_received == 1200
+        assert job1.approx_token_usage == 250
+        assert job2.approx_token_usage == 300
 
 
 def _make_job_with_tool(role, tool_name, tool_fn, warmup_code):

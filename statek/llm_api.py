@@ -426,7 +426,7 @@ class OpenRouter_API(LLM_API):
 
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
-        self.total_bytes_sent += len(payload_bytes)
+        total_bytes_sent = len(payload_bytes)
         if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
             STATEK_LOGGER.debug("OpenRouter payload: %s", json.dumps(payload, indent=2))
 
@@ -440,7 +440,7 @@ class OpenRouter_API(LLM_API):
             response.raise_for_status()
 
             # Measure bytes received
-            self.total_bytes_received += len(response.content)
+            total_bytes_received = len(response.content)
 
             # Parse the response
             data = response.json()
@@ -470,8 +470,8 @@ class OpenRouter_API(LLM_API):
             cost = data.get("usage", {}).get("cost")
 
             stats = LLM_Stats(
-                total_bytes_sent=self.total_bytes_sent,
-                total_bytes_received=self.total_bytes_received,
+                total_bytes_sent=total_bytes_sent,
+                total_bytes_received=total_bytes_received,
                 cost=cost
             )
 
@@ -518,8 +518,6 @@ class Claude_API(LLM_API):
                 "Please provide a model name or configure default_model in settings."
             )
         self.api_key = settings.api_key
-        self.total_bytes_sent = 0
-        self.total_bytes_received = 0
 
     def _step_with_tool_calls(self, step: "ChatStepData", is_last: bool) -> List[Dict]:
         """Return the (assistant, user) message pair for a step that has tool calls."""
@@ -698,7 +696,7 @@ class Claude_API(LLM_API):
 
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
-        self.total_bytes_sent += len(payload_bytes)
+        total_bytes_sent = len(payload_bytes)
         if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
             STATEK_LOGGER.debug("Claude payload: %s", json.dumps(payload, indent=2))
 
@@ -712,7 +710,7 @@ class Claude_API(LLM_API):
             response.raise_for_status()
 
             # Measure bytes received
-            self.total_bytes_received += len(response.content)
+            total_bytes_received = len(response.content)
 
             # Parse the response
             data = response.json()
@@ -741,8 +739,8 @@ class Claude_API(LLM_API):
             cost = data.get("usage", {}).get("cost")
 
             stats = LLM_Stats(
-                total_bytes_sent=self.total_bytes_sent,
-                total_bytes_received=self.total_bytes_received,
+                total_bytes_sent=total_bytes_sent,
+                total_bytes_received=total_bytes_received,
                 cost=cost
             )
 
