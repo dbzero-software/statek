@@ -597,7 +597,12 @@ def format_docstring(docstring: FuncDocString | ClassDocString,
 def _format_func_docstring(docstring: FuncDocString, brief: bool, py_syntax: bool) -> str:
     """Format a function docstring."""
     # Get signature from source function
-    sig_str = _format_signature(docstring.source, docstring.name, py_syntax,
+    include_types = py_syntax
+    if brief and not include_types:
+        style = getattr(docstring.source, '_docs_style', None)
+        if style and style.get('brief_types'):
+            include_types = True
+    sig_str = _format_signature(docstring.source, docstring.name, include_types,
                                 doc_args=docstring.args)
 
     if py_syntax:
