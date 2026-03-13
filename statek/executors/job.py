@@ -5,7 +5,7 @@ from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Unio
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
-from statek.executors.chat_log_item import ChatLogItem
+from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, WarmupLogItem
 from statek.llm_api import ChatStepData, LLM_Response, CallParams
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_markup,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
@@ -218,8 +218,6 @@ class Job:
         self.error: Optional[JobDefError] = error
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
-        # Console position recorded after each warmup block completes
-        self.warmup_console_positions: List[int] = []
         # Total context bytes used by this job so far
         self.context_bytes = 0
         self.total_bytes_sent = 0
@@ -415,7 +413,9 @@ class Job:
         settings = get_statek_settings()
         chat_style = settings.chat_style
         xml_tags = settings.get_xml_box_tags()
-        if not self.chat_log:
+        # Filter for LLM items only (WarmupLogItems don't count as LLM turns)
+        llm_items = [item for item in self.chat_log if isinstance(item, LLM_LogItem)]
+        if not llm_items:
             warmup = self.job_def.warmup_code
             if warmup:
                 # Warmup exists: template and warmup turns go in chat_history as
@@ -424,14 +424,15 @@ class Job:
                 # end of the previous block to the end of the last block.
                 warmup_blocks = [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
                 n = len(warmup_blocks)
+                positions = self._warmup_end_positions()
                 last_end = (
-                    self.warmup_console_positions[n - 1]
-                    if n - 1 < len(self.warmup_console_positions)
+                    positions[n - 1]
+                    if n - 1 < len(positions)
                     else len(self.py_env.console) if self.py_env.console else 0
                 )
                 prev_end = (
-                    self.warmup_console_positions[n - 2]
-                    if n >= 2 and n - 2 < len(self.warmup_console_positions)
+                    positions[n - 2]
+                    if n >= 2 and n - 2 < len(positions)
                     else 0
                 )
                 limit = last_end - prev_end
@@ -505,7 +506,11 @@ class Job:
         warmup = self.job_def.warmup_code
         warmup_blocks = ([warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)) if warmup else []
 
-        if not self.chat_log:
+        # Filter chat_log to only LLM_LogItem entries for history building
+        llm_items = [item for item in self.chat_log if isinstance(item, LLM_LogItem)]
+        positions = self._warmup_end_positions()
+
+        if not llm_items:
             if not warmup_blocks:
                 return  # No history
 
@@ -520,8 +525,8 @@ class Job:
                 if not is_last:
                     # Yield console between this block and the next as a user message
                     block_end = (
-                        self.warmup_console_positions[i]
-                        if i < len(self.warmup_console_positions)
+                        positions[i]
+                        if i < len(positions)
                         else len(self.py_env.console) if self.py_env.console else 0
                     )
                     limit = block_end - prev_pos
@@ -533,8 +538,8 @@ class Job:
                     prev_pos = block_end
             return
 
-        # chat_log is non-empty
-        first_chat_item = self.chat_log[0]
+        # llm_items is non-empty
+        first_chat_item = llm_items[0]
 
         if not warmup_blocks:
             # No warmup: first user message = template + console up to first LLM turn
@@ -556,8 +561,8 @@ class Job:
                 is_last = (i == len(warmup_blocks) - 1)
                 if is_last:
                     block_end = first_chat_item.console_pos  # extend to cover remaining console
-                elif i < len(self.warmup_console_positions):
-                    block_end = self.warmup_console_positions[i]
+                elif i < len(positions):
+                    block_end = positions[i]
                 else:
                     block_end = len(self.py_env.console) if self.py_env.console else 0
                 limit = block_end - prev_pos
@@ -571,9 +576,9 @@ class Job:
         # Yield first LLM response then remaining turns
         yield _wrap_code(first_chat_item.llm_resp)
 
-        for i in range(1, len(self.chat_log)):
-            prev_chat_item = self.chat_log[i - 1]
-            current_chat_item = self.chat_log[i]
+        for i in range(1, len(llm_items)):
+            prev_chat_item = llm_items[i - 1]
+            current_chat_item = llm_items[i]
 
             console_fragment = prompt_append_console(
                 self.py_env.console, chat_style,
@@ -618,15 +623,17 @@ class Job:
             ) if warmup else []
             num_warmup = len(warmup_blocks)
 
-            def _make_tool_calls(code_block, log_key):
-                """Build Dict[CallParams, str] from a CodeBlock and its tool_log entry."""
+            def _make_tool_calls(code_block, chat_log_item):
+                """Build Dict[CallParams, str] from a CodeBlock and its chat_log_item's tool_log."""
                 if not isinstance(code_block, CodeBlock) or not code_block.tool_calls:
+                    return None
+                if chat_log_item is None:
                     return None
                 call_specs = list(code_block.tool_calls)
                 tool_calls_dict = {}
                 for i, cs in enumerate(call_specs):
                     try:
-                        result = self.py_env.get_tool_result(log_key, i)
+                        result = chat_log_item.get_tool_result(i)
                     except KeyError:
                         return None
                     except IndexError:
@@ -639,28 +646,25 @@ class Job:
                     tool_calls_dict[cp] = result
                 return tool_calls_dict if tool_calls_dict else None
 
-            def _get_step_tool_calls(k):
-                """Return tool_calls for the k-th ChatStepData (k=0 = first user-only step).
+            # Collect WarmupLogItems indexed by warmup_block_num
+            warmup_log_items = {
+                item.warmup_block_num: item
+                for item in self.chat_log if isinstance(item, WarmupLogItem)
+            }
+            # Collect LLM_LogItems in order
+            llm_items = [item for item in self.chat_log if isinstance(item, LLM_LogItem)]
 
-                The tool_log key is the console length at the time the tools
-                executed (i.e. the console position *before* the block ran).
-                """
+            def _get_step_tool_calls(k):
+                """Return tool_calls for the k-th ChatStepData (k=0 = first user-only step)."""
                 if k == 0:
                     return None
                 if k <= num_warmup:
-                    # Warmup block k-1: console pos before it ran
                     block_idx = k - 1
-                    log_key = (
-                        self.warmup_console_positions[block_idx - 1]
-                        if block_idx > 0 else 0
-                    )
-                    return _make_tool_calls(warmup_blocks[block_idx], log_key)
-                # LLM turn: console_pos recorded at response time equals
-                # len(console) when the next step executes tools
+                    warmup_item = warmup_log_items.get(block_idx)
+                    return _make_tool_calls(warmup_blocks[block_idx], warmup_item)
                 turn_idx = k - num_warmup - 1
-                if turn_idx < len(self.chat_log):
-                    log_key = self.chat_log[turn_idx].console_pos
-                    return _make_tool_calls(self.chat_log[turn_idx].llm_resp, log_key)
+                if turn_idx < len(llm_items):
+                    return _make_tool_calls(llm_items[turn_idx].llm_resp, llm_items[turn_idx])
                 return None
 
             if not history_strings:
@@ -729,7 +733,7 @@ class Job:
         else:
             stored_resp = response_code
 
-        chat_item = ChatLogItem(
+        chat_item = LLM_LogItem(
             console_pos=len(self.py_env.console) if self.py_env.console else 0,
             llm_resp=stored_resp
         )
@@ -750,7 +754,10 @@ class Job:
         """
         if not self.chat_log:
             return None
-        return self.chat_log[-1].llm_resp
+        last = self.chat_log[-1]
+        if isinstance(last, LLM_LogItem):
+            return last.llm_resp
+        return None
 
     def _get_warmup_block_count(self) -> int:
         """
@@ -789,9 +796,25 @@ class Job:
         else:
             self.warmup_block_num += 1
 
-    def record_warmup_console_pos(self):
-        """Record the current console length after a warmup block completes."""
-        self.warmup_console_positions.append(len(self.py_env.console) if self.py_env.console else 0)
+    def _warmup_end_positions(self) -> List[int]:
+        """Return end positions for each warmup block, ordered by warmup_block_num.
+
+        The end position is derived from the next element's console_pos in chat_log.
+        For the last warmup item (no next element), the current console length is used.
+        """
+        console_len = len(self.py_env.console) if self.py_env.console else 0
+        # Collect (warmup_block_num, end_pos) pairs
+        pairs = []
+        for i, item in enumerate(self.chat_log):
+            if isinstance(item, WarmupLogItem):
+                end_pos = (
+                    self.chat_log[i + 1].console_pos
+                    if i + 1 < len(self.chat_log)
+                    else console_len
+                )
+                pairs.append((item.warmup_block_num, end_pos))
+        pairs.sort(key=lambda x: x[0])
+        return [end_pos for _, end_pos in pairs]
 
     def get_next_code_block(self) -> Union[str, CodeBlock, None]:
         """

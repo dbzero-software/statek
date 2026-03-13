@@ -3,7 +3,7 @@
 import types
 from unittest.mock import patch
 import dbzero as db0
-from tests.conftest import create_chat_log_item
+from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import Job, JobDefError, JobStatus
 from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats
 from statek.utils import CodeBlock, CallSpec
@@ -501,7 +501,7 @@ class TestJobGetNextPromptWithWarmup:
         """With warmup, prompt is the console output OF the last warmup block."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["last block output"]
-        job.warmup_console_positions = [1]  # block 0 produced 1 line
+        set_warmup_positions(job, [1])  # block 0 produced 1 line
 
         result = job.get_next_prompt()
 
@@ -511,7 +511,7 @@ class TestJobGetNextPromptWithWarmup:
         """With warmup, template and code are NOT in the prompt (they're in chat_history)."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["last block output"]
-        job.warmup_console_positions = [1]
+        set_warmup_positions(job, [1])
 
         result = job.get_next_prompt()
 
@@ -522,7 +522,7 @@ class TestJobGetNextPromptWithWarmup:
         """With multiple warmup blocks, prompt is ONLY the last block's console output."""
         job = job_factory(warmup_code=["block1", "block2"])
         job.py_env.console = ["out1", "out2"]
-        job.warmup_console_positions = [1, 2]  # block0->1 line, block1->1 line
+        set_warmup_positions(job, [1, 2])  # block0->1 line, block1->1 line
 
         result = job.get_next_prompt()
 
@@ -532,7 +532,7 @@ class TestJobGetNextPromptWithWarmup:
         """Earlier warmup block outputs are NOT in the prompt (they're in chat_history)."""
         job = job_factory(warmup_code=["block1", "block2"])
         job.py_env.console = ["out1", "out2"]
-        job.warmup_console_positions = [1, 2]
+        set_warmup_positions(job, [1, 2])
 
         result = job.get_next_prompt()
 
@@ -548,7 +548,7 @@ class TestJobGetChatHistoryWithWarmup:
         """With warmup but empty chat_log, get_chat_history is non-empty."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup output"]
-        job.warmup_console_positions = [1]
+        set_warmup_positions(job, [1])
 
         history = list(job.get_chat_history())
 
@@ -558,7 +558,7 @@ class TestJobGetChatHistoryWithWarmup:
         """Single warmup block, no chat_log: [template(user), warmup(asst)]."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup output", "remaining"]
-        job.warmup_console_positions = [1]
+        set_warmup_positions(job, [1])
 
         history = list(job.get_chat_history())
 
@@ -571,7 +571,7 @@ class TestJobGetChatHistoryWithWarmup:
         """Two warmup blocks, no chat_log: [template, w0, console0, w1]."""
         job = job_factory(warmup_code=["block1", "block2"])
         job.py_env.console = ["out1", "out2", "remaining"]
-        job.warmup_console_positions = [1, 2]
+        set_warmup_positions(job, [1, 2])
 
         history = list(job.get_chat_history())
 
@@ -586,7 +586,7 @@ class TestJobGetChatHistoryWithWarmup:
         """Last item in chat_history is always the last warmup block (assistant)."""
         job = job_factory(warmup_code=["block1", "block2"])
         job.py_env.console = ["out1", "out2"]
-        job.warmup_console_positions = [1, 2]
+        set_warmup_positions(job, [1, 2])
 
         history = list(job.get_chat_history())
 
@@ -596,7 +596,7 @@ class TestJobGetChatHistoryWithWarmup:
         """With warmup and chat_log: [template, warmup, merged_console, first_resp, …]."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup out", "post-warmup out"]
-        job.warmup_console_positions = [1]
+        set_warmup_positions(job, [1])
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
 
         history = list(job.get_chat_history())
@@ -614,7 +614,7 @@ class TestJobGetChatHistoryWithWarmup:
         job = job_factory(warmup_code="x = 1")
         # warmup produced line 0, then extra line 1 before first LLM call
         job.py_env.console = ["warmup out", "extra before llm", "after llm"]
-        job.warmup_console_positions = [1]   # warmup produced 1 line
+        set_warmup_positions(job, [1])   # warmup produced 1 line
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
 
@@ -628,7 +628,7 @@ class TestJobGetChatHistoryWithWarmup:
         """Warmup code does not appear in subsequent user messages."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup out", "post-warmup out", "after-first-llm"]
-        job.warmup_console_positions = [1]
+        set_warmup_positions(job, [1])
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
 

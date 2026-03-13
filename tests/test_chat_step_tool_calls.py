@@ -3,6 +3,7 @@
 
 from statek.agents.agent import Agent
 from statek.executors.job import Job, JobDef, JobStatus
+from statek.executors.chat_log_item import WarmupLogItem
 from statek.utils import CodeBlock, CallSpec
 from tests.conftest import create_chat_log_item
 
@@ -19,6 +20,17 @@ def _make_job(agent, warmup_code=None, started=False):
                job_status=status)
 
 
+def _add_warmup_log_item(job, block_num, tool_log=None, console_pos=0):
+    """Helper to add a WarmupLogItem with optional tool_log."""
+    item = WarmupLogItem(
+        console_pos=console_pos,
+        warmup_block_num=block_num,
+        tool_log=tool_log,
+    )
+    job.chat_log.append(item)
+    return item
+
+
 class TestGetNextRequestToolCalls:
     """Tests that _full_history in get_next_request populates tool_calls in ChatStepData."""
 
@@ -27,7 +39,7 @@ class TestGetNextRequestToolCalls:
         cs = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={"x": 1})
         warmup = CodeBlock(code='exit("ok")', tool_calls=[cs])
         job = _make_job(_make_agent("tc1"), warmup_code=warmup)
-        job.py_env.tool_log = {0: "'result_value'"}
+        _add_warmup_log_item(job, 0, tool_log="'result_value'")
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -55,7 +67,7 @@ class TestGetNextRequestToolCalls:
                       args=["arg1"], kwargs={"limit": 10})
         warmup = CodeBlock(code='exit("ok")', tool_calls=[cs])
         job = _make_job(_make_agent("tc3"), warmup_code=warmup)
-        job.py_env.tool_log = {0: "fetched"}
+        _add_warmup_log_item(job, 0, tool_log="fetched")
 
         history = list(job.get_next_request()["chat_history"])
         step = next(s for s in history if s.tool_calls)
@@ -72,7 +84,7 @@ class TestGetNextRequestToolCalls:
         cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
         warmup = CodeBlock(code='exit("ok")', tool_calls=[cs1, cs2])
         job = _make_job(_make_agent("tc4"), warmup_code=warmup)
-        job.py_env.tool_log = {0: ["'alpha'", "'beta'"]}
+        _add_warmup_log_item(job, 0, tool_log=["'alpha'", "'beta'"])
 
         history = list(job.get_next_request()["chat_history"])
         step = next(s for s in history if s.tool_calls)
@@ -83,11 +95,11 @@ class TestGetNextRequestToolCalls:
         assert names["tool_b"] == "'beta'"
 
     def test_warmup_tool_calls_none_when_tool_log_missing(self, db0_fixture):
-        """tool_calls is None when tool_log has no entry (tool wasn't executed)."""
+        """tool_calls is None when no WarmupLogItem exists (tool wasn't executed)."""
         cs = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={})
         warmup = CodeBlock(code='exit("ok")', tool_calls=[cs])
         job = _make_job(_make_agent("tc5"), warmup_code=warmup)
-        # tool_log not set
+        # No WarmupLogItem added
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -99,8 +111,9 @@ class TestGetNextRequestToolCalls:
         job = _make_job(_make_agent("tc6"), started=True)
         cs = CallSpec(id="T-001", func_name="do_thing", args=[], kwargs={"n": 5})
         block = CodeBlock(code="x = 1", tool_calls=[cs])
-        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
-        job.py_env.tool_log = {0: "'thing_done'"}
+        item = create_chat_log_item(console_pos=0, llm_resp=block)
+        item.tool_log = "'thing_done'"
+        job.chat_log.append(item)
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -128,12 +141,15 @@ class TestGetNextRequestToolCalls:
         warmup = CodeBlock(code="setup()", tool_calls=[cs_warmup])
         job = _make_job(_make_agent("tc8"), warmup_code=warmup, started=True)
 
-        job.warmup_console_positions = [1]
         job.py_env.console = ["warmup_line", "llm_line"]
+        # Add WarmupLogItem with tool result
+        _add_warmup_log_item(job, 0, tool_log="'warmup_result'")
+        # Add LLM turn with tool result
         cs_llm = CallSpec(id="T-001", func_name="llm_tool", args=[], kwargs={})
         block = CodeBlock(code="run()", tool_calls=[cs_llm])
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp=block))
-        job.py_env.tool_log = {0: "'warmup_result'", 2: "'llm_result'"}
+        item = create_chat_log_item(console_pos=2, llm_resp=block)
+        item.tool_log = "'llm_result'"
+        job.chat_log.append(item)
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -151,16 +167,17 @@ class TestGetNextRequestToolCalls:
         assert llm_step.tool_calls[lkey] == "'llm_result'"
 
     def test_second_llm_turn_tool_calls_assigned_correctly(self, db0_fixture):
-        """Second LLM turn's tool_calls use console_pos as key, not turn index."""
+        """Second LLM turn's tool_calls use the item's own tool_log."""
         job = _make_job(_make_agent("tc9"), started=True)
 
         # Turn 0: plain string (no tool calls), console_pos=0
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="x = 1"))
-        # Turn 1: CodeBlock with tool call, console_pos=2 (after turn 0 added 2 lines)
+        # Turn 1: CodeBlock with tool call, console_pos=2
         cs = CallSpec(id="T-002", func_name="second_tool", args=[], kwargs={})
         block = CodeBlock(code="y = 2", tool_calls=[cs])
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp=block))
-        job.py_env.tool_log = {2: "'second_result'"}  # key = console_pos of this turn
+        item = create_chat_log_item(console_pos=2, llm_resp=block)
+        item.tool_log = "'second_result'"
+        job.chat_log.append(item)
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -177,11 +194,11 @@ class TestGetNextRequestToolCalls:
         block1 = CodeBlock(code="", tool_calls=[cs1])
         block2 = CodeBlock(code="", tool_calls=[cs2])
         job = _make_job(_make_agent("tc_multi_wu"), warmup_code=[block1, block2])
-        # Block 0 ran at console pos 0, block 1 ran at console pos 1
-        job.py_env.tool_log = {0: "'alpha'", 1: "'beta'"}
+        # Add WarmupLogItems with tool results
+        _add_warmup_log_item(job, 0, tool_log="'alpha'")
+        _add_warmup_log_item(job, 1, tool_log="'beta'", console_pos=1)
         job.py_env.console = ["tool_a_output", "tool_b_output"]
         job.warmup_block_num = 1
-        job.warmup_console_positions = [1, 2]
 
         history = list(job.get_next_request()["chat_history"])
 
@@ -194,7 +211,7 @@ class TestGetNextRequestToolCalls:
         assert names["tool_a"] == "'alpha'"
         assert names["tool_b"] == "'beta'"
 
-    def test_two_warmup_blocks_and_llm_turn_all_correct(self, db0_fixture):
+    def test_two_warmup_blocks_and_llm_turn_all_correct(self, db0_fixture):  # pylint: disable=too-many-locals
         """Two warmup blocks + LLM turn all get correct tool_calls from tool_log."""
         cs1 = CallSpec(id="STATEK-001", func_name="warmup_a", args=[], kwargs={})
         cs2 = CallSpec(id="STATEK-002", func_name="warmup_b", args=[], kwargs={})
@@ -203,14 +220,16 @@ class TestGetNextRequestToolCalls:
         job = _make_job(_make_agent("tc_multi_wu_llm"), warmup_code=[block1, block2],
                         started=True)
         job.warmup_block_num = 1
-        # Each warmup block added 1 console entry
-        job.warmup_console_positions = [1, 2]
         job.py_env.console = ["wu_a_out", "wu_b_out", "llm_line"]
+        # Add WarmupLogItems — each warmup block added 1 console entry
+        _add_warmup_log_item(job, 0, tool_log="'wu_alpha'")
+        _add_warmup_log_item(job, 1, tool_log="'wu_beta'", console_pos=1)
+        # Add LLM turn
         cs_llm = CallSpec(id="T-001", func_name="llm_tool", args=[], kwargs={})
         llm_block = CodeBlock(code="run()", tool_calls=[cs_llm])
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp=llm_block))
-        # Block 0 at console pos 0, block 1 at console pos 1, LLM turn at console pos 2
-        job.py_env.tool_log = {0: "'wu_alpha'", 1: "'wu_beta'", 2: "'llm_result'"}
+        item = create_chat_log_item(console_pos=2, llm_resp=llm_block)
+        item.tool_log = "'llm_result'"
+        job.chat_log.append(item)
 
         history = list(job.get_next_request()["chat_history"])
 

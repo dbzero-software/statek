@@ -1,5 +1,21 @@
 # Development Process
 
+## Design Document
+
+[Statek Design Document](https://docs.google.com/document/d/1GUI872TsYcSR2xs4PQBrXcl0MkVeM_jti43SDkDeEzc/edit?usp=sharing)
+
+## Design Review
+
+Before implementing any non-trivial feature or change, critically review the proposed design:
+
+- **Question assumptions** — challenge requirements that seem unclear, redundant, or over-engineered. Ask: "Is this the right problem to solve?"
+- **Identify risks** — flag potential issues with data integrity, concurrency, performance, or maintainability before writing code.
+- **Pinpoint ambiguities** — if the design is underspecified, ask clarifying questions rather than guessing and implementing something wrong.
+- **Prefer simpler alternatives** — if a simpler design achieves the same goal, propose it and explain the trade-off.
+- **Call out bad patterns** — explicitly name anti-patterns (e.g. unnecessary abstraction, leaky coupling, premature optimisation) when you see them.
+
+Do not start implementation until the design is clear and sensible. It is better to ask one focused question upfront than to build the wrong thing.
+
 ## Test-Driven Development
 
 Unless highly infeasible, implementation must start with writing tests first (TDD):

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Dict, List
 
+from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job
 from statek.settings import ChatStyle
 
@@ -59,8 +60,9 @@ def _extract_warmup_items(job: Job) -> List[str]:
     blocks = [warmup_code] if isinstance(warmup_code, str) else list(warmup_code)
 
     console = job.py_env.console or []
-    warmup_console_end = job.chat_log[0].console_pos if job.chat_log else len(console)
-    positions = job.warmup_console_positions
+    first_llm = next((item for item in job.chat_log if isinstance(item, LLM_LogItem)), None)
+    warmup_console_end = first_llm.console_pos if first_llm else len(console)
+    positions = job._warmup_end_positions()
 
     items = []
     prev_pos = 0
@@ -343,10 +345,12 @@ def _extract_example_items(job: Job) -> List[str]:
     if not job.chat_log:
         return []
 
+    llm_items = [item for item in job.chat_log if isinstance(item, LLM_LogItem)]
+
     items = []
-    for i, chat_item in enumerate(job.chat_log):
+    for i, chat_item in enumerate(llm_items):
         items.append(chat_item.llm_resp)
-        end = job.chat_log[i + 1].console_pos if i + 1 < len(job.chat_log) else len(console)
+        end = llm_items[i + 1].console_pos if i + 1 < len(llm_items) else len(console)
         items.append("\n".join(console[chat_item.console_pos:end]))
 
     return items

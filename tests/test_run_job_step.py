@@ -224,8 +224,8 @@ class TestRunJobStepToolExecution:
     """Tests for step #5: tool execution before code and tool_log population."""
 
     @pytest.mark.asyncio
-    async def test_tool_result_stored_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
-        """Tool results from a warmup CodeBlock are stored in tool_log at key 0."""
+    async def test_tool_result_stored_in_chat_log_item(self, db0_fixture):  # pylint: disable=unused-argument
+        """Tool results from a warmup CodeBlock are stored in the WarmupLogItem's tool_log."""
         call_spec = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={})
         warmup_code = CodeBlock(code='exit("ok")', tool_calls=[call_spec])
         job = _make_job_with_tool("role_tl", "my_tool", lambda: "result_value", warmup_code)
@@ -233,13 +233,19 @@ class TestRunJobStepToolExecution:
         result = await run_job_step(job)
 
         assert result is True
-        assert job.py_env.tool_log is not None
-        assert 0 in job.py_env.tool_log
-        assert "'result_value'" in job.py_env.tool_log[0]
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) == 1
+        assert warmup_items[0].tool_log is not None
+        tool_log = warmup_items[0].tool_log
+        if isinstance(tool_log, str):
+            assert "'result_value'" in tool_log
+        else:
+            assert "'result_value'" in tool_log[0]
 
     @pytest.mark.asyncio
     async def test_multiple_tool_results_stored_as_list(self, db0_fixture):  # pylint: disable=unused-argument
-        """Multiple tool calls produce a List[str] in tool_log."""
+        """Multiple tool calls produce a List[str] in the WarmupLogItem's tool_log."""
         cs1 = CallSpec(id="STATEK-001", func_name="tool_a", args=[], kwargs={})
         cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
         warmup_code = CodeBlock(code='exit("ok")', tool_calls=[cs1, cs2])
@@ -254,7 +260,10 @@ class TestRunJobStepToolExecution:
 
         await run_job_step(job)
 
-        stored = job.py_env.tool_log[0]
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) == 1
+        stored = warmup_items[0].tool_log
         assert not isinstance(stored, str)
         assert len(stored) == 2
         assert "'alpha'" in stored[0]
@@ -282,8 +291,8 @@ class TestRunJobStepToolExecution:
         assert call_count == 0
 
     @pytest.mark.asyncio
-    async def test_no_tool_calls_leaves_tool_log_none(self, db0_fixture):  # pylint: disable=unused-argument
-        """Warmup code without tool calls does not create tool_log."""
+    async def test_no_tool_calls_leaves_warmup_item_tool_log_none(self, db0_fixture):  # pylint: disable=unused-argument
+        """Warmup code without tool calls creates WarmupLogItem with tool_log=None."""
         agent = Agent(role="role_no_tc", _system_prompt="Test", _tools=[])
         job_def = JobDef(agent=agent, job_params=None, warmup_code='exit("ok")')
         job = Job(
@@ -293,7 +302,10 @@ class TestRunJobStepToolExecution:
 
         await run_job_step(job)
 
-        assert job.py_env.tool_log is None
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) == 1
+        assert warmup_items[0].tool_log is None
 
 
 class TestRunJobStepToolCallLogging:
@@ -543,15 +555,11 @@ class TestRunJobStepToolCallLogging:
 
 
 class TestMultiBlockWarmupToolLog:
-    """Tests that multiple warmup blocks with tool calls get separate tool_log keys."""
+    """Tests that multiple warmup blocks with tool calls get separate WarmupLogItem tool_logs."""
 
     @pytest.mark.asyncio
-    async def test_two_warmup_blocks_store_separate_tool_log_keys(self, db0_fixture):  # pylint: disable=unused-argument
-        """Each warmup CodeBlock with tool calls stores its result under its own key.
-
-        The first block includes a print statement that produces a console entry,
-        so len(console) differs between blocks, giving each a unique tool_log key.
-        """
+    async def test_two_warmup_blocks_store_separate_tool_logs(self, db0_fixture):  # pylint: disable=unused-argument
+        """Each warmup CodeBlock with tool calls stores its result in its own WarmupLogItem."""
         cs1 = CallSpec(id="STATEK-001", func_name="tool_a", args=[], kwargs={})
         cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
         block1 = CodeBlock(code='print("setup")', tool_calls=[cs1])
@@ -563,18 +571,26 @@ class TestMultiBlockWarmupToolLog:
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
 
-        # Execute first warmup block (tool_a at console pos 0, then print adds entry)
+        # Execute first warmup block (tool_a)
         await run_job_step(job)
-        # Execute second warmup block (tool_b at console pos 1)
+        # Execute second warmup block (tool_b)
         await run_job_step(job)
 
-        assert job.py_env.tool_log is not None
-        # Block 0 result at key 0 (console was empty before block 0 ran)
-        assert 0 in job.py_env.tool_log
-        assert "'alpha'" in job.py_env.tool_log[0]
-        # Block 1 result at key 1 (console had 1 entry from block 0's print)
-        assert 1 in job.py_env.tool_log
-        assert "'beta'" in job.py_env.tool_log[1]
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) == 2
+        # Block 0 result
+        tool_log_0 = warmup_items[0].tool_log
+        if isinstance(tool_log_0, str):
+            assert "'alpha'" in tool_log_0
+        else:
+            assert "'alpha'" in tool_log_0[0]
+        # Block 1 result
+        tool_log_1 = warmup_items[1].tool_log
+        if isinstance(tool_log_1, str):
+            assert "'beta'" in tool_log_1
+        else:
+            assert "'beta'" in tool_log_1[0]
 
 
 class TestRunJobStepWarmupException:
@@ -870,7 +886,7 @@ class TestRunJobStepEmptyCodeBlock:
 
     @pytest.mark.asyncio
     async def test_tool_result_stored_when_code_is_none(self, db0_fixture):  # pylint: disable=unused-argument
-        """Tool results are stored in tool_log even when CodeBlock.code is None."""
+        """Tool results are stored in WarmupLogItem even when CodeBlock.code is None."""
         call_spec = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={})
         warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
         agent = Agent(role="role_empty_tool", _system_prompt="Test", _tools=[])
@@ -883,6 +899,12 @@ class TestRunJobStepEmptyCodeBlock:
 
         await run_job_step(job)
 
-        assert job.py_env.tool_log is not None
-        assert 0 in job.py_env.tool_log
-        assert "'my_result'" in job.py_env.tool_log[0]
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) >= 1
+        tool_log = warmup_items[0].tool_log
+        assert tool_log is not None
+        if isinstance(tool_log, str):
+            assert "'my_result'" in tool_log
+        else:
+            assert "'my_result'" in tool_log[0]

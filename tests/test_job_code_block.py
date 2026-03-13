@@ -3,7 +3,7 @@
 from unittest.mock import patch, MagicMock
 
 from tests.conftest import create_chat_log_item
-from statek.executors.chat_log_item import ChatLogItem
+from statek.executors.chat_log_item import LLM_LogItem
 from statek.llm_api import LLM_Response, LLM_Stats, CallParams
 from statek.utils import CodeBlock, CallSpec
 from statek.settings import ChatStyle
@@ -13,16 +13,16 @@ class TestChatLogItemCodeBlock:
     """Test that ChatLogItem.llm_resp accepts CodeBlock values."""
 
     def test_stores_code_block(self, db0_fixture):  # pylint: disable=unused-argument
-        """ChatLogItem.llm_resp can hold a CodeBlock."""
+        """LLM_LogItem.llm_resp can hold a CodeBlock."""
         call_spec = CallSpec(id="T-001", func_name="my_tool", args=[], kwargs={})
         block = CodeBlock(code="x = 1", tool_calls=[call_spec])
-        item = ChatLogItem(console_pos=0, llm_resp=block)
+        item = LLM_LogItem(console_pos=0, llm_resp=block)
         assert isinstance(item.llm_resp, CodeBlock)
         assert item.llm_resp.code == "x = 1"
 
     def test_still_accepts_str(self, db0_fixture):  # pylint: disable=unused-argument
-        """ChatLogItem.llm_resp still accepts a plain string (backwards compat)."""
-        item = ChatLogItem(console_pos=0, llm_resp="print('hello')")
+        """LLM_LogItem.llm_resp still accepts a plain string (backwards compat)."""
+        item = LLM_LogItem(console_pos=0, llm_resp="print('hello')")
         assert item.llm_resp == "print('hello')"
 
 

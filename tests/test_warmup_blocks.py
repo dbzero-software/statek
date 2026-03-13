@@ -155,7 +155,7 @@ class TestRunJobStepMultipleBlocks:
     async def test_warmup_console_positions_recorded_after_each_block(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
-        """warmup_console_positions records the console length after each completed block."""
+        """_warmup_end_positions returns the console length after each completed block."""
         job_def = job_def_factory(warmup_code=[
             'print("block0")',
             'print("block1")',
@@ -168,21 +168,23 @@ class TestRunJobStepMultipleBlocks:
             job_status=JobStatus.READY
         )
 
-        # After first block: one position recorded
+        # After first block: one position derived from the next element
         await run_job_step(job)
-        assert len(job.warmup_console_positions) == 1
-        assert job.warmup_console_positions[0] == len(job.py_env.console)
+        positions = job._warmup_end_positions()  # pylint: disable=protected-access
+        assert len(positions) == 1
+        assert positions[0] == len(job.py_env.console)
 
         # After second block: two positions recorded
         await run_job_step(job)
-        assert len(job.warmup_console_positions) == 2
-        assert job.warmup_console_positions[1] == len(job.py_env.console)
+        positions = job._warmup_end_positions()  # pylint: disable=protected-access
+        assert len(positions) == 2
+        assert positions[1] == len(job.py_env.console)
 
     @pytest.mark.asyncio
     async def test_warmup_console_positions_interleave_correctly(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
-        """Each block's console output is bounded by consecutive warmup_console_positions."""
+        """Each block's console output is bounded by consecutive WarmupLogItem end positions."""
         job_def = job_def_factory(warmup_code=[
             'print("from block0")',
             'print("from block1")',
@@ -198,8 +200,9 @@ class TestRunJobStepMultipleBlocks:
         await run_job_step(job)  # block 0
         await run_job_step(job)  # block 1
 
-        pos0 = job.warmup_console_positions[0]
-        pos1 = job.warmup_console_positions[1]
+        positions = job._warmup_end_positions()  # pylint: disable=protected-access
+        pos0 = positions[0]
+        pos1 = positions[1]
 
         # Console lines for block 0 are before pos0
         block0_output = job.py_env.console[:pos0]

@@ -13,7 +13,7 @@ import dbzero as db0
 
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent, SupervisedAgent
-from statek.executors.chat_log_item import ChatLogItem
+from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
 TEST_DIR = os.path.join(os.path.dirname(__file__))
@@ -190,12 +190,31 @@ def job_factory(job_def_factory):
 
 
 def create_chat_log_item(console_pos, llm_resp):
-    """Helper function to create ChatLogItem instances."""
-    return ChatLogItem(
+    """Helper function to create LLM_LogItem instances."""
+    return LLM_LogItem(
         console_pos=console_pos,
         llm_resp=llm_resp,
         timestamp=datetime.now()
     )
+
+
+def set_warmup_positions(job, positions):
+    """Add WarmupLogItems to job.chat_log to simulate warmup_console_positions.
+
+    Each position becomes a WarmupLogItem with console_pos derived from the
+    previous position (0 for the first).  The end position is derived at
+    read-time from the next element's console_pos in chat_log.
+    Inserts at the front of chat_log to maintain correct ordering.
+    """
+    warmup_items = db0.list()  # pylint: disable=no-member
+    prev = 0
+    for i, end_pos in enumerate(positions):
+        warmup_items.append(WarmupLogItem(
+            console_pos=prev,
+            warmup_block_num=i,
+        ))
+        prev = end_pos
+    job.chat_log = warmup_items + job.chat_log
 
 
 # Mock tool functions for testing
