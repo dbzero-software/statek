@@ -189,6 +189,15 @@ def _build_raw_repr(job) -> str:
         try:
             attrs = vars(obj)
         except TypeError:
+            # Fallback for db0 persistent dicts (not isinstance of dict)
+            if hasattr(obj, 'items'):
+                result = {}
+                for k, v in obj.items():
+                    try:
+                        result[str(k)] = _to_display(v, depth + 1)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        result[str(k)] = f'(Error: {exc})'
+                return result
             # Fallback for db0 persistent collections and other iterables
             if hasattr(obj, '__iter__'):
                 converted = []
@@ -273,6 +282,15 @@ def _build_raw_html(job) -> str:
         try:
             attrs = vars(obj)
         except TypeError:
+            # Fallback for db0 persistent dicts (not isinstance of dict)
+            if hasattr(obj, 'items'):
+                result = {}
+                for k, v in obj.items():
+                    try:
+                        result[str(k)] = _to_display(v, depth + 1)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        result[str(k)] = f'(Error: {exc})'
+                return result
             if hasattr(obj, '__iter__'):
                 converted = []
                 for x in obj:

@@ -843,25 +843,33 @@ class Job:
 
     @property
     def num_turns(self) -> int:
-        """Returns the number of turns so far (i.e. the number of chat log items)."""
-        return len(self.chat_log)
+        """Returns the number of LLM turns (excludes warmup code blocks)."""
+        return sum(1 for item in self.chat_log if isinstance(item, LLM_LogItem))
+
+    @property
+    def _warmup_indices(self) -> set:
+        """Returns chat_log indices that correspond to warmup blocks."""
+        return {i for i, item in enumerate(self.chat_log) if isinstance(item, WarmupLogItem)}
 
     @property
     def exception_count(self) -> int:
-        """Returns the total number of exceptions so far."""
+        """Returns the number of exceptions from LLM turns (excludes warmup blocks)."""
         if not self.py_env.exceptions:
             return 0
-        return len(self.py_env.exceptions)
+        warmup = self._warmup_indices
+        return sum(1 for idx in self.py_env.exceptions if idx not in warmup)
 
     @property
     def max_consecutive_exceptions(self) -> int:
-        """Returns the maximum number of consecutive exceptions in Job history."""
+        """Returns the maximum number of consecutive exceptions among LLM turns only."""
         if not self.py_env.exceptions or not self.chat_log:
             return 0
         exception_ids = set(self.py_env.exceptions.keys())
         max_streak = 0
         streak = 0
-        for i in range(len(self.chat_log)):
+        for i, item in enumerate(self.chat_log):
+            if isinstance(item, WarmupLogItem):
+                continue
             if i in exception_ids:
                 streak += 1
                 max_streak = max(max_streak, streak)
