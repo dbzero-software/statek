@@ -493,8 +493,8 @@ def _build_md_content(
                     if result:
                         parts.append(_md_code_fence(str(result).strip()))
 
-            if i in exceptions:
-                parts.append(f'\n> **Error:** `{exceptions[i]}`\n')
+            if chat_item.console_pos in exceptions:
+                parts.append(f'\n> **Error:** `{exceptions[chat_item.console_pos]}`\n')
 
             console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
             if console_out.strip():
@@ -508,12 +508,12 @@ def _build_md_content(
 
 def _build_pdf_bytes(md_content: str) -> bytes:
     """Convert markdown content to PDF bytes via weasyprint."""
-    import markdown as md_lib
+    import markdown2
     import weasyprint
 
-    body_html = md_lib.markdown(
+    body_html = markdown2.markdown(
         md_content,
-        extensions=['fenced_code', 'tables', 'nl2br'],
+        extras=['fenced-code-blocks', 'tables', 'break-on-newline'],
     )
     css = """
         @page { margin: 20mm 18mm; }
@@ -673,7 +673,7 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
     ts_str = ts.strftime('%H:%M:%S') if ts else ''
 
     exceptions = getattr(job.py_env, 'exceptions', None) or {}
-    has_error = turn_idx in exceptions
+    has_error = chat_item.console_pos in exceptions
     tool_data = _get_tool_data_for_block(chat_item.llm_resp, chat_item)
 
     with ui.column().classes('w-full gap-2'):
@@ -706,7 +706,7 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
                 'background: #fff0f0; border: 1px solid #ffcdd2'
             ):
                 ui.icon('error').classes('text-red-500 text-sm')
-                ui.label(exceptions[turn_idx]).classes('text-xs text-red-700 font-mono break-all')
+                ui.label(exceptions[chat_item.console_pos]).classes('text-xs text-red-700 font-mono break-all')
 
         with ui.expansion('Console Output', icon='terminal').props('dense').classes(
             'w-full rounded border border-gray-200'

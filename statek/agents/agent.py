@@ -243,6 +243,20 @@ class Agent:
                     result.append(fn)
         return result
 
+    def _find_tool(self, name: str):
+        """Find a tool by name in _tools.
+
+        Args:
+            name: The tool name to search for.
+
+        Returns:
+            The tool callable if found, None otherwise.
+        """
+        for t in self._tools:
+            if getattr(t, '__name__', '') == name:
+                return t
+        return None
+
     def append_tool(self, tool_or_name: Callable | str):
         """
         Add a tool to the agent's toolset.

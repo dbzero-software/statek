@@ -560,9 +560,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 _STATEK_CTX = {'job': job} 
                 handle_critical_error(e)
                 return True
-            # Non-warmup exception: print error so the LLM can see and recover
-            error_msg = f"{type(e).__name__}: {e}"
-            job.console_append(error_msg, error_message=error_msg)
+            # Non-warmup exception: already printed to console by exec_step
+            pass
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:

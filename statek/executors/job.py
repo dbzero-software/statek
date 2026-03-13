@@ -345,10 +345,10 @@ class Job:
         """
         self.py_env.console_append(output)
         if error_message is not None:
-            chat_log_item_id = len(self.chat_log) - 1 if self.chat_log else 0
+            console_pos = self.chat_log[-1].console_pos if self.chat_log else 0
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
-            self.py_env.exceptions[chat_log_item_id] = error_message
+            self.py_env.exceptions[console_pos] = error_message
         # Console is logged in batches at block/turn boundaries (see _log_console_batch)
 
     @property
@@ -847,30 +847,30 @@ class Job:
         return sum(1 for item in self.chat_log if isinstance(item, LLM_LogItem))
 
     @property
-    def _warmup_indices(self) -> set:
-        """Returns chat_log indices that correspond to warmup blocks."""
-        return {i for i, item in enumerate(self.chat_log) if isinstance(item, WarmupLogItem)}
+    def _warmup_console_positions(self) -> set:
+        """Returns console_pos values that correspond to warmup blocks."""
+        return {item.console_pos for item in self.chat_log if isinstance(item, WarmupLogItem)}
 
     @property
     def exception_count(self) -> int:
         """Returns the number of exceptions from LLM turns (excludes warmup blocks)."""
         if not self.py_env.exceptions:
             return 0
-        warmup = self._warmup_indices
-        return sum(1 for idx in self.py_env.exceptions if idx not in warmup)
+        warmup = self._warmup_console_positions
+        return sum(1 for pos in self.py_env.exceptions if pos not in warmup)
 
     @property
     def max_consecutive_exceptions(self) -> int:
         """Returns the maximum number of consecutive exceptions among LLM turns only."""
         if not self.py_env.exceptions or not self.chat_log:
             return 0
-        exception_ids = set(self.py_env.exceptions.keys())
+        exception_positions = set(self.py_env.exceptions.keys())
         max_streak = 0
         streak = 0
-        for i, item in enumerate(self.chat_log):
+        for item in self.chat_log:
             if isinstance(item, WarmupLogItem):
                 continue
-            if i in exception_ids:
+            if item.console_pos in exception_positions:
                 streak += 1
                 max_streak = max(max_streak, streak)
             else:
