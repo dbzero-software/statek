@@ -22,20 +22,26 @@ class Researcher(SupervisedAgent):
     Args:
         send_message: User communication function which is used to create `ask` and
                      `answer` tools dynamically. Can be regular, async, or temporal.
+                     Can be None if tools already contain 'ask' and 'answer'.
         tools: Additional task-specific tools available to the researcher.
+              If tools named 'ask' or 'answer' are included, they take
+              precedence over the dynamically generated ones.
     """
 
     send_message: Callable = None
     additional_tools: Iterable[Callable] = None
 
-    def __init__(self, send_message: Callable, tools: Iterable[Callable] = None,
+    def __init__(self, send_message: Callable = None, tools: Iterable[Callable] = None,
                  role: str = "researcher"):
         """
         Initialize the Researcher agent.
 
         Args:
-            send_message: User communication function (can be regular, async, or temporal)
-            tools: Additional task-specific tools available to the researcher
+            send_message: User communication function (can be regular, async, or temporal).
+                         Can be None if tools already contain 'ask' and 'answer'.
+            tools: Additional task-specific tools available to the researcher.
+                  If tools named 'ask' or 'answer' are included, they take
+                  precedence over the dynamically generated ones.
             role: Custom role name (default: "researcher")
         """
         # Store send_message and tools
@@ -60,8 +66,25 @@ class Researcher(SupervisedAgent):
     def init_context(self):
         if self._X__context is None:
             super().init_context()
-            self._create_ask_tool()
-            self._create_answer_tool()
+            # Use custom ask/answer from _tools if provided
+            custom_ask = self._find_tool('ask')
+            custom_answer = self._find_tool('answer')
+            has_custom_ask = custom_ask is not None
+            has_custom_answer = custom_answer is not None
+            if has_custom_ask:
+                self._X__context['ask'] = custom_ask
+            if has_custom_answer:
+                self._X__context['answer'] = custom_answer
+            # Validate: send_message is required for any dynamic tool creation
+            if self.send_message is None and (not has_custom_ask or not has_custom_answer):
+                raise ValueError(
+                    "send_message is required when custom 'ask' and/or 'answer' "
+                    "tools are not both provided in tools"
+                )
+            if not has_custom_ask:
+                self._create_ask_tool()
+            if not has_custom_answer:
+                self._create_answer_tool()
 
     def _create_ask_tool(self):
         """Create the ask tool dynamically."""
