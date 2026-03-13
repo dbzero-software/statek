@@ -7,7 +7,7 @@ import pytest
 import dbzero as db0
 
 from statek.executors.utils import exec_step
-from statek.future import FutureResult, temporal
+from statek.future import FutureResult, FutureElement, temporal
 from statek.exceptions import FutureError
 from statek.system import tool
 from statek.agents.agent import Agent
@@ -18,6 +18,20 @@ from statek.executors.job import Job, JobDef, JobStatus
 @dataclass
 class MemoObject:  # pylint: disable=too-few-public-methods
     value: int = 0
+
+@db0.memo
+class MemoWithMethod:
+    def __init__(self, value):
+        self.value = value
+
+    def get_value(self):
+        return self.value
+
+@db0.memo
+class MemoWithValueAndReady:
+    def __init__(self, value, ready):
+        self.value = value
+        self.ready = ready
 
 
 def _check_condition_false(_):
@@ -43,6 +57,14 @@ def _fetch_result_ready(_):
 def _fetch_result_from_deps(self):
     """Generic fetch result that returns the value from deps."""
     return self.deps.value
+
+
+def _fetch_result_pair_from_deps(self) -> tuple[MemoWithMethod, MemoWithMethod]:
+    """Fetch a typed tuple result from deps for FutureResult unpacking."""
+    if self.deps.ready:
+        return self.deps.value
+    self.deps.ready = True  # Simulate that the result becomes ready after first check
+    raise FutureError(future_result=self)
 
 
 def local_print(some_argument):
@@ -112,6 +134,15 @@ def get_value_not_ready():
     """Temporal function that returns a not-ready FutureResult."""
     return FutureResult(
         deps=MemoObject(value=0),
+        state_num=0
+    )
+
+
+@temporal(complement=_fetch_result_pair_from_deps, condition=_check_condition_false)
+def get_two_values():
+    """Temporal function that returns a FutureResult resolving to two values."""
+    return FutureResult(
+        deps=MemoWithValueAndReady(value=(MemoWithMethod(7), MemoWithMethod(9)), ready=False),
         state_num=0
     )
 
@@ -407,6 +438,28 @@ print(result)'''
         assert exc_info.value.instr_num == 1
         # Console should be empty since print was not executed
         assert simple_job.py_env.console is None
+
+    @pytest.mark.asyncio
+    async def test_exec_step_temporal_function_unpacks_to_future_elements(self, job_factory):
+        """Temporal FutureResult tuple unpacking stores FutureElement instances."""
+        simple_job = self.create_job(job_factory)
+        simple_job.py_env.local_state = {'get_two_values': get_two_values}
+
+        code = '''left, right = get_two_values()\nprint(left.get_value(), right.get_value())'''
+
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step(code, simple_job)
+
+        assert exc_info.value.instr_num == 1
+        assert simple_job.py_env.console is None
+        assert isinstance(simple_job.py_env.local_state.get('left'), FutureElement)
+        assert isinstance(simple_job.py_env.local_state.get('right'), FutureElement)
+
+        result = await exec_step(code, simple_job, instr_num=1)
+
+        assert result is True
+        assert simple_job.py_env.console is not None
+        assert any('7 9' in line for line in simple_job.py_env.console)
 
     @pytest.mark.asyncio
     async def test_exec_step_continuation_with_instr_num(self, job_factory):
@@ -963,7 +1016,7 @@ class TestExecStepWithAsyncTools:
     """
 
     def _make_job(self, tools):
-        """Create a minimal job whose agent has the given tools registered."""
+        """Create a minimal job whose agent has thesq given tools registered."""
         agent = Agent(
             role="async_tools_exec_test",
             _system_prompt="Test",
