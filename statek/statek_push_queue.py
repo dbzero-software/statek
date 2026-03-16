@@ -20,6 +20,9 @@ class StatekPushQueue:
     def __init__(self):
         self.__job_console_queue = FiFoQueue()
 
+    def is_empty(self) -> bool:
+        return self.__job_console_queue.is_empty()
+
     @db0_rpc.remote
     def push_to_job_console(self, job: Job, message: str):
         """Append a (job, message) pair to the job-console queue.
