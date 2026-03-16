@@ -35,6 +35,9 @@ class FiFoQueue:
         self.__items = db0.index()
         self.__next_key = 0
 
+    def is_empty(self) -> bool:
+        return len(self.__items) == 0
+
     def push_back(self, **kwargs):
         """Append a single element to the back of the queue."""
         prefix = db0.get_prefix_of(self).name

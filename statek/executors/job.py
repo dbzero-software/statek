@@ -910,5 +910,6 @@ class Job:
 
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+            self.append_chat_log({}, LLM_Response(text="")) 
             return True
         return False  # pylint: disable=no-member

@@ -643,6 +643,8 @@ def process_push_notifications(step_size=100, max_count=500):
             continue
         while processed < max_count:
             batch_size = min(step_size, max_count - processed)
+            if queue.is_empty():
+                break
             items = queue.pop_from_job_console(batch_size)
             if not items:
                 break
