@@ -1269,3 +1269,166 @@ class TestExecStepIsoDateParsing:
         await exec_step('_date_tool("my_date")', job)
         assert job.py_env.console is not None
         assert any("date:datetime.date(2025, 1, 1)" in line for line in job.py_env.console)
+
+
+# ---------------------------------------------------------------------------
+# Mock objects and helpers for weekend duty calendar tests
+# ---------------------------------------------------------------------------
+
+@db0.memo
+class _MockTimeSlot:
+    """Mock time slot with a start_time."""
+    def __init__(self, start_time):
+        self.start_time = start_time
+
+
+@db0.memo
+class _MockSlot:
+    """Mock duty slot wrapping a time slot."""
+    def __init__(self, start_time):
+        self.time_slot = _MockTimeSlot(start_time)
+
+
+@db0.memo
+class _MockUserCalendar:
+    """Mock user calendar that returns pre-configured slots."""
+    def __init__(self, slots):
+        self._slots = slots
+
+    def get_slots(self, start, end):  # pylint: disable=unused-argument
+        return self._slots
+
+
+# Module-level state used by the mock tool functions below.
+# Each test sets these before calling exec_step.
+_duty_calendar_return = None
+_duty_answers = []
+
+
+def _get_user_calendar_mock():
+    """Mock get_user_calendar that returns _duty_calendar_return."""
+    return _duty_calendar_return
+
+
+def _answer_mock(content):
+    """Mock answer that appends to _duty_answers."""
+    _duty_answers.append(content)
+
+
+# The multi-line code block under test
+_WEEKEND_DUTY_CODE = '''\
+from datetime import date
+import calendar as cal
+
+year = 2026
+months = [3, 4]
+target_weekdays = {5, 6}
+
+range_start = date(year, months[0], 1)
+last_month = months[-1]
+range_end = date(year, last_month, cal.monthrange(year, last_month)[1])
+
+user_calendar = get_user_calendar()
+
+if user_calendar is None:
+    answer("Nie znaleziono kalendarza dyżurów dla użytkownika.")
+else:
+    user_slots = user_calendar.get_slots(range_start, range_end)
+    matching_slots = [s for s in user_slots if s.time_slot.start_time.weekday() in target_weekdays]
+
+    if matching_slots:
+        DAYS_PL = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota", "niedziela"]
+        dates_str = ", ".join(
+            f"{DAYS_PL[s.time_slot.start_time.weekday()]} {s.time_slot.start_time.strftime('%d-%m-%Y')}"
+            for s in matching_slots
+        )
+        answer(f"Tak, masz weekendowe dyżury w następujące dni: {dates_str}.")
+    else:
+        answer("Nie masz dyżurów weekendowych w marcu ani kwietniu 2026 roku.")
+'''
+
+
+class TestExecStepWeekendDutyCalendar:
+    """Tests for exec_step executing weekend duty calendar code."""
+
+    def create_job(self, job_factory, job_params=None):
+        """Helper to create job with default params."""
+        return job_factory(job_params=job_params or DEFAULT_JOB_PARAMS)
+
+    def _setup(self, job, calendar_return):
+        """Configure module-level mocks and inject them into the job."""
+        global _duty_calendar_return, _duty_answers  # pylint: disable=global-statement
+        _duty_calendar_return = calendar_return
+        _duty_answers = []
+        job.py_env.local_state = {
+            'get_user_calendar': _get_user_calendar_mock,
+            'answer': _answer_mock,
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_calendar_returns_not_found_message(self, job_factory):
+        """When get_user_calendar returns None, answer reports no calendar found."""
+        job = self.create_job(job_factory)
+        self._setup(job, calendar_return=None)
+
+        await exec_step(_WEEKEND_DUTY_CODE, job)
+
+        assert len(_duty_answers) == 1
+        assert "Nie znaleziono kalendarza" in _duty_answers[0]
+
+    @pytest.mark.asyncio
+    async def test_no_weekend_slots_returns_empty_message(self, job_factory):
+        """When calendar has no weekend slots, answer reports no weekend duties."""
+        job = self.create_job(job_factory)
+        weekday_slots = [
+            _MockSlot(date(2026, 3, 2)),   # Monday
+            _MockSlot(date(2026, 3, 11)),   # Wednesday
+            _MockSlot(date(2026, 4, 6)),    # Monday
+        ]
+        self._setup(job, calendar_return=_MockUserCalendar(weekday_slots))
+
+        await exec_step(_WEEKEND_DUTY_CODE, job)
+
+        assert len(_duty_answers) == 1
+        assert "Nie masz dyżurów weekendowych" in _duty_answers[0]
+
+    @pytest.mark.asyncio
+    async def test_weekend_slots_listed_in_answer(self, job_factory):
+        """When calendar has weekend slots, answer lists them with Polish day names."""
+        job = self.create_job(job_factory)
+        weekend_slots = [
+            _MockSlot(date(2026, 3, 7)),    # Saturday
+            _MockSlot(date(2026, 3, 15)),   # Sunday
+            _MockSlot(date(2026, 4, 25)),   # Saturday
+        ]
+        self._setup(job, calendar_return=_MockUserCalendar(weekend_slots))
+
+        await exec_step(_WEEKEND_DUTY_CODE, job)
+
+        assert len(_duty_answers) == 1
+        answer_text = _duty_answers[0]
+        assert "Tak, masz weekendowe dyżury" in answer_text
+        assert "sobota 07-03-2026" in answer_text
+        assert "niedziela 15-03-2026" in answer_text
+        assert "sobota 25-04-2026" in answer_text
+
+    @pytest.mark.asyncio
+    async def test_mixed_slots_only_weekends_in_answer(self, job_factory):
+        """When calendar has both weekday and weekend slots, only weekends are reported."""
+        job = self.create_job(job_factory)
+        mixed_slots = [
+            _MockSlot(date(2026, 3, 2)),    # Monday
+            _MockSlot(date(2026, 3, 7)),    # Saturday
+            _MockSlot(date(2026, 3, 10)),   # Tuesday
+            _MockSlot(date(2026, 4, 5)),    # Sunday
+        ]
+        self._setup(job, calendar_return=_MockUserCalendar(mixed_slots))
+
+        await exec_step(_WEEKEND_DUTY_CODE, job)
+
+        assert len(_duty_answers) == 1
+        answer_text = _duty_answers[0]
+        assert "sobota 07-03-2026" in answer_text
+        assert "niedziela 05-04-2026" in answer_text
+        assert "poniedziałek" not in answer_text
+        assert "wtorek" not in answer_text
