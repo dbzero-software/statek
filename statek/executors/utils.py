@@ -26,6 +26,26 @@ from statek.utils import CodeBlock, CallSpec, format_default_llm_repr, get_curre
 
 STATEK_LOGGER = get_statek_logger()
 
+
+class _MirrorDict(dict):
+    """Dict subclass that mirrors writes to a target dict.
+
+    Used as the local namespace in exec() so that variable assignments inside
+    compound statements (if/for/while) are immediately visible in the global
+    namespace — which is the only namespace that generator expressions and
+    comprehensions can see.
+    """
+
+    def __init__(self, *args, target=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._target = target
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if self._target is not None:
+            self._target[key] = value
+
+
 def _wrap_param (param):
     if isinstance(param, FutureResult):
         value = param.value
@@ -299,17 +319,27 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
                     # This ensures nested scopes (comprehensions, generators) can access local vars
                     # since they only see global_context, not local_context
                     global_context.update(local_context)
-                    
+
+                    # Wrap local_context so that assignments inside compound
+                    # statements (if/for/while) are mirrored to global_context
+                    # immediately, making them visible to generator expressions
+                    # and comprehensions which create nested scopes that only
+                    # see the global dict.
+                    sync_local = _MirrorDict(local_context, target=global_context)
+
                     # If it's an expression, capture and print the result
                     if is_expression:
                         # Evaluate the expression and print the result if it's not None
                         result = eval(compile(ast.Expression(body=node.value), filename="<string>", mode="eval"),
-                                     global_context, local_context)
+                                     global_context, sync_local)
                         if result is not None:
                             job.console_append(format_default_llm_repr(result))
                     else:
-                        exec(code_obj, global_context, local_context)
-                    
+                        exec(code_obj, global_context, sync_local)
+
+                    # Merge assignments back into the real local_context
+                    local_context.update(sync_local)
+
                     # Sync back after execution: copy any new/updated items from local to global
                     global_context.update(local_context)
                     
