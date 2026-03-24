@@ -1,11 +1,12 @@
 """Tests for Job class."""
 
 import types
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import dbzero as db0
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import Job, JobDefError, JobStatus
 from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats
+from statek.settings import ChatStyle
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -916,3 +917,104 @@ class TestJobDefUpdateWarmupCode:
         assert len(warmup) == 2
         assert warmup[0] == "a = 1"
         assert warmup[1] == "b = 2"
+
+
+class TestJobDefChatStyle:
+    """Tests for JobDef._chat_style field and chat_style property."""
+
+    def test_chat_style_defaults_to_none(self, job_def_factory):
+        """_chat_style is None by default."""
+        job_def = job_def_factory()
+        assert job_def._chat_style is None  # pylint: disable=protected-access
+
+    def test_chat_style_property_returns_job_level_when_set(self, job_def_factory):
+        """chat_style property returns the job-level value when explicitly set."""
+        job_def = job_def_factory()
+        job_def.set_chat_style(ChatStyle.CONSOLE)  # pylint: disable=no-member
+        assert job_def.chat_style == ChatStyle.CONSOLE  # pylint: disable=no-member
+
+    def test_chat_style_property_falls_back_to_settings(self, job_def_factory):
+        """chat_style property returns StatekSettings.chat_style when _chat_style is None."""
+        job_def = job_def_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.MARKDOWN  # pylint: disable=no-member
+        with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
+            assert job_def.chat_style == ChatStyle.MARKDOWN  # pylint: disable=no-member
+
+    def test_chat_style_property_returns_none_when_both_unset(self, job_def_factory):
+        """chat_style property returns None when neither job-level nor settings are set."""
+        job_def = job_def_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = None
+        with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
+            assert job_def.chat_style is None
+
+
+
+
+class TestJobWithUserLogItem:
+    """Tests for Job integration with UserLogItem and str in chat_log."""
+
+    def test_chat_log_accepts_str(self, job_factory):
+        """A plain str can be appended to chat_log."""
+        job = job_factory()
+        job.chat_log.append("user message")
+        assert job.chat_log[-1] == "user message"
+
+    def test_chat_log_accepts_user_log_item(self, job_factory):
+        """A UserLogItem can be appended to chat_log."""
+        job = job_factory()
+        item = UserLogItem(message="Hello")
+        job.chat_log.append(item)
+        assert job.chat_log[-1] is item
+
+    def test_num_turns_ignores_user_log_item(self, job_factory):
+        """num_turns only counts LLM_LogItem, not UserLogItem or str."""
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp1"))
+        job.chat_log.append(UserLogItem(message="follow-up"))
+        assert job.num_turns == 1
+
+    def test_last_response_skips_user_log_item(self, job_factory):
+        """last_response returns the last LLM response, not a UserLogItem."""
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp1"))
+        job.chat_log.append(UserLogItem(message="follow-up"))
+        assert job.last_response == "resp1"
+
+    def test_get_next_prompt_after_user_log_item(self, job_factory):
+        """get_next_prompt after a UserLogItem includes the user message."""
+        job = job_factory()
+        job.py_env.console_append("output1")
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="code1"))
+        job.chat_log.append(UserLogItem(message="Please continue"))
+        result = job.get_next_prompt()
+        assert "Please continue" in result
+
+    def test_get_next_prompt_after_str_message(self, job_factory):
+        """get_next_prompt after a str message includes it."""
+        job = job_factory()
+        job.py_env.console_append("output1")
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="code1"))
+        job.chat_log.append("Please continue")
+        result = job.get_next_prompt()
+        assert "Please continue" in result
+
+    def test_get_chat_history_includes_user_log_item(self, job_factory):
+        """get_chat_history yields UserLogItem message as a user turn."""
+        job = job_factory()
+        job.py_env.console_append("output1")
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="code1"))
+        job.chat_log.append(UserLogItem(message="next question"))
+        history = list(job.get_chat_history())
+        # The user message should appear in the history
+        assert any("next question" in h for h in history)
+
+    def test_get_chat_history_includes_str_message(self, job_factory):
+        """get_chat_history yields str message as a user turn."""
+        job = job_factory()
+        job.py_env.console_append("output1")
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="code1"))
+        job.chat_log.append("next question")
+        history = list(job.get_chat_history())
+        assert any("next question" in h for h in history)

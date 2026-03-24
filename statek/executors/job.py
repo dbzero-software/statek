@@ -90,6 +90,8 @@ class JobDef:
     job_params: Optional[Dict[str, Any]] = None
     # Optional warmup code (single block or sequence of blocks) executed before the first prompt
     warmup_code: Optional[Union[str, CodeBlock, Sequence[Union[str, CodeBlock]]]] = None
+    # Optional job-level chat style override (falls back to StatekSettings.chat_style)
+    _chat_style: Optional[ChatStyle] = None
 
     def __post_init__(self):
         if self.agent is not None:
@@ -130,6 +132,22 @@ class JobDef:
         if new_value != self.warmup_code:
             statek_log(f"updating warmup code: {new_value!r}", level='debug')
             self.warmup_code = new_value
+
+    def set_chat_style(self, chat_style: Optional[ChatStyle]) -> None:
+        """Update _chat_style only when the new value differs from the current one.
+
+        Args:
+            chat_style: New chat style value, or None to clear the override.
+        """
+        if self._chat_style != chat_style:
+            self._chat_style = chat_style
+
+    @property
+    def chat_style(self) -> Optional[ChatStyle]:
+        """Return the job-level chat style, or fall back to the system default from StatekSettings."""
+        if self._chat_style is not None:
+            return self._chat_style
+        return get_statek_settings().chat_style
 
     def prompt(self) -> str:
         """
@@ -317,13 +335,15 @@ class Job:
         """
         settings = get_statek_settings()
         raw_call = f"{call_spec.format()}  {_STATEK_TOOL_MARKER}"
-        if settings.chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+        if settings.chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
             call_line = f"```python\n{raw_call}\n```"
         else:
             call_line = raw_call
         if result:
             result_lines = result.split('\n')
-            if settings.chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+            if settings.chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+                result_text = '<CONSOLE>\n' + '\n'.join(result_lines) + '\n</CONSOLE>'
+            elif settings.chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
                 result_text = '\n'.join(result_lines)
             else:
                 result_text = '\n'.join(f"> {line}" for line in result_lines)
@@ -410,9 +430,8 @@ class Job:
         Returns:
             The formatted prompt string ready to be sent to the LLM
         """
-        settings = get_statek_settings()
-        chat_style = settings.chat_style
-        xml_tags = settings.get_xml_box_tags()
+        chat_style = self.job_def.chat_style
+        xml_tags = get_statek_settings().get_xml_box_tags()
         # Filter for LLM items only (WarmupLogItems don't count as LLM turns)
         llm_items = [item for item in self.chat_log if isinstance(item, LLM_LogItem)]
         if not llm_items:
@@ -491,15 +510,14 @@ class Job:
             in ```python fences; warmup blocks appear as assistant turns before the first
             LLM response.
         """
-        settings = get_statek_settings()
-        chat_style = settings.chat_style
-        xml_tags = settings.get_xml_box_tags()
+        chat_style = self.job_def.chat_style
+        xml_tags = get_statek_settings().get_xml_box_tags()
 
         def _wrap_code(resp: Union[str, CodeBlock]) -> str:
             code = resp.code if isinstance(resp, CodeBlock) else resp
             if not code:
                 return ""
-            if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+            if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
                 return f"```python\n{code}\n```"
             return code
 
@@ -722,7 +740,7 @@ class Job:
         of the current console output.
         """
         chat_style = get_statek_settings().chat_style
-        response_code = strip_markup(llm_resp.text, strict=(chat_style == ChatStyle.MARKDOWN))  # pylint: disable=no-member
+        response_code = strip_markup(llm_resp.text, strict=(chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)))  # pylint: disable=no-member
 
         if llm_resp.call_requests:
             tool_calls = [
@@ -743,7 +761,7 @@ class Job:
         resp_code = stored_resp.code if isinstance(stored_resp, CodeBlock) else stored_resp
         if resp_code is None:
             resp_code = ""
-        log_resp = f"```python\n{resp_code}\n```" if chat_style == ChatStyle.MARKDOWN else resp_code  # pylint: disable=no-member
+        log_resp = f"```python\n{resp_code}\n```" if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG) else resp_code  # pylint: disable=no-member
         self._log(log_resp)
 
     @property

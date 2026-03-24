@@ -145,7 +145,7 @@ def _format_items(items: List[str], chat_style: ChatStyle) -> str:
 def _format_code(code: str, chat_style: ChatStyle) -> str:
     if not code:
         return ""
-    if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+    if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
         return f"```python\n{code}\n```"
     return code
 
@@ -153,6 +153,8 @@ def _format_code(code: str, chat_style: ChatStyle) -> str:
 def _format_console(console: str, chat_style: ChatStyle) -> str:
     if not console:
         return ""
+    if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+        return f"<CONSOLE>\n{console}\n</CONSOLE>"
     if chat_style == ChatStyle.CONSOLE:  # pylint: disable=no-member
         return "\n".join(f"> {line}" for line in console.split("\n"))
     return console

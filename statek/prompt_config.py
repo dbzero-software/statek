@@ -79,7 +79,10 @@ def load_prompt_files(prompt_files_dir: str) -> Dict[str, PromptDef]:
 
 
 def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
-    """Update agent prompts from prompt definitions.
+    """Update agent prompts and associated JobDef fields from prompt definitions.
+
+    Updates agent system prompts and metadata, and propagates the CHAT_STYLE
+    metadata key to all JobDef instances associated with each agent.
 
     Args:
         prompt_defs: Dictionary of role -> PromptDef mappings
@@ -87,6 +90,8 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
     """
     import dbzero as db0  # pylint: disable=import-outside-toplevel
     from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel,cyclic-import
+    from statek.executors.job import JobDef  # pylint: disable=import-outside-toplevel,cyclic-import
+    from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
 
     # If agents not provided, find all agents in db0
     if agents is None:
@@ -107,3 +112,9 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
         # Update agent's metadata if changed
         if prompt_def.metadata:
             agent.update_metadata(prompt_def.metadata)
+
+        # Propagate CHAT_STYLE to associated JobDefs
+        chat_style_str = prompt_def.metadata.get('CHAT_STYLE') if prompt_def.metadata else None
+        new_chat_style = ChatStyle[chat_style_str.upper()] if chat_style_str else None  # pylint: disable=no-member
+        for job_def in db0.find(JobDef, agent):  # pylint: disable=no-member
+            job_def.set_chat_style(new_chat_style)
