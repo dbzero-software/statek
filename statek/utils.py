@@ -76,6 +76,21 @@ class CodeBlock:
                 return idx
         return None
 
+    def get_tool_calls(self, filter_fn: Callable) -> Optional[Sequence['CallSpec']]:
+        """Return tool calls matching *filter_fn*, or None if none match."""
+        if not self.tool_calls:
+            return None
+        matched = [tc for tc in self.tool_calls if filter_fn(tc)]
+        return matched or None
+
+    def get_regular_tool_calls(self) -> Optional[Sequence['CallSpec']]:
+        """Return non-CLI tool calls (everything except ``python_cli``)."""
+        return self.get_tool_calls(lambda cs: cs.func_name != "python_cli")
+
+    def get_cli_tool_calls(self) -> Optional[Sequence['CallSpec']]:
+        """Return only ``python_cli`` tool calls."""
+        return self.get_tool_calls(lambda cs: cs.func_name == "python_cli")
+
     def __hash__(self):
         tcs = tuple(self.tool_calls) if self.tool_calls else ()
         return hash((self.code, tcs))

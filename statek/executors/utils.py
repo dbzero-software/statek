@@ -5,7 +5,7 @@ import traceback
 import asyncio
 import builtins
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Union
+from typing import Callable, Optional, Sequence, Tuple, Union
 from contextlib import contextmanager
 import dbzero as db0
 
@@ -252,10 +252,92 @@ def _is_empty_code(code_str: Optional[str]) -> bool:
     return True
 
 
+def _exec_code_body(code_str: str, job: Job, global_context: dict,
+                    local_context: dict, output_fn: Callable,
+                    error_fn: Callable, print_fn: Callable = None,
+                    instr_num: Optional[int] = None):
+    """Shared execution body used by exec_step and exec_cli_step.
+
+    Parses *code_str*, transforms it, and executes each statement in order
+    inside the provided contexts.  Output produced by expression evaluation
+    is forwarded to *output_fn*; errors are forwarded to *error_fn*.
+
+    Args:
+        code_str: Python source code to execute.
+        job: Job providing the execution context.
+        global_context: mutable global namespace for exec/eval.
+        local_context: mutable local namespace for exec/eval.
+        output_fn: called with a single string when an expression produces a
+            non-None result (REPL-style echo).
+        error_fn: called with an error message string on exception.
+        print_fn: optional custom print function passed to
+            ``_setup_execution_context``; when *None* the default
+            job-console print is used.
+        instr_num: optional instruction index to resume from.
+    """
+    import types
+    initial_local_functions = {
+        key for key, value in local_context.items()
+        if isinstance(value, types.FunctionType)
+    }
+
+    with _setup_execution_context(job, global_context, local_context, print_fn=print_fn):
+        tree = ast.parse(code_str)
+        _ResilientTransformer().visit(tree)
+        ast.fix_missing_locations(tree)
+
+        start_instr = instr_num if instr_num is not None else 0
+
+        for idx, node in enumerate(tree.body):
+            if idx < start_instr:
+                continue
+
+            try:
+                is_expression = isinstance(node, ast.Expr)
+
+                wrapper = ast.Module(body=[node], type_ignores=[])
+                code_obj = compile(wrapper, filename="<string>", mode="exec")
+
+                global_context.update(local_context)
+                sync_local = _MirrorDict(local_context, target=global_context)
+
+                if is_expression:
+                    result = eval(
+                        compile(ast.Expression(body=node.value),
+                                filename="<string>", mode="eval"),
+                        global_context, sync_local)
+                    if result is not None:
+                        output_fn(format_default_llm_repr(result))
+                else:
+                    exec(code_obj, global_context, sync_local)
+
+                local_context.update(sync_local)
+                global_context.update(local_context)
+
+                newly_defined_functions = {
+                    name: func for name, func in local_context.items()
+                    if isinstance(func, types.FunctionType)
+                    and name not in initial_local_functions
+                }
+                for function_name in newly_defined_functions:
+                    del local_context[function_name]
+
+                if job.py_env.exit_status is not None:
+                    break
+            except FutureError as e:
+                if e.instr_num is None:
+                    e.instr_num = idx
+                raise
+            except Exception as e:
+                error_msg = f"{type(e).__name__}: {e}"
+                error_fn(error_msg)
+                raise
+
+
 async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) -> bool:
     """
     Execute a single step of code within the job's Python environment.
-    
+
     The function executes a single step defined as a Python code block within the job's context
     - i.e. globals, locals, console and exit_status. The execution results are reflected in the
     provided job's state.
@@ -267,16 +349,15 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
 
     Returns:
         True if the exit was called (program finished), False otherwise
-        
+
     Raises:
         FutureError: decorated with instr_num - execution needs to be suspended until
                      continuation criteria are satisfied
-                     
+
     Side effects:
         Console outputs (print results) are appended to _X_console
         local_state might be updated by the program
     """
-    # Global and local contexts needs to be dictionaries in order to be used with exec
     statek_log(f"Executing code step (instr_num={instr_num}):\n{code_str}", level='debug')
     if job.py_env.global_state is None:
         global_context = globals()
@@ -287,94 +368,140 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
     else:
         local_context = {key: value for key, value in job.py_env.local_state.items()}
 
-    # Track initial functions in local_context to avoid moving pre-existing ones
-    import types
-    initial_local_functions = {
-        key for key, value in local_context.items()
-        if isinstance(value, types.FunctionType)
-    }
-
-    # Use context manager to setup and cleanup execution environment
     try:
-        with _setup_execution_context(job, global_context, local_context):
-            tree = ast.parse(code_str)
-            _ResilientTransformer().visit(tree)
-            ast.fix_missing_locations(tree)
-
-            # Determine starting instruction number
-            start_instr = instr_num if instr_num is not None else 0
-            
-            for idx, node in enumerate(tree.body):
-                # Skip instructions before the starting point
-                if idx < start_instr:
-                    continue
-                    
-                try:
-                    # Check if this is a standalone expression (like REPL behavior)
-                    is_expression = isinstance(node, ast.Expr)
-                    
-                    wrapper = ast.Module(body=[node], type_ignores=[])
-                    code_obj = compile(wrapper, filename="<string>", mode="exec")
-                    
-                    # Sync local variables to global context before execution
-                    # This ensures nested scopes (comprehensions, generators) can access local vars
-                    # since they only see global_context, not local_context
-                    global_context.update(local_context)
-
-                    # Wrap local_context so that assignments inside compound
-                    # statements (if/for/while) are mirrored to global_context
-                    # immediately, making them visible to generator expressions
-                    # and comprehensions which create nested scopes that only
-                    # see the global dict.
-                    sync_local = _MirrorDict(local_context, target=global_context)
-
-                    # If it's an expression, capture and print the result
-                    if is_expression:
-                        # Evaluate the expression and print the result if it's not None
-                        result = eval(compile(ast.Expression(body=node.value), filename="<string>", mode="eval"),
-                                     global_context, sync_local)
-                        if result is not None:
-                            job.console_append(format_default_llm_repr(result))
-                    else:
-                        exec(code_obj, global_context, sync_local)
-
-                    # Merge assignments back into the real local_context
-                    local_context.update(sync_local)
-
-                    # Sync back after execution: copy any new/updated items from local to global
-                    global_context.update(local_context)
-                    
-                    # Move newly created functions to global context permanently
-                    # Functions capture global_context as __globals__, so they need to be there
-                    # to see each other. Only move functions defined in this exec_step.
-                    newly_defined_functions = {
-                        name: func for name, func in local_context.items()
-                        if isinstance(func, types.FunctionType) and name not in initial_local_functions
-                    }
-                    for function_name in newly_defined_functions:
-                        del local_context[function_name]
-                    
-                    # Check for exit signal
-                    if job.py_env.exit_status is not None:
-                        break
-                    # Save updated local context back to job
-                except FutureError as e:
-                    # Decorate FutureError with instruction number if not already set
-                    if e.instr_num is None:
-                        e.instr_num = idx
-                    # Re-raise the decorated exception
-                    raise
-                except Exception as e:
-                    # Write error message to console and re-raise
-                    error_msg = f"{type(e).__name__}: {e}"
-                    job.console_append(error_msg, error_message=error_msg)
-                    raise
+        _exec_code_body(
+            code_str, job, global_context, local_context,
+            output_fn=lambda s: job.console_append(s),
+            error_fn=lambda msg: job.console_append(msg, error_message=msg),
+            instr_num=instr_num,
+        )
     finally:
-        # Always save the local state, even if exception is raised
-        # This happens after the context manager cleanup, so helper functions are removed
         job.py_env.local_state = local_context
-    
+
     return job.py_env.exit_status is None
+
+
+async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
+                        instr_num: Optional[int] = None) -> bool:
+    """Execute a code block submitted via a ``python_cli`` tool request.
+
+    Behaves like :func:`exec_step` — same context sharing, temporal-function
+    handling, and state mutation — but routes console output (print, expression
+    results, errors) to the provided *console_append* callback instead of the
+    job's own console.
+
+    Args:
+        code_str: Python code block to execute.
+        job: the Job providing the execution context.
+        console_append: callback receiving each console output line.
+        instr_num: optional instruction index to resume from.
+
+    Returns:
+        ``True`` if ``exit()`` was called (program finished), ``False``
+        otherwise.
+    """
+    statek_log(f"Executing CLI code step (instr_num={instr_num}):\n{code_str}", level='debug')
+    if job.py_env.global_state is None:
+        global_context = globals()
+    else:
+        global_context = {key: value for key, value in job.py_env.global_state.items()}
+    if job.py_env.local_state is None:
+        local_context = {}
+    else:
+        local_context = {key: value for key, value in job.py_env.local_state.items()}
+
+    def cli_print(*args, sep=' ', end='\n', **kwargs):
+        output = sep.join(_fmt_print_arg(arg) for arg in args) + end
+        console_append(output.rstrip('\n'))
+
+    try:
+        _exec_code_body(
+            code_str, job, global_context, local_context,
+            output_fn=console_append,
+            error_fn=console_append,
+            print_fn=cli_print,
+            instr_num=instr_num,
+        )
+    finally:
+        job.py_env.local_state = local_context
+
+    return job.py_env.exit_status is not None
+
+
+async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
+                         console_append: Callable,
+                         instr_num: Optional[Union[int, Tuple[int, int]]] = None) -> bool:
+    """Execute regular code and any ``python_cli`` tool calls from a code block.
+
+    First executes the regular code (if present) via :func:`exec_step`, then
+    iterates over CLI tool calls (see :meth:`CodeBlock.get_cli_tool_calls`)
+    and executes each via :func:`exec_cli_step`.  Execution stops after the
+    first ``exit()`` call.
+
+    When *instr_num* is an ``int`` it is forwarded to :func:`exec_step` for
+    regular-code continuation.  When it is a ``(cli_step, instr)`` tuple,
+    regular code is skipped entirely and execution resumes at the indicated
+    CLI step and instruction.
+
+    If a :class:`FutureError` is raised from a CLI step, its ``instr_num``
+    is rewritten to a ``(cli_step_index, instr_num)`` tuple so that the
+    caller can resume at the correct position.
+
+    Args:
+        code: plain string or :class:`CodeBlock` to execute.
+        job: the Job providing the execution context.
+        console_append: callback ``(cli_tool_index, text)`` for CLI output.
+        instr_num: optional continuation position.
+
+    Returns:
+        ``True`` if ``exit()`` was called, ``False`` otherwise.
+    """
+    if isinstance(code, str):
+        code = CodeBlock(code=code)
+
+    # Determine whether to run regular code and where to start CLI steps
+    skip_regular = isinstance(instr_num, tuple)
+    regular_instr_num = None if skip_regular else instr_num
+    cli_start_idx = instr_num[0] if skip_regular else 0
+    cli_instr_num = instr_num[1] if skip_regular else None
+
+    # --- regular code ---
+    if not skip_regular and not _is_empty_code(code.code):
+        exited = not await exec_step(code.code, job, instr_num=regular_instr_num)
+        if exited:
+            return True
+
+    # --- CLI tool calls ---
+    cli_calls = code.get_cli_tool_calls()
+    if not cli_calls:
+        return job.py_env.exit_status is not None
+
+    for cli_idx, call_spec in enumerate(cli_calls):
+        if cli_idx < cli_start_idx:
+            continue
+
+        cli_code = call_spec.kwargs.get("code") if call_spec.kwargs else None
+        if _is_empty_code(cli_code):
+            cli_instr_num = None
+            continue
+
+        step_instr = cli_instr_num if cli_idx == cli_start_idx else None
+        cli_instr_num = None  # only applies to the first resumed step
+
+        try:
+            exited = await exec_cli_step(
+                cli_code, job,
+                console_append=lambda s, _idx=cli_idx: console_append(_idx, s),
+                instr_num=step_instr,
+            )
+        except FutureError as e:
+            e.instr_num = (cli_idx, e.instr_num)
+            raise
+
+        if exited:
+            return True
+
+    return job.py_env.exit_status is not None
 
 
 async def exec_tool(call_spec: CallSpec, job: Job) -> str:
@@ -586,27 +713,37 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             error_msg = "Error: no code submitted."
             job.console_append(error_msg, error_message=error_msg)
 
-        # Step 5: Execute tool calls if code block contains them and it's not a continuation
-        # Determine which chat_log_item to store results in
+        # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
         last_chat_log_item = job.chat_log[-1] if job.chat_log else None
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
-            for call_spec in code.tool_calls:
-                result = await exec_tool(call_spec, job)
-                if last_chat_log_item is not None:
-                    last_chat_log_item.push_tool_result(result)
-                job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
+            regular_calls = code.get_regular_tool_calls()
+            if regular_calls:
+                for call_spec in regular_calls:
+                    result = await exec_tool(call_spec, job)
+                    if last_chat_log_item is not None:
+                        last_chat_log_item.push_tool_result(result)
+                    job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
 
-        # Step 6: Execute the code using exec_step
-        # Pass next_instr_num if resuming from SUSPENDED
-        # Skip execution entirely when code is None/empty (tool-calls-only block)
+        # Step 6: Execute code and CLI tool calls using exec_all_steps
+        cli_outputs = {}  # cli_idx -> list of output lines
+
+        def _cli_console_append(cli_idx, text):
+            cli_outputs.setdefault(cli_idx, []).append(text)
+
         try:
-            if code_str:
-                await exec_step(code_str, job, job.next_instr_num)
+            code_block = code if isinstance(code, CodeBlock) else CodeBlock(code=code)
+            await exec_all_steps(code_block, job, _cli_console_append, job.next_instr_num)
+
+            # Push CLI tool results into tool_log in order
+            if cli_outputs and last_chat_log_item is not None:
+                for cli_idx in sorted(cli_outputs):
+                    last_chat_log_item.push_tool_result("\n".join(cli_outputs[cli_idx]))
+
             # Clear continuation state after successful execution
             job.awaited_result = None
             job.next_instr_num = None
         except FutureError as e:
-            # Step 6: Handle FutureError - suspend job
+            # Handle FutureError - suspend job
             job.awaited_result = e.future_result
             job.next_instr_num = e.instr_num
             # Change status STARTED -> SUSPENDED (no change for WARMING_UP)
@@ -620,7 +757,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 job.job_def.set_error(e)
                 job.set_status(JobStatus.DONE)
                 # Provide minimal context for error handlers
-                _STATEK_CTX = {'job': job} 
+                _STATEK_CTX = {'job': job}  # noqa: F841
                 handle_critical_error(e)
                 return True
             # Non-warmup exception: already printed to console by exec_step

@@ -984,3 +984,96 @@ class TestRunJobStepEmptyCodeBlock:
             assert "'my_result'" in tool_log
         else:
             assert "'my_result'" in tool_log[0]
+
+
+class TestRunJobStepCliToolCalls:
+    """Tests for CLI (python_cli) tool call execution via exec_all_steps."""
+
+    @pytest.mark.asyncio
+    async def test_cli_tool_output_stored_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli tool call output is captured into the WarmupLogItem's tool_log."""
+        cs = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-hello")'})
+        warmup_blocks = [CodeBlock(code='x = 1', tool_calls=[cs]), 'exit("ok")']
+        agent = Agent(role="cli_tl", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_blocks)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) == 1
+        tool_log = warmup_items[0].tool_log
+        assert tool_log is not None
+        if isinstance(tool_log, str):
+            assert "cli-hello" in tool_log
+        else:
+            assert any("cli-hello" in entry for entry in tool_log)
+
+    @pytest.mark.asyncio
+    async def test_regular_tool_executed_cli_tool_not_via_exec_tool(self, db0_fixture):  # pylint: disable=unused-argument
+        """Regular tools run through exec_tool; python_cli tools do not."""
+        exec_tool_calls = []
+
+        def tracking_tool():
+            exec_tool_calls.append("called")
+            return "regular_result"
+
+        cs_regular = CallSpec(id="R-001", func_name="tracking_tool", args=[], kwargs={})
+        cs_cli = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'x = 1'})
+        warmup_code = [CodeBlock(code='y = 2', tool_calls=[cs_regular, cs_cli]), 'exit("ok")']
+        agent = Agent(role="mixed_tc", _system_prompt="Test", _tools=[])
+        agent.context["tracking_tool"] = tracking_tool
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        # Regular tool was called via exec_tool
+        assert len(exec_tool_calls) == 1
+        # CLI tool still ran (x=1 in state)
+        assert job.py_env.local_state.get('x') == 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_tool_results_in_tool_log_order(self, db0_fixture):  # pylint: disable=unused-argument
+        """Tool_log entries follow tool_calls order: regular result, then CLI result."""
+        cs_regular = CallSpec(id="R-001", func_name="my_tool", args=[], kwargs={})
+        cs_cli = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-out")'})
+        warmup_code = [CodeBlock(code='x = 1', tool_calls=[cs_regular, cs_cli]), 'exit("ok")']
+        agent = Agent(role="mixed_order", _system_prompt="Test", _tools=[])
+        agent.context["my_tool"] = lambda: "regular_out"
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) == 1
+        tool_log = warmup_items[0].tool_log
+        assert not isinstance(tool_log, str)
+        assert len(tool_log) == 2
+        assert "'regular_out'" in tool_log[0]
+        assert "cli-out" in tool_log[1]
+
+    @pytest.mark.asyncio
+    async def test_cli_future_error_stores_tuple_instr_num(self, db0_fixture):  # pylint: disable=unused-argument
+        """FutureError from a python_cli step stores a tuple next_instr_num on the job."""
+        cs = CallSpec(id="C-001", func_name="python_cli",
+                      kwargs={"code": "result = future_val\nprint(result)"})
+        warmup_code = CodeBlock(code=None, tool_calls=[cs])
+        agent = Agent(role="cli_future", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+        job.py_env.local_state = {'future_val': create_future_not_ready()}
+
+        result = await run_job_step(job)
+
+        assert result is False
+        assert job.next_instr_num is not None
+        assert job.next_instr_num[0] == 0  # first CLI step
+        assert job.next_instr_num[1] is not None  # instruction within CLI step
