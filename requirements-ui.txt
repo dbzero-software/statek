@@ -1,5 +1,5 @@
 nicegui==2.24.2
-dbzero==0.1.8
+dbzero==0.1.9
 pydantic-settings==2.12.0
 markdown==3.10.2
 weasyprint==68.1

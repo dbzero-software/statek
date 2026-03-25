@@ -1,4 +1,4 @@
-"""Utility functions for statek package."""
+"""Utility functions for statek package."""  # pylint: disable=too-many-lines
 
 import ast
 import difflib
@@ -10,7 +10,7 @@ from collections import namedtuple
 from dataclasses import dataclass, is_dataclass, fields as dataclass_fields
 from datetime import datetime
 from decimal import Decimal
-from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Type, Any,
+from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Tuple, Type, Any,
                     get_type_hints, get_origin, get_args, Union, ForwardRef)
 import dbzero as db0
 
@@ -236,6 +236,47 @@ def strip_markup(input: str, strict: bool) -> str:  # pylint: disable=redefined-
         else:
             result_parts.append(stripped)
     return '\n'.join(result_parts)
+
+
+def extract_dialog(input: str) -> Optional[str]:  # pylint: disable=redefined-builtin
+    """Extract the free-text / dialog part from LLM output, stripping markdown blocks.
+
+    This is the opposite of strip_markup: it returns only the text *outside*
+    any markdown code fences, cleaned up from extra whitespace.
+
+    Args:
+        input: The input text (possibly containing markdown blocks).
+
+    Returns:
+        The free-text portion of the input, or None if there is no dialog text.
+    """
+    parts = re.split(r'```\w*\n?', input, flags=re.DOTALL)
+    text_parts = []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            cleaned = ' '.join(part.split())
+            if cleaned:
+                text_parts.append(cleaned)
+    result = ' '.join(text_parts).strip()
+    return result or None
+
+
+def parse_md_dialog(input: str) -> Iterable[Tuple[str, Optional[str]]]:  # pylint: disable=redefined-builtin
+    """Parse LLM-generated output into (body, media) tuples for message delivery.
+
+    Chains extract_dialog (to strip markdown blocks) with extract_media
+    (to split body text from media paths).
+
+    Args:
+        input: The LLM generated text to be processed.
+
+    Yields:
+        (body, media) tuples where either or both may be None.
+    """
+    dialog = extract_dialog(input)
+    if dialog is None:
+        return
+    yield from extract_media(dialog)
 
 
 def block_comment(text: str) -> str:
@@ -543,6 +584,9 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
 def _fmt_console_lines(lines: List[str], chat_style) -> str:
     """Format a slice of console lines according to chat_style."""
     from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+    if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+        joined = "\n".join(lines)
+        return f"<CONSOLE>\n{joined}\n</CONSOLE>"
     if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
         return "\n".join(lines)
     return "\n".join(f"> {line}" for line in lines)
@@ -583,7 +627,7 @@ def prompt_append_console(  # pylint: disable=too-many-arguments,too-many-positi
     from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
     # In MARKDOWN mode wrap the prompt code in python fences; otherwise use as-is
     if prompt:
-        if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+        if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
             result = f"```python\n{prompt}\n```"
         else:
             result = prompt
@@ -995,3 +1039,34 @@ def _format_object_llm(class_name: str, members: Dict[str, Any],
         parts.append('...')
 
     return f"{class_name}({','.join(parts)})"
+
+
+# Media path pattern: no whitespace, at least one folder separator, 3-char extension
+_MEDIA_PATH_RE = re.compile(r'^/?(?:\S+/)+\S+\.\w{3}$')
+
+
+def extract_media(text: str) -> Iterable[Tuple[str, Optional[str]]]:
+    """Parse text into (body, media) tuples.
+
+    Media paths are tokens that contain at least one folder separator and end
+    with a 3-character extension.  Extra whitespace is eliminated during parsing.
+
+    Args:
+        text: The input string to parse.
+
+    Yields:
+        (body, media) tuples where *media* is a file path or None for the
+        trailing body fragment.
+    """
+    tokens = text.split()
+    body_parts: List[str] = []
+
+    for token in tokens:
+        if _MEDIA_PATH_RE.match(token):
+            yield (" ".join(body_parts), token)
+            body_parts = []
+        else:
+            body_parts.append(token)
+
+    if body_parts:
+        yield (" ".join(body_parts), None)

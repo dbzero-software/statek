@@ -18,6 +18,7 @@ Configuration via environment variables:
 import argparse
 import logging
 import os
+import secrets
 import sys
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,10 @@ def _parse_args() -> argparse.Namespace:
                         metavar='PREFIX',
                         help='Open an additional db0 prefix for read access '
                              '(may be repeated, e.g. --open-prefix /Org/proj/env/data)')
+    parser.add_argument('--dangerously-skip-auth', action='store_true',
+                        help='Disable authentication entirely (development only)')
+    parser.add_argument('--impersonate', default=None, metavar='EMAIL',
+                        help='Impersonate a user by email (only valid with --dangerously-skip-auth)')
     args, _ = parser.parse_known_args()
     return args
 
@@ -77,6 +82,57 @@ for _mod_name in _args.imports:
         log.info('Imported external module: %s', _mod_name)
     except Exception:  # pylint: disable=broad-except
         log.warning('Failed to import external module: %s', _mod_name, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Authentication (OIDC / Cognito — super-admin only)
+# ---------------------------------------------------------------------------
+
+from web_ui.auth import setup_oidc_auth  # noqa: E402
+from web_ui.auth.settings import StatekUISettings  # noqa: E402
+
+_auth_settings = StatekUISettings()
+
+
+def _check_super_admin(auth_client, request) -> bool:
+    """Allow access only to users whose Cognito ID token contains the super-admin group.
+
+    When auth is skipped (dev mode), access is always granted.
+    """
+    if auth_client is None:
+        return True  # auth disabled (--dangerously-skip-auth)
+
+    # EasyOIDC stores the ID token; decode it to read the ``cognito:groups`` claim.
+    import jwt as pyjwt  # pylint: disable=import-outside-toplevel
+    id_token = auth_client._get_current_token()  # pylint: disable=protected-access
+    if id_token is None:
+        return False
+
+    raw_id = id_token.get('id_token')
+    if not raw_id:
+        return False
+
+    try:
+        # Decode without verification — the OIDC middleware already validated the token.
+        claims = pyjwt.decode(raw_id, options={"verify_signature": False})
+    except Exception:
+        log.warning("Failed to decode ID token for super-admin check", exc_info=True)
+        return False
+
+    groups = claims.get('cognito:groups', [])
+    required = _auth_settings.required_cognito_group
+    return required in groups
+
+
+_oidc_client = setup_oidc_auth(
+    nicegui_app=app,
+    settings=_auth_settings,
+    skip_auth=_args.dangerously_skip_auth,
+    impersonate=_args.impersonate,
+    session_file='/tmp/statek_webui_sessions',
+    resolve_user=False,
+    access_check=_check_super_admin,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +308,9 @@ def _create_header() -> None:
         ui.label('Statek Dashboard').classes('text-lg font-semibold tracking-wide')
         ui.space()
         ui.label('read-only').classes('text-xs opacity-60 font-mono')
+        if _oidc_client is not None:
+            ui.button(icon='logout', on_click=lambda: ui.navigate.to('/signout')) \
+                .props('flat round color=white').tooltip('Sign out')
 
 
 def _create_sidebar() -> None:
@@ -303,5 +362,5 @@ if __name__ == '__main__':
         reload=False,
         show_welcome_message=False,
         loop='asyncio',
-        storage_secret='statek-dashboard-secret',
+        storage_secret=_auth_settings.cookie_secret_key or secrets.token_hex(32),
     )

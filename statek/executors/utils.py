@@ -544,7 +544,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Log warmup block before execution
         if job.status == JobStatus.WARMING_UP and code_str:
             chat_style = get_statek_settings().chat_style
-            log_code = f"```python\n{code_str}\n```" if chat_style == ChatStyle.MARKDOWN else code_str  # pylint: disable=no-member
+            log_code = f"```python\n{code_str}\n```" if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG) else code_str  # pylint: disable=no-member
             job._log(log_code)  # pylint: disable=protected-access
 
         # Check for empty code submission (no executable code and no tool calls)

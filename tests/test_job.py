@@ -1,11 +1,12 @@
 """Tests for Job class."""
 
 import types
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import dbzero as db0
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import Job, JobDefError, JobStatus
 from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats
+from statek.settings import ChatStyle
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -916,3 +917,34 @@ class TestJobDefUpdateWarmupCode:
         assert len(warmup) == 2
         assert warmup[0] == "a = 1"
         assert warmup[1] == "b = 2"
+
+
+class TestJobDefChatStyle:
+    """Tests for JobDef._chat_style field and chat_style property."""
+
+    def test_chat_style_defaults_to_none(self, job_def_factory):
+        """_chat_style is None by default."""
+        job_def = job_def_factory()
+        assert job_def._chat_style is None  # pylint: disable=protected-access
+
+    def test_chat_style_property_returns_job_level_when_set(self, job_def_factory):
+        """chat_style property returns the job-level value when explicitly set."""
+        job_def = job_def_factory()
+        job_def.set_chat_style(ChatStyle.CONSOLE)  # pylint: disable=no-member
+        assert job_def.chat_style == ChatStyle.CONSOLE  # pylint: disable=no-member
+
+    def test_chat_style_property_falls_back_to_settings(self, job_def_factory):
+        """chat_style property returns StatekSettings.chat_style when _chat_style is None."""
+        job_def = job_def_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.MARKDOWN  # pylint: disable=no-member
+        with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
+            assert job_def.chat_style == ChatStyle.MARKDOWN  # pylint: disable=no-member
+
+    def test_chat_style_property_returns_none_when_both_unset(self, job_def_factory):
+        """chat_style property returns None when neither job-level nor settings are set."""
+        job_def = job_def_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = None
+        with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
+            assert job_def.chat_style is None

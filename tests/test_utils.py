@@ -4,7 +4,8 @@
 from typing import Union, List, Dict, Optional, Iterable, ForwardRef
 import dbzero as db0
 from statek.utils import (format_callable_decl,
-                          prompt_append_console, block_comment, strip_markup)
+                          prompt_append_console, block_comment, strip_markup,
+                          extract_media, extract_dialog, parse_md_dialog)
 from statek.future import temporal, FutureResult
 from statek.settings import ChatStyle
 
@@ -226,6 +227,39 @@ def test_prompt_append_console_style_markdown():
         '```python\nprint(user)\nprint(clock.now())\n```\n'
         'User(name = "Kowalski Adam")\n2026-01-03 12:13:32'
     )
+
+
+def test_prompt_append_console_style_md_dialog():
+    """MD_DIALOG style: prompt in fences, console wrapped in <CONSOLE> tags."""
+    console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
+    prompt = 'print(user)\nprint(clock.now())'
+    result = prompt_append_console(console, ChatStyle.MD_DIALOG, prompt)
+
+    assert result == (
+        '```python\nprint(user)\nprint(clock.now())\n```\n'
+        '<CONSOLE>\nUser(name = "Kowalski Adam")\n2026-01-03 12:13:32\n</CONSOLE>'
+    )
+
+
+def test_prompt_append_console_md_dialog_no_prompt():
+    """MD_DIALOG without prompt: only <CONSOLE>-wrapped console output."""
+    console = ['2026-03-18 14:31']
+    result = prompt_append_console(console, ChatStyle.MD_DIALOG)
+    assert result == '<CONSOLE>\n2026-03-18 14:31\n</CONSOLE>'
+
+
+def test_prompt_append_console_md_dialog_empty_console():
+    """MD_DIALOG with empty console returns prompt only."""
+    result = prompt_append_console([], ChatStyle.MD_DIALOG, 'print(x)')
+    assert result == '```python\nprint(x)\n```'
+
+
+def test_prompt_append_console_md_dialog_xml_tags_stack():
+    """MD_DIALOG <CONSOLE> wrapping stacks with xml_tags boxing."""
+    console = ['output']
+    result = prompt_append_console(
+        console, ChatStyle.MD_DIALOG, xml_tags={"console": "outer"})
+    assert result == '<outer>\n<CONSOLE>\noutput\n</CONSOLE>\n</outer>'
 
 
 def test_prompt_append_console_xml_tags_none_no_boxing():
@@ -461,3 +495,127 @@ def test_strip_markup_strict_non_python_fence_commented():
     input_text = 'Here is the code:\n```\nprint("hello")\n```'
     result = strip_markup(input_text, strict=True)
     assert result == '# Here is the code:\n# ```\n# print("hello")\n# ```'
+
+
+# ---------------------------------------------------------------------------
+# extract_media
+# ---------------------------------------------------------------------------
+
+class TestExtractMedia:
+    """Tests for extract_media utility."""
+
+    def test_body_and_media_interleaved(self):
+        """Mixed body text and media paths are split into (body, media) tuples."""
+        text = (
+            "Here's your calendar for march: gen/1234abc.svg \n"
+            "and this is for april : gen/1235abc.svg gen/1236abc.svg Bye !"
+        )
+        result = list(extract_media(text))
+        assert result == [
+            ("Here's your calendar for march:", "gen/1234abc.svg"),
+            ("and this is for april :", "gen/1235abc.svg"),
+            ("", "gen/1236abc.svg"),
+            ("Bye !", None),
+        ]
+
+    def test_no_media(self):
+        """Input without media paths yields a single (body, None) tuple."""
+        result = list(extract_media("Hello world"))
+        assert result == [("Hello world", None)]
+
+    def test_only_media(self):
+        """Input that is just a media path yields ('', media)."""
+        result = list(extract_media("images/photo.png"))
+        assert result == [("", "images/photo.png")]
+
+    def test_multiple_media_no_body(self):
+        """Consecutive media paths yield ('', media) for each."""
+        result = list(extract_media("a/b.svg c/d.png"))
+        assert result == [("", "a/b.svg"), ("", "c/d.png")]
+
+    def test_extra_whitespace_eliminated(self):
+        """Extra spaces and newlines between tokens are normalized."""
+        result = list(extract_media("Hello   world   dir/img.jpg   done"))
+        assert result == [("Hello world", "dir/img.jpg"), ("done", None)]
+
+    def test_empty_input(self):
+        """Empty string yields no tuples."""
+        assert not list(extract_media(""))
+
+    def test_absolute_path(self):
+        """Absolute file paths are recognized as media."""
+        result = list(extract_media("See /tmp/output/chart.svg here"))
+        assert result == [("See", "/tmp/output/chart.svg"), ("here", None)]
+
+
+# ---------------------------------------------------------------------------
+# extract_dialog
+# ---------------------------------------------------------------------------
+
+class TestExtractDialog:
+    """Tests for extract_dialog utility."""
+
+    def test_no_code_blocks(self):
+        """Plain text without markdown blocks is returned as-is."""
+        assert extract_dialog("Hello world") == "Hello world"
+
+    def test_code_block_only(self):
+        """Input that is only a code block returns None."""
+        assert extract_dialog('```python\nprint("Hello")\n```') is None
+
+    def test_text_around_code_block(self):
+        """Text before and after a code block is extracted and joined."""
+        text = 'Let me think about this.\n```python\nprint("Hello")\n```\nDone!'
+        assert extract_dialog(text) == "Let me think about this. Done!"
+
+    def test_text_before_code_block(self):
+        """Text before a code block is extracted."""
+        text = 'Here is the solution:\n```python\nx = 42\n```'
+        assert extract_dialog(text) == "Here is the solution:"
+
+    def test_multiple_code_blocks(self):
+        """Text between multiple code blocks is extracted."""
+        text = (
+            'First, define a variable:\n'
+            '```python\nx = 42\n```\n'
+            'Now print it:\n'
+            '```python\nprint(x)\n```'
+        )
+        assert extract_dialog(text) == "First, define a variable: Now print it:"
+
+
+# ---------------------------------------------------------------------------
+# parse_md_dialog
+# ---------------------------------------------------------------------------
+
+class TestParseMdDialog:
+    """Tests for parse_md_dialog utility."""
+
+    def test_text_only(self):
+        """Plain text without code blocks or media yields (body, None)."""
+        result = list(parse_md_dialog("Hello world"))
+        assert result == [("Hello world", None)]
+
+    def test_code_block_only(self):
+        """Input that is only a code block yields nothing."""
+        result = list(parse_md_dialog('```python\nprint("hi")\n```'))
+        assert not result
+
+    def test_text_with_media(self):
+        """Dialog text containing a media path is split correctly."""
+        text = 'Here is your chart: gen/chart.svg\n```python\ncode\n```'
+        result = list(parse_md_dialog(text))
+        assert result == [("Here is your chart:", "gen/chart.svg")]
+
+    def test_text_and_media_interleaved(self):
+        """Dialog with interleaved body and media paths."""
+        text = (
+            'First chart: gen/a.svg and second: gen/b.svg Done!\n'
+            '```python\ncode\n```'
+        )
+        result = list(parse_md_dialog(text))
+        assert result == [
+            ("First chart:", "gen/a.svg"),
+            ("and second:", "gen/b.svg"),
+            ("Done!", None),
+        ]

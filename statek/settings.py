@@ -6,19 +6,9 @@ from functools import lru_cache
 from typing import Optional, Dict
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from dbzero import enum
-
+from statek.chat_style import ChatStyle  # noqa: F401  # re-exported for backward compatibility
 from statek.prompt_config import PromptDef, load_prompt_files
 from statek.docstring import ACL_Item, Statek_ACL
-
-
-@enum(values=["CONSOLE", "MARKDOWN"])
-class ChatStyle:  # pylint: disable=too-few-public-methods
-    """Defines how console outputs are presented to the LLM.
-
-    CONSOLE - console results are prefixed with ">".
-    MARKDOWN - console output is presented as-is.
-    """
 
 
 class LLM_API_Settings(BaseSettings):
