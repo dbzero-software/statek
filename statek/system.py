@@ -11,6 +11,7 @@ import dbzero as db0
 from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
 from .utils import find_locals, get_current_agent_name, get_current_job
+from .chat_style import ChatStyle
 
 
 _TOOL_REGISTRY: list[Callable] = []
@@ -192,7 +193,7 @@ def docs_style(f=None, *, brief_types: bool = False):
     return _decorate(f)
 
 
-def tool(f=None, *, system: bool = False, error_handler=None): # pylint: disable=W0621
+def tool(f=None, *, system: bool = False, target=None, error_handler=None): # pylint: disable=W0621
     """Marks a function as a tool for LLM agent.
 
     Can be used as ``@tool`` or ``@tool(system=True)``.
@@ -200,6 +201,10 @@ def tool(f=None, *, system: bool = False, error_handler=None): # pylint: disable
     Args:
         system: When True, the tool is classified as a system-level tool
             (e.g. docs, brief) rather than an application-level tool.
+        target: Optional ChatStyle (or list of ChatStyles) this tool is
+            intended for.  When set, ``find_tools`` and ``select_tools``
+            can filter by chat style so that only matching tools are
+            returned.  Tools without a target are considered universal.
         error_handler: Optional error-handling callable to associate with this
             tool.  Must be decorated with :func:`error_handler` and satisfy the
             error-handler protocol (name starting with ``_``, accepting
@@ -257,6 +262,7 @@ def tool(f=None, *, system: bool = False, error_handler=None): # pylint: disable
             return result
 
         wrapper.tool_system = system
+        wrapper.tool_target = target
         _TOOL_REGISTRY.append(wrapper)
         return wrapper
 
@@ -331,27 +337,50 @@ def is_valid_error_handler(funct: Callable) -> bool:
     return True
 
 
-def find_tools(scope: Optional[str] = None) -> Iterable[Callable]:
-    """Returns registered tools, optionally filtered by scope.
+def _matches_chat_style(tool_func: Callable, chat_style) -> bool:
+    """Return True if *tool_func* is compatible with *chat_style*.
+
+    A tool matches when its ``tool_target`` is ``None`` (universal) or
+    when *chat_style* is contained in the target (single value or list).
+    """
+    target = getattr(tool_func, 'tool_target', None)
+    if target is None:
+        return True
+    if isinstance(target, (list, tuple)):
+        return chat_style in target
+    return target == chat_style
+
+
+def find_tools(scope: Optional[str] = None,
+               chat_style=None) -> Iterable[Callable]:
+    """Returns registered tools, optionally filtered by scope and chat style.
 
     Args:
         scope: Optional scope filter.
             ``"SYSTEM"`` returns only tools decorated with ``system=True``.
             ``"APPLICATION"`` returns only non-system tools.
             ``None`` returns all registered tools.
+        chat_style: Optional target chat style.  When provided, only tools
+            whose ``tool_target`` is ``None`` (universal) or includes
+            *chat_style* are returned.
 
     Returns:
         An iterable of tool callables matching the requested scope.
     """
     if scope == "SYSTEM":
-        return [t for t in _TOOL_REGISTRY if t.tool_system]
-    if scope == "APPLICATION":
-        return [t for t in _TOOL_REGISTRY if not t.tool_system]
-    return list(_TOOL_REGISTRY)
+        result = [t for t in _TOOL_REGISTRY if t.tool_system]
+    elif scope == "APPLICATION":
+        result = [t for t in _TOOL_REGISTRY if not t.tool_system]
+    else:
+        result = list(_TOOL_REGISTRY)
+    if chat_style is not None:
+        result = [t for t in result if _matches_chat_style(t, chat_style)]
+    return result
 
 
-def select_tools(tools: Iterable[Callable], scope: str) -> Iterable[Callable]:
-    """Select tools from an iterable by the requested scope.
+def select_tools(tools: Iterable[Callable], scope: str,
+                  chat_style=None) -> Iterable[Callable]:
+    """Select tools from an iterable by the requested scope and chat style.
 
     Filters the provided tools based on their ``tool_system`` attribute (set by
     the ``@tool`` decorator).  Callables that do not carry the attribute are
@@ -363,15 +392,22 @@ def select_tools(tools: Iterable[Callable], scope: str) -> Iterable[Callable]:
         scope: ``"SYSTEM"`` for system tools only,
                ``"APPLICATION"`` for non-system tools only,
                ``"ALL"`` or ``None`` to return all tools unchanged.
+        chat_style: Optional target chat style.  When provided, only tools
+            whose ``tool_target`` is ``None`` (universal) or includes
+            *chat_style* are returned.
 
     Returns:
         A list of callables from *tools* that match the requested scope.
     """
     if scope == "SYSTEM":
-        return [t for t in tools if getattr(t, "tool_system", False)]
-    if scope == "APPLICATION":
-        return [t for t in tools if not getattr(t, "tool_system", False)]
-    return list(tools)
+        result = [t for t in tools if getattr(t, "tool_system", False)]
+    elif scope == "APPLICATION":
+        result = [t for t in tools if not getattr(t, "tool_system", False)]
+    else:
+        result = list(tools)
+    if chat_style is not None:
+        result = [t for t in result if _matches_chat_style(t, chat_style)]
+    return result
 
 
 # pylint: disable=redefined-builtin
@@ -509,6 +545,29 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
         print(formatted)
     except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"{type(e).__name__}: {e}")
+
+
+@tool(system=True, target=ChatStyle.DIRECT)  # pylint: disable=no-member
+def python_cli(code: str, **kwargs):  # pylint: disable=unused-argument
+    """Execute Python code within the current job context.
+
+    This is the only way to run Python code in the DIRECT chat style — inline
+    code blocks in LLM responses are ignored.  The submitted code is executed
+    in the job's local context so it can read and modify local variables,
+    call temporal functions, and invoke other tools exactly as code submitted
+    via chat or markdown blocks would.
+
+    Executions are stateful: each invocation shares and mutates the job's
+    local context, so variables assigned in one call are visible in subsequent
+    calls within the same job.
+
+    Args:
+        code (str): The Python source code to execute.
+
+    Examples:
+        python_cli(code="result = find_on_calls(start_date, end_date)")
+        python_cli(code="send_message('Hello!')")
+    """
 
 
 @tool

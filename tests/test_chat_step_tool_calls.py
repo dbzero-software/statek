@@ -1,5 +1,5 @@
 # pylint: disable=unused-argument
-"""Tests that get_next_request populates tool_calls in ChatStepData."""
+"""Tests that get_next_request populates tool_calls in ChatStepAssistantData."""
 
 from statek.agents.agent import Agent
 from statek.executors.job import Job, JobDef, JobStatus
@@ -32,10 +32,10 @@ def _add_warmup_log_item(job, block_num, tool_log=None, console_pos=0):
 
 
 class TestGetNextRequestToolCalls:
-    """Tests that _full_history in get_next_request populates tool_calls in ChatStepData."""
+    """_full_history in get_next_request populates tool_calls in ChatStepAssistantData."""
 
     def test_warmup_code_block_with_tool_calls_populates_tool_calls(self, db0_fixture):
-        """Warmup CodeBlock with tool calls gives populated tool_calls in ChatStepData."""
+        """Warmup CodeBlock with tool calls gives populated tool_calls in ChatStepAssistantData."""
         cs = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={"x": 1})
         warmup = CodeBlock(code='exit("ok")', tool_calls=[cs])
         job = _make_job(_make_agent("tc1"), warmup_code=warmup)
@@ -53,7 +53,7 @@ class TestGetNextRequestToolCalls:
         assert step.tool_calls[key] == "'result_value'"
 
     def test_warmup_str_block_has_no_tool_calls(self, db0_fixture):
-        """A plain-string warmup block produces tool_calls=None in ChatStepData."""
+        """A plain-string warmup block produces tool_calls=None in ChatStepAssistantData."""
         job = _make_job(_make_agent("tc2"), warmup_code="x = 1")
 
         history = list(job.get_next_request()["chat_history"])
@@ -107,7 +107,7 @@ class TestGetNextRequestToolCalls:
             assert step.tool_calls is None
 
     def test_llm_turn_with_tool_calls_populates_chat_step_data(self, db0_fixture):
-        """An LLM response with tool calls populates tool_calls in the ChatStepData."""
+        """An LLM response with tool calls populates tool_calls in the ChatStepAssistantData."""
         job = _make_job(_make_agent("tc6"), started=True)
         cs = CallSpec(id="T-001", func_name="do_thing", args=[], kwargs={"n": 5})
         block = CodeBlock(code="x = 1", tool_calls=[cs])

@@ -2,8 +2,10 @@
 from unittest.mock import Mock, patch
 import pytest
 
-from statek.task import copy_locals, delegate_task
-from statek.executors.job import JobStatus
+from statek.task import copy_locals, delegate_task, start_dialog
+from statek.executors.job import Job, JobStatus
+from statek.executors.chat_log_item import UserLogItem
+from statek.agents.dialog_agent import DialogAgent
 from statek.exceptions import FutureError
 
 class TestCopyLocals:
@@ -247,3 +249,69 @@ class TestDelegateTask:
 
         result.job.py_env.exit_status = "OK"
         assert result.value == ("OK", result.job)
+
+
+def _make_send_message(body: str, media=None):
+    """Mock send_message for DialogAgent tests.
+
+    Args:
+        body: The message text.
+        media: Optional media attachment.
+    """
+    return f"sent: {body}"
+
+
+class TestStartDialog:
+    """Tests for start_dialog function."""
+
+    @pytest.fixture
+    def mock_settings(self):
+        """Mock settings functions."""
+        with patch('statek.task.get_statek_settings') as mock_statek, \
+             patch('statek.task.get_provider_settings') as mock_provider:
+
+            mock_statek_settings = Mock()
+            mock_statek_settings.default_llm_api_provider = "OPENAI"
+            mock_statek_settings.chat_style = None
+            mock_statek.return_value = mock_statek_settings
+
+            mock_provider_settings = Mock()
+            mock_provider_settings.default_model = "gpt-4"
+            mock_provider.return_value = mock_provider_settings
+
+            yield
+
+    def test_returns_job(self, db0_fixture, mock_settings):
+        """start_dialog returns a Job instance."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hello")
+        assert isinstance(job, Job)
+
+    def test_job_agent_is_dialog_agent(self, db0_fixture, mock_settings):
+        """Job's agent is the supplied DialogAgent."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hi")
+        assert job.job_def.agent is agent
+
+    def test_initial_message_in_chat_log(self, db0_fixture, mock_settings):
+        """Initial message is pushed into the job via push_user_message."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hello world")
+        # First message stored as str in chat_log (MD_DIALOG) or push_log
+        has_msg = any(
+            (isinstance(item, str) and item == "hello world")
+            or (isinstance(item, UserLogItem)
+                and item.message == "hello world")
+            for item in job.chat_log
+        ) or (
+            job.py_env.push_log is not None
+            and "hello world" in str(job.py_env.push_log)
+        )
+        assert has_msg
+
+    def test_kwargs_passed_as_job_params(self, db0_fixture, mock_settings):
+        """Extra kwargs become job_params on the JobDef."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(
+            agent, message="hi", topic="weather")
+        assert job.job_def.job_params["topic"] == "weather"

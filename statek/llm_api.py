@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections import namedtuple
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional, Iterable, Sequence, List, Dict, Callable
+from typing import Optional, Iterable, Sequence, List, Dict, Callable, Union
 import json
 import httpx
 
@@ -56,12 +56,12 @@ class CallParams:
 
 
 @dataclass
-class ChatStepData:
-    """Represents a single completed step in the LLM conversation history.
+class ChatStepAssistantData:
+    """Represents a single completed assistant step in the LLM conversation history.
 
     Each step captures the LLM's code response and the subsequent console
     output produced by executing that code. Tool calls made during the step
-    are stored in tool_calls (currently ignored when building API messages).
+    are stored in tool_calls.
     """
     code: str
     """Code requested for execution in this step (LLM assistant response)."""
@@ -69,6 +69,16 @@ class ChatStepData:
     """The console output from code execution (user feedback message)."""
     tool_calls: Optional[Dict] = None
     """Tool call requests and their results: Dict[CallParams, str]."""
+
+
+@dataclass
+class ChatStepUserData:
+    """Represents a single user message step in the LLM conversation history."""
+    message: str
+    """Message sent by the user."""
+
+
+ChatStepData = Union[ChatStepAssistantData, ChatStepUserData]
 
 
 def extract_call_params(tool_call_req: Dict) -> CallParams:
@@ -185,7 +195,8 @@ class LLM_API(ABC):
         metadata: Optional[Dict[str, str]] = None,
         available_tools: Optional[Sequence[Callable]] = None,
         chat_history: Optional[Iterable[ChatStepData]] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        chat_style=None
     ) -> LLM_Response:
         """Process a request to the LLM API.
 
@@ -194,7 +205,9 @@ class LLM_API(ABC):
 
         When metadata contains ``"LLM_TOOLS_SCOPE"``, the tools from
         ``available_tools`` are filtered by that scope (via ``select_tools``)
-        and forwarded to the provider as a formal tools parameter.
+        and forwarded to the provider as a formal tools parameter.  When
+        ``chat_style`` is also provided, tools are additionally filtered by
+        their target chat style.
 
         Args:
             system_prompt: Optional system prompt to guide the LLM behavior
@@ -210,6 +223,8 @@ class LLM_API(ABC):
                          on the provider side, this history needs to be included in the
                          message sent to the LLM API
             session_id: Provider-specific session ID (if request is a continuation)
+            chat_style: Optional ChatStyle to filter tools by their target chat
+                     style. Only applied when ``"LLM_TOOLS_SCOPE"`` is set.
 
         Returns:
             LLM_Response containing the response text, optional session_id, and stats
@@ -228,7 +243,7 @@ class LLM_API(ABC):
 
         tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
         tools = (
-            select_tools(available_tools, tools_scope)
+            select_tools(available_tools, tools_scope, chat_style=chat_style)
             if tools_scope and available_tools
             else None
         )
@@ -351,6 +366,10 @@ class OpenRouter_API(LLM_API):
 
         if chat_history:
             for step in chat_history:
+                if isinstance(step, ChatStepUserData):
+                    if step.message:
+                        messages.append({"role": "user", "content": step.message})
+                    continue
                 if step.tool_calls:
                     tool_call_list = [
                         {
@@ -519,7 +538,7 @@ class Claude_API(LLM_API):
             )
         self.api_key = settings.api_key
 
-    def _step_with_tool_calls(self, step: "ChatStepData", is_last: bool) -> List[Dict]:
+    def _step_with_tool_calls(self, step: "ChatStepAssistantData", is_last: bool) -> List[Dict]:
         """Return the (assistant, user) message pair for a step that has tool calls."""
         asst_content = []
         if step.code:
@@ -545,7 +564,7 @@ class Claude_API(LLM_API):
             msgs.append({"role": "user", "content": user_content})
         return msgs
 
-    def _step_without_tool_calls(self, step: "ChatStepData", is_last: bool) -> List[Dict]:
+    def _step_without_tool_calls(self, step: "ChatStepAssistantData", is_last: bool) -> List[Dict]:
         """Return the (assistant, user) message pair for a plain code step."""
         msgs = []
         if step.code:
@@ -591,7 +610,10 @@ class Claude_API(LLM_API):
         history_list = list(chat_history)
         for i, step in enumerate(history_list):
             is_last = i == len(history_list) - 1
-            if step.tool_calls:
+            if isinstance(step, ChatStepUserData):
+                if step.message:
+                    messages.append({"role": "user", "content": step.message})
+            elif step.tool_calls:
                 messages.extend(self._step_with_tool_calls(step, is_last))
             else:
                 messages.extend(self._step_without_tool_calls(step, is_last))

@@ -5,8 +5,8 @@ from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Unio
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
-from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, WarmupLogItem
-from statek.llm_api import ChatStepData, LLM_Response, CallParams
+from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, WarmupLogItem, UserLogItem
+from statek.llm_api import ChatStepAssistantData, ChatStepUserData, LLM_Response, CallParams
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_markup,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
@@ -204,7 +204,7 @@ class Job:
         job_status: JobStatus = JobStatus.READY,
         session_id: str = None,
         py_env: PyEnv = None,
-        chat_log: List[ChatLogItem] = None,
+        chat_log: List[Union[str, ChatLogItem, UserLogItem]] = None,
         awaited_result: Optional[FutureResult] = None,
         next_instr_num: Optional[int] = None,
         warmup_block_num: Optional[int] = None,
@@ -335,13 +335,13 @@ class Job:
         """
         settings = get_statek_settings()
         raw_call = f"{call_spec.format()}  {_STATEK_TOOL_MARKER}"
-        if settings.chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
+        if settings.chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             call_line = f"```python\n{raw_call}\n```"
         else:
             call_line = raw_call
         if result:
             result_lines = result.split('\n')
-            if settings.chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+            if settings.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
                 result_text = '<CONSOLE>\n' + '\n'.join(result_lines) + '\n</CONSOLE>'
             elif settings.chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
                 result_text = '\n'.join(result_lines)
@@ -473,9 +473,8 @@ class Job:
                 parts = [p for p in [template, console_part, push_part] if p]
                 return "\n".join(parts)
         else:
-            # Not first prompt: format console from last chat element's console position
-            last_chat_item = self.chat_log[-1]
-            from_pos = last_chat_item.console_pos
+            # Not first prompt: format console from last LLM element's console position
+            from_pos = llm_items[-1].console_pos
             console_part = prompt_append_console(
                 self.py_env.console,
                 chat_style,
@@ -517,7 +516,7 @@ class Job:
             code = resp.code if isinstance(resp, CodeBlock) else resp
             if not code:
                 return ""
-            if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
+            if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
                 return f"```python\n{code}\n```"
             return code
 
@@ -617,7 +616,7 @@ class Job:
 
         Returns:
             Dict[str, Any]: A dictionary with the following keys:
-                - chat_history (Iterable[ChatStepData]): Generator of ChatStepData objects
+                - chat_history (Iterable[ChatStepAssistantData]): Generator of ChatStepAssistantData objects
                   where each step pairs the LLM code response with the resulting console output
                 - system_prompt (str): The agent's system prompt
                 - metadata (Dict[str, str]): The agent's metadata (may be None)
@@ -673,7 +672,7 @@ class Job:
             llm_items = [item for item in self.chat_log if isinstance(item, LLM_LogItem)]
 
             def _get_step_tool_calls(k):
-                """Return tool_calls for the k-th ChatStepData (k=0 = first user-only step)."""
+                """Return tool_calls for the k-th ChatStepAssistantData (k=0 = first user-only step)."""
                 if k == 0:
                     return None
                 if k <= num_warmup:
@@ -687,17 +686,17 @@ class Job:
 
             if not history_strings:
                 # No prior history: current prompt is the only message
-                yield ChatStepData(code="", console_output=current_prompt)
+                yield ChatStepAssistantData(code="", console_output=current_prompt)
                 return
 
             # First string is always a user message with no preceding assistant
-            yield ChatStepData(code="", console_output=history_strings[0])
+            yield ChatStepAssistantData(code="", console_output=history_strings[0])
 
             # Pair up remaining (assistant, user) strings, skipping the last asst
             i = 1
             k = 1
             while i < len(history_strings) - 1:
-                yield ChatStepData(
+                yield ChatStepAssistantData(
                     code=history_strings[i], console_output=history_strings[i + 1],
                     tool_calls=_get_step_tool_calls(k)
                 )
@@ -705,17 +704,30 @@ class Job:
                 k += 1
 
             # Last string is always an assistant message; pair with current prompt
-            yield ChatStepData(
+            yield ChatStepAssistantData(
                 code=history_strings[-1], console_output=current_prompt,
                 tool_calls=_get_step_tool_calls(k)
             )
 
+            # Yield user messages (str / UserLogItem) from chat_log
+            for item in self.chat_log:
+                if isinstance(item, str) and item:
+                    yield ChatStepUserData(message=item)
+                elif isinstance(item, UserLogItem) and item.message:
+                    yield ChatStepUserData(message=item.message)
+
+        metadata = dict(self.job_def.agent._metadata) if self.job_def.agent._metadata else {}  # pylint: disable=protected-access
+
         request_params = {
             "chat_history": _full_history(),
             "system_prompt": self.job_def.agent.system_prompt(job_params=self.job_def.job_params),
-            "metadata": self.job_def.agent._metadata,  # pylint: disable=protected-access
+            "metadata": metadata,
             "available_tools": self.job_def.agent.all_tools,
         }
+
+        chat_style = self.job_def.chat_style
+        if chat_style is not None:
+            request_params["chat_style"] = chat_style
 
         # Only include session_id if it's not None
         if self.session_id is not None:
@@ -740,7 +752,13 @@ class Job:
         of the current console output.
         """
         chat_style = get_statek_settings().chat_style
-        response_code = strip_markup(llm_resp.text, strict=(chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)))  # pylint: disable=no-member
+        is_md_style = chat_style in (  # pylint: disable=no-member
+            ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT)
+        response_code = strip_markup(llm_resp.text, strict=is_md_style)
+
+        # DIRECT: ignore code blocks from LLM response
+        if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
+            response_code = None
 
         if llm_resp.call_requests:
             tool_calls = [
@@ -761,7 +779,7 @@ class Job:
         resp_code = stored_resp.code if isinstance(stored_resp, CodeBlock) else stored_resp
         if resp_code is None:
             resp_code = ""
-        log_resp = f"```python\n{resp_code}\n```" if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG) else resp_code  # pylint: disable=no-member
+        log_resp = f"```python\n{resp_code}\n```" if is_md_style else resp_code
         self._log(log_resp)
 
     @property
@@ -900,34 +918,51 @@ class Job:
         """Calculates approximate token usage based on total bytes sent and received."""
         return (self.total_bytes_sent + self.total_bytes_received) // 4
 
-    def push_to_console(self, message: str) -> bool:
-        """Append a pushed message to the job's push_log and re-activate if DONE.
+    def push_user_message(self, message: str) -> bool:
+        """Append a user message and re-activate the job if DONE.
 
-        Intended for processing push notifications (e.g. a user writing a message
-        into a completed job). Appends the message to py_env.push_log keyed by
-        sequential index. Transitions DONE -> STARTED (updating tags) when the job
-        is in DONE state. No other status transitions are performed.
+        Intended for processing push notifications (e.g. a user writing a
+        message into a completed job).
+
+        In MD_DIALOG chat style the message is stored directly in
+        ``chat_log`` — as a plain ``str`` when ``chat_log`` is empty (first
+        message) or as a ``UserLogItem`` for subsequent messages.
+
+        For all other chat styles the message is appended to
+        ``py_env.push_log`` keyed by the current console length.
+
+        When the job transitions DONE → STARTED a new ``LLM_LogItem`` with
+        ``llm_resp=None`` is appended to ``chat_log`` to indicate that an
+        LLM response is now awaited.
 
         Args:
-            message: The message to append to the push_log.
+            message: The message to push.
 
         Returns:
-            True if the job was transitioned DONE -> STARTED, False otherwise.
+            True if the job was transitioned DONE → STARTED, False otherwise.
         """
-        if self.py_env.push_log is None:
-            self.py_env.push_log = {}
-        # Key by current console length so get_next_prompt can filter by position range.
-        key = len(self.py_env.console) if self.py_env.console else 0
-        existing = self.py_env.push_log.get(key)
-        if existing is None:
-            self.py_env.push_log[key] = message
-        elif isinstance(existing, list):
-            existing.append(message)
+        if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
+            if not self.chat_log:
+                self.chat_log.append(message)
+            else:
+                self.chat_log.append(UserLogItem(message=message))
         else:
-            self.py_env.push_log[key] = [existing, message]
+            if self.py_env.push_log is None:
+                self.py_env.push_log = {}
+            key = len(self.py_env.console) if self.py_env.console else 0
+            existing = self.py_env.push_log.get(key)
+            if existing is None:
+                self.py_env.push_log[key] = message
+            elif isinstance(existing, list):
+                existing.append(message)
+            else:
+                self.py_env.push_log[key] = [existing, message]
 
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
-            self.append_chat_log({}, LLM_Response(text="")) 
+            self.chat_log.append(LLM_LogItem(
+                console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                llm_resp=None
+            ))
             return True
         return False  # pylint: disable=no-member

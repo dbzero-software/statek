@@ -1,0 +1,95 @@
+"""DialogAgent — base class for 1-to-1 dialog agents."""
+
+import inspect
+from dataclasses import dataclass
+from typing import Callable, Iterable
+import dbzero as db0
+from statek.agents.agent import SupervisedAgent
+from statek.chat_style import ChatStyle
+
+
+def _validate_send_message(send_message: Callable) -> None:
+    """Validate that *send_message* meets the required interface.
+
+    Requirements:
+      - Must be callable.
+      - Must NOT be a temporal function.
+      - Must accept a ``body`` parameter.
+
+    Raises:
+        TypeError: If *send_message* is not callable.
+        ValueError: If it is temporal or missing the ``body`` parameter.
+    """
+    if not callable(send_message):
+        raise TypeError("send_message must be callable")
+
+    if getattr(send_message, "__is_temporal__", False):
+        raise ValueError(
+            "send_message must not be a temporal function"
+        )
+
+    sig = inspect.signature(send_message)
+    if "body" not in sig.parameters:
+        raise ValueError(
+            "send_message must accept a 'body' parameter"
+        )
+
+
+@db0.memo
+@dataclass
+class DialogAgent(SupervisedAgent):
+    """Base class for 1-to-1 dialog agents.
+
+    Dialog agents communicate with a single user via the ``send_message``
+    callable.  Free text from the LLM is forwarded to the user through
+    ``send_message``, and incoming user messages are fed back into the
+    job via the push-notification mechanism.
+
+    Args:
+        send_message: Function used to deliver agent responses.  Must
+            accept ``body`` (str) and optional ``media`` parameters.
+            Temporal functions are **not** allowed.
+        tools: Additional agent tools.
+    """
+
+    send_message: Callable = None
+    additional_tools: Iterable[Callable] = None
+
+    def __init__(
+        self,
+        send_message: Callable,
+        tools: Iterable[Callable] = None,
+        role: str = "dialog_agent",
+    ):
+        _validate_send_message(send_message)
+
+        self.send_message = send_message
+        self.additional_tools = tools if tools is not None else []
+
+        basic_tools = list(self.additional_tools)
+
+        super().__init__(
+            role=role,
+            _system_prompt=None,
+            _tools=basic_tools,
+        )
+
+        # Register send_message as an internal tool under a private name
+        self._register_send_message()
+
+    def _register_send_message(self):
+        """Wrap and register ``send_message`` as ``_send_message`` internal tool."""
+        original = self.send_message
+
+        def _send_message(body: str, media=None):
+            return original(body=body, media=media)
+
+        _send_message.__name__ = "_send_message"
+        _send_message.__doc__ = getattr(original, "__doc__", None)
+        self.append_tool(_send_message)
+
+    def create_job_def(self, tools=None, warmup_code=None, **kwargs):  # pylint: disable=no-member
+        """Create a JobDef with MD_DIALOG chat style."""
+        job_def = super().create_job_def(tools=tools, warmup_code=warmup_code, **kwargs)
+        job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        return job_def

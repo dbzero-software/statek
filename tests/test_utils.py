@@ -262,6 +262,25 @@ def test_prompt_append_console_md_dialog_xml_tags_stack():
     assert result == '<outer>\n<CONSOLE>\noutput\n</CONSOLE>\n</outer>'
 
 
+def test_prompt_append_console_direct_style():
+    """DIRECT style: prompt in fences, console wrapped in <CONSOLE> tags."""
+    console = ['User(name = "Kowalski Adam")', '2026-01-03 12:13:32']
+    prompt = 'print(user)\nprint(clock.now())'
+    result = prompt_append_console(console, ChatStyle.DIRECT, prompt)
+
+    assert result == (
+        '```python\nprint(user)\nprint(clock.now())\n```\n'
+        '<CONSOLE>\nUser(name = "Kowalski Adam")\n2026-01-03 12:13:32\n</CONSOLE>'
+    )
+
+
+def test_prompt_append_console_direct_no_prompt():
+    """DIRECT without prompt: only <CONSOLE>-wrapped console output."""
+    console = ['2026-03-18 14:31']
+    result = prompt_append_console(console, ChatStyle.DIRECT)
+    assert result == '<CONSOLE>\n2026-03-18 14:31\n</CONSOLE>'
+
+
 def test_prompt_append_console_xml_tags_none_no_boxing():
     """xml_tags=None leaves output unchanged."""
     console = ['line1', 'line2']

@@ -80,20 +80,20 @@ class TestProcessPushNotifications:
         remaining = queue.pop_from_job_console(100)
         assert len(remaining) == 5
 
-    def test_ignores_exception_from_push_to_console(self, db0_fixture):
+    def test_ignores_exception_from_push_user_message(self, db0_fixture):
         job = _make_started_job()
         queue = StatekPushQueue()
         queue.push_to_job_console(job=job, message="hello")
 
-        original = job.__class__.push_to_console
+        original = job.__class__.push_user_message
 
         def raising_push(self, message):  # pylint: disable=unused-argument
             raise RuntimeError("Object has been deleted")
 
-        job.__class__.push_to_console = raising_push
+        job.__class__.push_user_message = raising_push
 
         try:
             # Should not propagate the exception
             process_push_notifications()
         finally:
-            job.__class__.push_to_console = original
+            job.__class__.push_user_message = original

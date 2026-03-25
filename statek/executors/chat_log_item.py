@@ -69,3 +69,11 @@ class LLM_LogItem(ChatLogItem):
 class WarmupLogItem(ChatLogItem):
     # 0-based index into JobDef.warmup_code
     warmup_block_num: int = 0
+
+
+@db0.memo(no_default_tags=True)
+@dataclass
+class UserLogItem:
+    """User message submitted for job initiation or as a push notification."""
+    message: str
+    timestamp: datetime = field(default_factory=datetime.now)
