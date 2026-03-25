@@ -7,6 +7,7 @@ import pytest
 import dbzero as db0
 from statek.system import (docs, brief, tool, create_tool, inject_context, find_tools,
                            select_tools, error_handler)
+from statek.chat_style import ChatStyle
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.utils import format_callable_decl
 
@@ -992,3 +993,154 @@ class TestToolTemporalErrorHandler:
         res = future.value  # second access — must not add another handler
         assert res == "resolved"
         assert len(job.error_handlers) == 1
+
+
+class TestToolTarget:
+    """Test cases for target parameter on @tool decorator."""
+
+    def test_tool_without_target_has_none(self):
+        """@tool without target sets tool_target to None."""
+        @tool
+        def my_tool(**kwargs):  # pylint: disable=unused-argument
+            """A tool."""
+
+        assert my_tool.tool_target is None
+
+    def test_tool_with_single_target(self):
+        """@tool(target=ChatStyle.DIRECT) sets tool_target."""
+        @tool(target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def direct_tool(**kwargs):  # pylint: disable=unused-argument
+            """Direct-only tool."""
+
+        assert direct_tool.tool_target == ChatStyle.DIRECT  # pylint: disable=no-member
+
+    def test_tool_with_multiple_targets(self):
+        """@tool(target=[ChatStyle.DIRECT, ChatStyle.CONSOLE]) sets tool_target as list."""
+        @tool(target=[ChatStyle.DIRECT, ChatStyle.CONSOLE])  # pylint: disable=no-member
+        def multi_tool(**kwargs):  # pylint: disable=unused-argument
+            """Multi-target tool."""
+
+        assert ChatStyle.DIRECT in multi_tool.tool_target  # pylint: disable=no-member
+        assert ChatStyle.CONSOLE in multi_tool.tool_target  # pylint: disable=no-member
+
+    def test_tool_with_system_and_target(self):
+        """@tool(system=True, target=ChatStyle.DIRECT) sets both attributes."""
+        @tool(system=True, target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def sys_direct(**kwargs):  # pylint: disable=unused-argument
+            """System tool for DIRECT."""
+
+        assert sys_direct.tool_system is True
+        assert sys_direct.tool_target == ChatStyle.DIRECT  # pylint: disable=no-member
+
+
+class TestFindToolsChatStyle:
+    """Test cases for chat_style parameter on find_tools."""
+
+    def test_find_tools_no_chat_style_returns_all(self):
+        """find_tools without chat_style returns tools regardless of target."""
+        @tool(target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def _targeted(**kwargs):  # pylint: disable=unused-argument
+            """Targeted tool."""
+
+        @tool
+        def _universal(**kwargs):  # pylint: disable=unused-argument
+            """Universal tool."""
+
+        all_tools = find_tools()
+        assert _targeted in all_tools
+        assert _universal in all_tools
+
+    def test_find_tools_chat_style_includes_matching_target(self):
+        """find_tools(chat_style=X) includes tools targeting X."""
+        @tool(target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def _direct_only(**kwargs):  # pylint: disable=unused-argument
+            """Direct-only tool."""
+
+        result = find_tools(chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        assert _direct_only in result
+
+    def test_find_tools_chat_style_excludes_non_matching_target(self):
+        """find_tools(chat_style=X) excludes tools targeting a different style."""
+        @tool(target=ChatStyle.CONSOLE)  # pylint: disable=no-member
+        def _console_only(**kwargs):  # pylint: disable=unused-argument
+            """Console-only tool."""
+
+        result = find_tools(chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        assert _console_only not in result
+
+    def test_find_tools_chat_style_includes_untargeted(self):
+        """find_tools(chat_style=X) includes tools with no target (universal)."""
+        @tool
+        def _universal2(**kwargs):  # pylint: disable=unused-argument
+            """Universal tool."""
+
+        result = find_tools(chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        assert _universal2 in result
+
+    def test_find_tools_chat_style_with_multi_target(self):
+        """find_tools(chat_style=X) includes tools with X in their target list."""
+        @tool(target=[ChatStyle.DIRECT, ChatStyle.CONSOLE])  # pylint: disable=no-member
+        def _multi(**kwargs):  # pylint: disable=unused-argument
+            """Multi-target tool."""
+
+        assert _multi in find_tools(chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        assert _multi in find_tools(chat_style=ChatStyle.CONSOLE)  # pylint: disable=no-member
+        assert _multi not in find_tools(chat_style=ChatStyle.MARKDOWN)  # pylint: disable=no-member
+
+    def test_find_tools_scope_and_chat_style_combined(self):
+        """find_tools with both scope and chat_style filters by both."""
+        @tool(system=True, target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def _sys_direct(**kwargs):  # pylint: disable=unused-argument
+            """System direct tool."""
+
+        @tool(system=True, target=ChatStyle.CONSOLE)  # pylint: disable=no-member
+        def _sys_console(**kwargs):  # pylint: disable=unused-argument
+            """System console tool."""
+
+        @tool(target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def _app_direct(**kwargs):  # pylint: disable=unused-argument
+            """App direct tool."""
+
+        result = find_tools("SYSTEM", chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        assert _sys_direct in result
+        assert _sys_console not in result
+        assert _app_direct not in result
+
+
+class TestSelectToolsChatStyle:
+    """Test cases for chat_style parameter on select_tools."""
+
+    def test_select_tools_chat_style_filters_by_target(self):
+        """select_tools with chat_style filters tools by target."""
+        @tool(target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def t_direct(**kwargs):  # pylint: disable=unused-argument
+            """Direct tool."""
+
+        @tool(target=ChatStyle.CONSOLE)  # pylint: disable=no-member
+        def t_console(**kwargs):  # pylint: disable=unused-argument
+            """Console tool."""
+
+        @tool
+        def t_any(**kwargs):  # pylint: disable=unused-argument
+            """Universal tool."""
+
+        pool = [t_direct, t_console, t_any]
+        result = select_tools(pool, "ALL", chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        assert t_direct in result
+        assert t_any in result
+        assert t_console not in result
+
+    def test_select_tools_no_chat_style_returns_all(self):
+        """select_tools without chat_style does not filter by target."""
+        @tool(target=ChatStyle.DIRECT)  # pylint: disable=no-member
+        def t_direct2(**kwargs):  # pylint: disable=unused-argument
+            """Direct tool."""
+
+        @tool(target=ChatStyle.CONSOLE)  # pylint: disable=no-member
+        def t_console2(**kwargs):  # pylint: disable=unused-argument
+            """Console tool."""
+
+        pool = [t_direct2, t_console2]
+        result = select_tools(pool, "ALL")
+        assert t_direct2 in result
+        assert t_console2 in result

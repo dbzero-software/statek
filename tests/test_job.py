@@ -5,7 +5,10 @@ from unittest.mock import patch, MagicMock
 import dbzero as db0
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import Job, JobDefError, JobStatus
-from statek.llm_api import ChatStepData, LLM_Response, LLM_Stats
+from statek.llm_api import (
+    ChatStepAssistantData, ChatStepUserData, LLM_Response, LLM_Stats
+)
+from statek.executors.chat_log_item import UserLogItem
 from statek.settings import ChatStyle
 from statek.utils import CodeBlock, CallSpec
 
@@ -201,7 +204,7 @@ class TestJob:
         """First prompt: push_log message is appended after console output."""
         job = job_factory()
         job.py_env.console_append("Out1")
-        job.push_to_console("user message")  # key=1
+        job.push_user_message("user message")  # key=1
         result = job.get_next_prompt()
         assert "Out1" in result
         assert "user message" in result
@@ -210,7 +213,7 @@ class TestJob:
         """First prompt: push_log message appears after console output."""
         job = job_factory()
         job.py_env.console_append("Out1")
-        job.push_to_console("user message")
+        job.push_user_message("user message")
         result = job.get_next_prompt()
         assert result.index("Out1") < result.index("user message")
 
@@ -219,7 +222,7 @@ class TestJob:
         job = job_factory()
         job.py_env.console = ["c1", "c2"]
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp"))
-        job.push_to_console("pushed msg")  # key=2 (console len=2)
+        job.push_user_message("pushed msg")  # key=2 (console len=2)
         result = job.get_next_prompt()
         assert "pushed msg" in result
 
@@ -227,7 +230,7 @@ class TestJob:
         """Subsequent prompt: push_log entry with key < from_pos is excluded."""
         job = job_factory()
         job.py_env.console = ["c1", "c2"]
-        job.push_to_console("early msg")     # key=2 (console len=2 at push time)
+        job.push_user_message("early msg")     # key=2 (console len=2 at push time)
         job.py_env.console.append("c3")      # console grows to 3
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp"))
         result = job.get_next_prompt()
@@ -236,8 +239,8 @@ class TestJob:
     def test_get_next_prompt_push_log_list_values_included(self, job_factory):
         """Multiple pushes at same position (stored as list) are all included."""
         job = job_factory()
-        job.push_to_console("msg1")  # key=0
-        job.push_to_console("msg2")  # key=0, becomes list
+        job.push_user_message("msg1")  # key=0
+        job.push_user_message("msg2")  # key=0, becomes list
         result = job.get_next_prompt()
         assert "msg1" in result
         assert "msg2" in result
@@ -325,7 +328,8 @@ class TestJobGetNextRequest:
 
         # Verify chat_history contains only the current prompt (no prior history)
         history = list(request["chat_history"])
-        expected = ChatStepData(code="", console_output="Test task\n> Output 1\n> Output 2")
+        expected = ChatStepAssistantData(
+            code="", console_output="Test task\n> Output 1\n> Output 2")
         assert history == [expected]
 
         # Verify system_prompt is from agent
@@ -361,12 +365,15 @@ class TestJobGetNextRequest:
         # Verify no separate 'prompt' key — it's the last element of chat_history
         assert "prompt" not in request
 
-        # Verify chat_history contains ChatStepData objects ending with the current prompt
+        # Verify chat_history contains ChatStepAssistantData objects ending with the current prompt
         history = list(request["chat_history"])
         assert len(history) == 3
-        assert history[0] == ChatStepData(code="", console_output="Test task\n> Out1\n> Out2")
-        assert history[1] == ChatStepData(code="Response 1", console_output="> Out3\n> Out4")
-        assert history[2] == ChatStepData(code="Response 2", console_output="")  # no new console
+        assert history[0] == ChatStepAssistantData(
+            code="", console_output="Test task\n> Out1\n> Out2")
+        assert history[1] == ChatStepAssistantData(
+            code="Response 1", console_output="> Out3\n> Out4")
+        assert history[2] == ChatStepAssistantData(
+            code="Response 2", console_output="")  # no new console
 
     def test_get_next_request_structure(self, job_factory):
         """Test that get_next_request returns a proper dictionary structure."""
@@ -384,6 +391,14 @@ class TestJobGetNextRequest:
         assert isinstance(request["system_prompt"], str)
         assert isinstance(request["session_id"], str)
 
+
+    def test_get_next_request_no_chat_style_when_none(self, job_factory):
+        """get_next_request omits CHAT_STYLE from metadata when chat_style is None."""
+        job = job_factory()
+        job.job_def.set_chat_style(None)
+        request = job.get_next_request()
+        assert "CHAT_STYLE" not in request["metadata"]
+
     def test_get_next_request_empty_console_no_history(self, job_factory):
         """Test get_next_request with no console output and no history."""
         job = job_factory()
@@ -393,7 +408,7 @@ class TestJobGetNextRequest:
         # chat_history should contain only the current prompt (just the description)
         assert "prompt" not in request
         history = list(request["chat_history"])
-        assert history == [ChatStepData(code="", console_output="Test task")]
+        assert history == [ChatStepAssistantData(code="", console_output="Test task")]
         assert "session_id" not in request
 
     def test_last_response_empty_chat_log(self, job_factory):
@@ -743,6 +758,102 @@ class TestJobAppendChatLog:
         assert job.chat_log[2].llm_resp == "code_block_3"
 
 
+class TestAppendChatLogDirect:
+    """Tests for append_chat_log with ChatStyle.DIRECT."""
+
+    def test_direct_discards_code_from_response(self, job_factory):
+        """DIRECT style: code blocks in LLM response are ignored."""
+        job = job_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
+
+        request = job.get_next_request()
+        llm_resp = LLM_Response(
+            text="```python\nx = 42\n```\nHello user!",
+            session_id=None,
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        )
+        with patch(
+            'statek.executors.job.get_statek_settings',
+            return_value=mock_settings
+        ):
+            job.append_chat_log(request, llm_resp)
+
+        assert job.chat_log[0].llm_resp is None
+
+    def test_direct_preserves_tool_calls(self, job_factory):
+        """DIRECT style: tool calls are preserved even though code is discarded."""
+        from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
+        job = job_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
+
+        request = job.get_next_request()
+        call = CallParams(call_id="c1", name="python_cli", args=[], kwargs={"code": "x=1"})
+        llm_resp = LLM_Response(
+            text="```python\nx = 42\n```",
+            session_id=None,
+            stats=LLM_Stats(0, 0, None),
+            call_requests=[call],
+        )
+        with patch(
+            'statek.executors.job.get_statek_settings',
+            return_value=mock_settings
+        ):
+            job.append_chat_log(request, llm_resp)
+
+        stored = job.chat_log[0].llm_resp
+        assert isinstance(stored, CodeBlock)
+        assert stored.code is None
+        assert len(stored.tool_calls) == 1
+
+    def test_direct_plain_text_response_stored_as_none(self, job_factory):
+        """DIRECT style: plain text response (no fences) stored as None."""
+        job = job_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
+
+        request = job.get_next_request()
+        llm_resp = LLM_Response(
+            text="Hello, how can I help?",
+            session_id=None,
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        )
+        with patch(
+            'statek.executors.job.get_statek_settings',
+            return_value=mock_settings
+        ):
+            job.append_chat_log(request, llm_resp)
+
+        assert job.chat_log[0].llm_resp is None
+
+
+class TestPushUserMessageDirect:
+    """Tests for push_user_message with ChatStyle.DIRECT."""
+
+    def test_direct_first_message_stored_as_str(self, job_factory):
+        """DIRECT style: first message stored as plain str in chat_log."""
+        job = job_factory()
+        job.job_def.set_chat_style(
+            ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.push_user_message("hello")
+        assert job.chat_log[0] == "hello"
+
+    def test_direct_subsequent_message_stored_as_user_log_item(
+        self, job_factory
+    ):
+        """DIRECT style: subsequent messages stored as UserLogItem."""
+        job = job_factory()
+        job.job_def.set_chat_style(
+            ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.push_user_message("first")
+        job.push_user_message("second")
+        assert isinstance(job.chat_log[1], UserLogItem)
+        assert job.chat_log[1].message == "second"
+
+
 class TestJobDefErrors:
     """Tests for JobDef.set_error, get_errors, has_errors."""
 
@@ -948,3 +1059,129 @@ class TestJobDefChatStyle:
         mock_settings.chat_style = None
         with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
             assert job_def.chat_style is None
+
+
+# ---------------------------------------------------------------------------
+# UserLogItem
+# ---------------------------------------------------------------------------
+
+class TestUserLogItem:
+    """Tests for the UserLogItem dataclass."""
+
+    def test_create_with_message(self, db0_fixture):  # pylint: disable=unused-argument
+        """UserLogItem can be created with a message."""
+        item = UserLogItem(message="hello")
+        assert item.message == "hello"
+
+    def test_timestamp_defaults_to_now(self, db0_fixture):  # pylint: disable=unused-argument
+        """UserLogItem timestamp defaults to current time."""
+        item = UserLogItem(message="test")
+        assert item.timestamp is not None
+
+    def test_empty_message(self, db0_fixture):  # pylint: disable=unused-argument
+        """UserLogItem allows empty string for message."""
+        item = UserLogItem(message="")
+        assert item.message == ""
+
+
+# ---------------------------------------------------------------------------
+# get_next_request with user messages (str / UserLogItem)
+# ---------------------------------------------------------------------------
+
+class TestGetNextRequestUserMessages:
+    """Tests for _full_history yielding ChatStepUserData for user messages."""
+
+    def test_str_in_chat_log_yields_user_data(self, job_factory):
+        """A str entry in chat_log is yielded as ChatStepUserData."""
+        job = job_factory()
+        job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append(
+            create_chat_log_item(console_pos=2, llm_resp="Response 1"))
+        job.chat_log.append("user question")
+
+        request = job.get_next_request()
+        history = list(request["chat_history"])
+
+        # Normal history + user message at the end
+        assert history[-1] == ChatStepUserData(message="user question")
+
+    def test_user_log_item_in_chat_log_yields_user_data(self, job_factory):
+        """A UserLogItem in chat_log is yielded as ChatStepUserData."""
+        job = job_factory()
+        job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append(
+            create_chat_log_item(console_pos=2, llm_resp="Response 1"))
+        job.chat_log.append(UserLogItem(message="user follow-up"))
+
+        request = job.get_next_request()
+        history = list(request["chat_history"])
+
+        assert history[-1] == ChatStepUserData(message="user follow-up")
+
+    def test_multiple_user_messages_after_llm(self, job_factory):
+        """Multiple user messages after LLM turns are all yielded."""
+        job = job_factory()
+        job.py_env.console = ["Out1"]
+        job.chat_log.append(
+            create_chat_log_item(console_pos=1, llm_resp="R1"))
+        job.chat_log.append("msg1")
+        job.chat_log.append(UserLogItem(message="msg2"))
+
+        request = job.get_next_request()
+        history = list(request["chat_history"])
+
+        user_data_items = [
+            h for h in history if isinstance(h, ChatStepUserData)
+        ]
+        assert len(user_data_items) == 2
+        assert user_data_items[0] == ChatStepUserData(message="msg1")
+        assert user_data_items[1] == ChatStepUserData(message="msg2")
+
+    def test_user_messages_preserve_normal_history(self, job_factory):
+        """Normal assistant history is preserved when user messages exist."""
+        job = job_factory()
+        job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append(
+            create_chat_log_item(console_pos=2, llm_resp="Response 1"))
+        job.chat_log.append("user msg")
+
+        request = job.get_next_request()
+        history = list(request["chat_history"])
+
+        asst_items = [
+            h for h in history if isinstance(h, ChatStepAssistantData)
+        ]
+        # First: initial prompt, second: Response 1 + console
+        assert len(asst_items) >= 2
+        assert asst_items[0].console_output == "Test task\n> Out1\n> Out2"
+        assert asst_items[1].code == "Response 1"
+
+    def test_empty_str_in_chat_log_skipped(self, job_factory):
+        """An empty string in chat_log is not yielded."""
+        job = job_factory()
+        job.chat_log.append("")
+
+        request = job.get_next_request()
+        history = list(request["chat_history"])
+
+        user_data_items = [
+            h for h in history if isinstance(h, ChatStepUserData)
+        ]
+        assert len(user_data_items) == 0
+
+    def test_last_response_none_when_last_is_user_log_item(
+            self, job_factory):
+        """last_response returns None when last chat_log item is UserLogItem."""
+        job = job_factory()
+        job.chat_log.append(
+            create_chat_log_item(console_pos=0, llm_resp="code"))
+        job.chat_log.append(UserLogItem(message="follow-up"))
+        assert job.last_response is None
+
+    def test_last_response_none_when_last_is_str(self, job_factory):
+        """last_response returns None when last chat_log item is str."""
+        job = job_factory()
+        job.chat_log.append(
+            create_chat_log_item(console_pos=0, llm_resp="code"))
+        job.chat_log.append("follow-up")
+        assert job.last_response is None

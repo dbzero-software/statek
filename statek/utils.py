@@ -584,7 +584,7 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
 def _fmt_console_lines(lines: List[str], chat_style) -> str:
     """Format a slice of console lines according to chat_style."""
     from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
-    if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+    if chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         joined = "\n".join(lines)
         return f"<CONSOLE>\n{joined}\n</CONSOLE>"
     if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
@@ -627,7 +627,7 @@ def prompt_append_console(  # pylint: disable=too-many-arguments,too-many-positi
     from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
     # In MARKDOWN mode wrap the prompt code in python fences; otherwise use as-is
     if prompt:
-        if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
+        if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             result = f"```python\n{prompt}\n```"
         else:
             result = prompt

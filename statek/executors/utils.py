@@ -22,7 +22,8 @@ from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
-from statek.utils import CodeBlock, CallSpec, format_default_llm_repr, get_current_job
+from statek.utils import (CodeBlock, CallSpec, format_default_llm_repr,
+                         get_current_job, get_current_agent, parse_md_dialog)
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -487,6 +488,38 @@ def _log_pending_console(job: Job):
     job._log_console_batch(from_pos, to_pos)  # pylint: disable=protected-access
 
 
+async def handle_md_dialog(llm_resp: str):
+    """Dispatch LLM response text to the user via the DialogAgent's send_message.
+
+    Retrieves the current agent from the execution context, verifies it is a
+    DialogAgent, parses the response into (body, media) segments and forwards
+    each segment to the agent's ``send_message`` callable.
+
+    Args:
+        llm_resp: The raw LLM response text to be dispatched.
+
+    Raises:
+        TypeError: If the current agent is not a DialogAgent.
+    """
+    from statek.agents.dialog_agent import DialogAgent  # pylint: disable=import-outside-toplevel
+
+    agent = get_current_agent()
+    if not isinstance(agent, DialogAgent):
+        raise TypeError(
+            f"MD_DIALOG/DIRECT chat style requires a DialogAgent, "
+            f"got {type(agent).__name__}."
+        )
+
+    for body, media in parse_md_dialog(llm_resp):
+        if body or media:
+            kwargs = {"body": body}
+            if media is not None:
+                kwargs["media"] = media
+            result = agent.send_message(**kwargs)
+            if inspect.iscoroutinefunction(agent.send_message):
+                await result
+
+
 async def run_job_step(job: Job, provider: str = None) -> bool:
     """
     Execute a single step of the agentic pipeline.
@@ -544,7 +577,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Log warmup block before execution
         if job.status == JobStatus.WARMING_UP and code_str:
             chat_style = get_statek_settings().chat_style
-            log_code = f"```python\n{code_str}\n```" if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG) else code_str  # pylint: disable=no-member
+            log_code = f"```python\n{code_str}\n```" if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT) else code_str  # pylint: disable=no-member
             job._log(log_code)  # pylint: disable=protected-access
 
         # Check for empty code submission (no executable code and no tool calls)
@@ -645,10 +678,14 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 12: Add new log item using append_chat_log
     job.append_chat_log(request, response)
 
-    # Step 13: Check harness constraints after step
+    # Step 13: MD_DIALOG/DIRECT — dispatch LLM response to user via send_message
+    if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
+        await handle_md_dialog(response.text)
+
+    # Step 14: Check harness constraints after step
     harness.check_after_step(job)
 
-    # Step 14: Return False
+    # Step 15: Return False
     return False
 
 
@@ -656,7 +693,7 @@ def process_push_notifications(step_size=100, max_count=500):
     """Process pending push notifications from StatekPushQueues on all open prefixes.
 
     Finds all StatekPushQueue instances across open prefixes and delivers push
-    messages to the target jobs by calling job.push_to_console. Jobs that have
+    messages to the target jobs by calling job.push_user_message. Jobs that have
     been deleted are silently ignored.
 
     Args:
@@ -680,7 +717,7 @@ def process_push_notifications(step_size=100, max_count=500):
                 break
             for job, message in items:
                 try:
-                    job.push_to_console(message)
+                    job.push_user_message(message)
                 except Exception:  # pylint: disable=broad-except
                     pass
                 processed += 1

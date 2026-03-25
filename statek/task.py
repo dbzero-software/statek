@@ -7,6 +7,7 @@ from .exceptions import FutureError
 from .future import FutureResult, temporal
 from .system import tool
 from .agents.agent import SupervisedAgent
+from .agents.dialog_agent import DialogAgent
 from .executors.job import Job, JobStatus
 from .pyenv import PyEnv
 from .settings import get_provider_settings, get_statek_settings
@@ -108,3 +109,48 @@ def delegate_task(agent: SupervisedAgent,
     )
 
     return TaskFutureResult(job, deps=None, state_num=0)
+
+
+def start_dialog(
+    agent: DialogAgent,
+    message: str,
+    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    **kwargs
+) -> Job:
+    """Start a dialog job with a DialogAgent and an initial user message.
+
+    Args:
+        agent: The DialogAgent to delegate the dialog to.
+        message: The initial user message.
+        warmup_code: Optional Python code (single or multiple blocks) to be
+                     executed prior to task start.  When provided, all
+                     referenced locals of the caller are copied into the
+                     new job's context.
+        kwargs: Optional agent-specific extra arguments (job_params).
+
+    Returns:
+        The newly created Job instance.
+    """
+    job_def = agent.create_job_def(warmup_code=warmup_code, **kwargs)
+
+    env = PyEnv()
+    if warmup_code:
+        caller_frame = inspect.currentframe().f_back
+        caller_locals = caller_frame.f_locals
+        if isinstance(warmup_code, str):
+            copy_locals(warmup_code, env.local_state, caller_locals)
+        else:
+            for block in warmup_code:
+                copy_locals(block, env.local_state, caller_locals)
+
+    job = Job(
+        job_def=job_def,
+        model_family=get_statek_settings().default_llm_api_provider,
+        model=get_provider_settings().default_model,
+        job_status=JobStatus.READY,
+        py_env=env
+    )
+
+    job.push_user_message(message)
+
+    return job
