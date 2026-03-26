@@ -151,3 +151,38 @@ class TestAppendChatLogCodeBlock:
         job.append_chat_log(request, llm_resp)
 
         assert job.chat_log[0].console_pos == 2
+
+
+class TestGetToolCalls:
+    """Tests for CodeBlock.get_tool_calls and convenience wrappers."""
+
+    def test_get_tool_calls_returns_none_when_no_tool_calls(self, db0_fixture):  # pylint: disable=unused-argument
+        block = CodeBlock(code="x = 1", tool_calls=None)
+        assert block.get_tool_calls(lambda cs: True) is None
+
+    def test_get_tool_calls_returns_matching_calls(self, db0_fixture):  # pylint: disable=unused-argument
+        cs1 = CallSpec(id="1", func_name="alpha")
+        cs2 = CallSpec(id="2", func_name="beta")
+        cs3 = CallSpec(id="3", func_name="alpha")
+        block = CodeBlock(tool_calls=[cs1, cs2, cs3])
+        result = block.get_tool_calls(lambda c: c.func_name == "alpha")
+        assert len(result) == 2
+        assert result[0].id == "1"
+        assert result[1].id == "3"
+
+    def test_get_regular_tool_calls_excludes_python_cli(self, db0_fixture):  # pylint: disable=unused-argument
+        cs1 = CallSpec(id="1", func_name="my_tool")
+        cs2 = CallSpec(id="2", func_name="python_cli")
+        block = CodeBlock(tool_calls=[cs1, cs2])
+        result = block.get_regular_tool_calls()
+        assert len(result) == 1
+        assert result[0].func_name == "my_tool"
+
+    def test_get_cli_tool_calls_returns_only_python_cli(self, db0_fixture):  # pylint: disable=unused-argument
+        cs1 = CallSpec(id="1", func_name="my_tool")
+        cs2 = CallSpec(id="2", func_name="python_cli")
+        cs3 = CallSpec(id="3", func_name="python_cli", kwargs={"code": "y=2"})
+        block = CodeBlock(tool_calls=[cs1, cs2, cs3])
+        result = block.get_cli_tool_calls()
+        assert len(result) == 2
+        assert all(c.func_name == "python_cli" for c in result)

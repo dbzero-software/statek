@@ -76,6 +76,21 @@ class CodeBlock:
                 return idx
         return None
 
+    def get_tool_calls(self, filter_fn: Callable) -> Optional[Sequence['CallSpec']]:
+        """Return tool calls matching *filter_fn*, or None if none match."""
+        if not self.tool_calls:
+            return None
+        matched = [tc for tc in self.tool_calls if filter_fn(tc)]
+        return matched or None
+
+    def get_regular_tool_calls(self) -> Optional[Sequence['CallSpec']]:
+        """Return non-CLI tool calls (everything except ``python_cli``)."""
+        return self.get_tool_calls(lambda cs: cs.func_name != "python_cli")
+
+    def get_cli_tool_calls(self) -> Optional[Sequence['CallSpec']]:
+        """Return only ``python_cli`` tool calls."""
+        return self.get_tool_calls(lambda cs: cs.func_name == "python_cli")
+
     def __hash__(self):
         tcs = tuple(self.tool_calls) if self.tool_calls else ()
         return hash((self.code, tcs))
@@ -658,16 +673,66 @@ def prompt_append_console(  # pylint: disable=too-many-arguments,too-many-positi
     return result
 
 
+def _get_statek_ctx() -> Optional[dict]:
+    """Locate the _STATEK_CTX dict from the call stack.
+
+    Returns:
+        The _STATEK_CTX dict, or None if not found.
+    """
+    ctx = next(iter(find_locals(var_name='_STATEK_CTX')), None)
+    if not isinstance(ctx, dict):
+        return None
+    return ctx
+
+
+def statek_ctx_set(**kwargs) -> None:
+    """Set or update variables in the current agent's execution context.
+
+    Args:
+        **kwargs: key-value pairs to set in _STATEK_CTX.
+
+    Raises:
+        RuntimeError: if _STATEK_CTX is not found in the call stack.
+    """
+    ctx = _get_statek_ctx()
+    if ctx is None:
+        raise RuntimeError("_STATEK_CTX not found in execution context")
+    ctx.update(kwargs)
+
+
+def statek_ctx_get(*key_and_default) -> Any:
+    """Retrieve a variable from the current agent's execution context.
+
+    Accepts one or two positional arguments: the key name, and an optional
+    default returned when the key is missing.  Without a default, a missing
+    key or missing context raises KeyError / RuntimeError respectively.
+    With a default, a missing context also returns the default.
+
+    Raises:
+        KeyError: if the key is not found and no default is provided.
+        RuntimeError: if _STATEK_CTX is not found and no default is provided.
+        TypeError: if called with zero or more than two arguments.
+    """
+    if not key_and_default or len(key_and_default) > 2:
+        raise TypeError(
+            f"statek_ctx_get expected 1 or 2 arguments, got {len(key_and_default)}"
+        )
+    has_default = len(key_and_default) == 2
+    ctx = _get_statek_ctx()
+    if ctx is None:
+        if has_default:
+            return key_and_default[1]
+        raise RuntimeError("_STATEK_CTX not found in execution context")
+    return ctx.get(*key_and_default) if has_default else ctx[key_and_default[0]]
+
+
 def get_current_agent():
     """Retrieve the Agent from the current execution context (_STATEK_CTX).
 
     Returns:
         The Agent object from _STATEK_CTX, or None if not available.
     """
-    ctx = next(iter(find_locals(var_name='_STATEK_CTX')), None)
-    if not isinstance(ctx, dict):
-        return None
-    return ctx.get('agent')
+    return statek_ctx_get('agent', None)
 
 
 def get_current_job():
@@ -676,10 +741,7 @@ def get_current_job():
     Returns:
         The Job object from _STATEK_CTX, or None if not available.
     """
-    ctx = next(iter(find_locals(var_name='_STATEK_CTX')), None)
-    if not isinstance(ctx, dict):
-        return None
-    return ctx.get('job')
+    return statek_ctx_get('job', None)
 
 
 def get_current_agent_name() -> Optional[str]:
