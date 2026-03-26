@@ -31,6 +31,48 @@ def list_of_examples(start_index: int = 0, limit: int = 10, **kwargs):  # pylint
 
 
 @tool(system=True)
+def list_of_documents(topic=None, start_index: int = 0, limit: int = 25, **kwargs):  # pylint: disable=unused-argument
+    """Lists available topics or documents within a topic.
+
+    When called without a topic, lists all topics. When called with a topic
+    (ID, name, or fragment), lists documents in that topic.
+
+    Args:
+        topic: Optional topic ID (int), name, or name fragment (str).
+        start_index: Index of the first item to show (default: 0).
+        limit: Maximum number of items to show (default: 25).
+    """
+    from statek.agents.list_of_documents import list_of_documents as _impl  # pylint: disable=import-outside-toplevel
+    from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+    agent = get_current_agent()
+    agent_name = agent.role if agent else None
+    documents_dir = get_statek_settings().documents_dir
+    STATEK_LOGGER.debug("list_of_documents invoked for agent: %s", agent_name)
+    _impl(agent_name, documents_dir, topic=topic, start_index=start_index, limit=limit)
+
+
+@tool(system=True)
+def show_document(key, topic=None, start_from: int = 0, limit: int = 50, **kwargs):  # pylint: disable=unused-argument
+    """Shows the contents of a specific document.
+
+    Locates and prints a document from a specific topic or the last accessed topic.
+
+    Args:
+        key: Document ID (int), title, or title fragment (str).
+        topic: Optional topic ID (int), name, or name fragment (str).
+        start_from: First line number to print (default: 0).
+        limit: Maximum number of lines to print (default: 50).
+    """
+    from statek.agents.list_of_documents import show_document as _impl  # pylint: disable=import-outside-toplevel
+    from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+    agent = get_current_agent()
+    agent_name = agent.role if agent else None
+    documents_dir = get_statek_settings().documents_dir
+    STATEK_LOGGER.debug("show_document invoked for agent: %s", agent_name)
+    _impl(agent_name, documents_dir, key=key, topic=topic, start_from=start_from, limit=limit)
+
+
+@tool(system=True)
 def show_example(example_id: int, **kwargs):  # pylint: disable=unused-argument
     """Shows the content of a specific example by its index.
 
@@ -85,6 +127,8 @@ class Agent:
                 self.update_metadata(prompt_def.metadata)
         self.append_tool(list_of_examples)
         self.append_tool(show_example)
+        self.append_tool(list_of_documents)
+        self.append_tool(show_document)
 
         # Migrate any '_'-prefixed tools passed directly to _tools into _internal_tools
         internal = [fn for fn in self._tools if fn.__name__.startswith('_')]

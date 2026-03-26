@@ -54,6 +54,7 @@ class StatekSettings(BaseSettings):
     prompt_defs: Dict[str, PromptDef] = Field(default_factory=dict)
     logs_path: Optional[str] = None
     examples_dir: Optional[str] = None
+    documents_dir: Optional[str] = None
     """The maximum allowed number of LLM turns per conversation"""
     max_turns: int = 5
     """The maximum allowed total number of exceptions per conversation"""
@@ -97,6 +98,9 @@ class StatekSettings(BaseSettings):
 
         if self.examples_dir is None:
             self.examples_dir = os.environ.get('STATEK_EXAMPLES_DIR')
+
+        if self.documents_dir is None:
+            self.documents_dir = os.environ.get('STATEK_DOCUMENTS_DIR')
 
         # Parse STATEK_ prefixed env vars for harness settings
         for attr, env_var in [
