@@ -4,20 +4,11 @@ import re
 from collections import namedtuple
 from pathlib import Path
 from typing import Dict
-import dbzero as db0
-from dataclasses import dataclass, field
 
 
 # system = the system prompt
 # metadata = prompt's metadata (as key-value dictionary)
 PromptDef = namedtuple("PromptDef", ["system", "metadata"])
-
-# @db0.memo
-# @dataclass
-# class PromptDef:
-#     system: str
-#     metadata: Dict[str, str] = field(default_factory=dict)
-    
 
 def parse_prompt_file(file_path: Path) -> PromptDef:
     """Parse a single prompt definition file.
