@@ -164,7 +164,7 @@ class Agent:
         Returns:
             True if metadata was updated, False if it was already up to date.
         """
-        # FIXME: revert to `self._metadata == new_metadata` after db0 fixes
+        # FIXME: revert to `self._metadata == new_metadata` after db0 fixes  # noqa  # pylint: disable=fixme
         # dict equality bug (issues/878, likely db0 0.1.11).
         if self._metadata is not None and new_metadata is not None:
             if set(self._metadata.keys()) == set(new_metadata.keys()) and all(
