@@ -164,7 +164,14 @@ class Agent:
         Returns:
             True if metadata was updated, False if it was already up to date.
         """
-        if self._metadata == new_metadata:
+        # FIXME: revert to `self._metadata == new_metadata` after db0 fixes
+        # dict equality bug (issues/878, likely db0 0.1.11).
+        if self._metadata is not None and new_metadata is not None:
+            if set(self._metadata.keys()) == set(new_metadata.keys()) and all(
+                self._metadata[k] == new_metadata[k] for k in new_metadata
+            ):
+                return False
+        elif self._metadata is None and new_metadata is None:
             return False
         self._metadata = new_metadata
         STATEK_LOGGER.debug("Agent '%s' metadata updated: %s", self.role, self._metadata)
