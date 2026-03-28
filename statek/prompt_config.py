@@ -10,7 +10,6 @@ from typing import Dict
 # metadata = prompt's metadata (as key-value dictionary)
 PromptDef = namedtuple("PromptDef", ["system", "metadata"])
 
-
 def parse_prompt_file(file_path: Path) -> PromptDef:
     """Parse a single prompt definition file.
 
@@ -109,7 +108,7 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
         if prompt_def.system:
             agent.update_system_prompt(prompt_def.system)
 
-        # Update agent's metadata if changed
+        # # Update agent's metadata if changed
         if prompt_def.metadata:
             agent.update_metadata(prompt_def.metadata)
 
