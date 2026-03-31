@@ -1,5 +1,6 @@
 """Tests for process_push_notifications function."""
-# pylint: disable=unused-argument
+# pylint: disable=unused-argument,no-member
+import dbzero as db0
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
 from statek.statek_push_queue import StatekPushQueue
@@ -25,8 +26,9 @@ class TestProcessPushNotifications:
 
     def test_processes_single_notification(self, db0_fixture):
         job = _make_started_job()
+        job_uuid = db0.uuid(job)
         queue = StatekPushQueue()
-        queue.push_to_job_console(job=job, message="hello")
+        queue.push_to_job_console(job_uuid=job_uuid, message="hello")
 
         process_push_notifications()
 
@@ -35,8 +37,9 @@ class TestProcessPushNotifications:
 
     def test_queue_is_empty_after_processing(self, db0_fixture):
         job = _make_started_job()
+        job_uuid = db0.uuid(job)
         queue = StatekPushQueue()
-        queue.push_to_job_console(job=job, message="hello")
+        queue.push_to_job_console(job_uuid=job_uuid, message="hello")
 
         process_push_notifications()
 
@@ -45,9 +48,10 @@ class TestProcessPushNotifications:
 
     def test_processes_multiple_notifications_for_same_job(self, db0_fixture):
         job = _make_started_job()
+        job_uuid = db0.uuid(job)
         queue = StatekPushQueue()
-        queue.push_to_job_console(job=job, message="msg1")
-        queue.push_to_job_console(job=job, message="msg2")
+        queue.push_to_job_console(job_uuid=job_uuid, message="msg1")
+        queue.push_to_job_console(job_uuid=job_uuid, message="msg2")
 
         process_push_notifications()
 
@@ -60,9 +64,11 @@ class TestProcessPushNotifications:
     def test_processes_notifications_for_multiple_jobs(self, db0_fixture):
         job1 = _make_started_job()
         job2 = _make_started_job()
+        job1_uuid = db0.uuid(job1)
+        job2_uuid = db0.uuid(job2)
         queue = StatekPushQueue()
-        queue.push_to_job_console(job=job1, message="for-job1")
-        queue.push_to_job_console(job=job2, message="for-job2")
+        queue.push_to_job_console(job_uuid=job1_uuid, message="for-job1")
+        queue.push_to_job_console(job_uuid=job2_uuid, message="for-job2")
 
         process_push_notifications()
 
@@ -71,9 +77,10 @@ class TestProcessPushNotifications:
 
     def test_respects_max_count(self, db0_fixture):
         job = _make_started_job()
+        job_uuid = db0.uuid(job)
         queue = StatekPushQueue()
         for i in range(10):
-            queue.push_to_job_console(job=job, message=f"msg{i}")
+            queue.push_to_job_console(job_uuid=job_uuid, message=f"msg{i}")
 
         process_push_notifications(step_size=3, max_count=5)
 
@@ -82,8 +89,9 @@ class TestProcessPushNotifications:
 
     def test_ignores_exception_from_push_user_message(self, db0_fixture):
         job = _make_started_job()
+        job_uuid = db0.uuid(job)
         queue = StatekPushQueue()
-        queue.push_to_job_console(job=job, message="hello")
+        queue.push_to_job_console(job_uuid=job_uuid, message="hello")
 
         original = job.__class__.push_user_message
 
