@@ -200,6 +200,20 @@ _STATEK_PRINT_SCALAR_TYPES = (
     bool, int, float, Decimal, str, datetime, list, tuple, set, frozenset, dict
 )
 
+def _is_dbzero_collection_type(value: Any, *type_names: str) -> bool:
+    """Return whether *value* is a dbzero built-in collection wrapper."""
+    value_type = type(value)
+    return value_type.__module__ == "builtins" and value_type.__name__ in type_names
+
+
+def _uses_default_llm_format(value: Any) -> bool:
+    """Return whether *value* should bypass __str__ and use default LLM formatting."""
+    return (
+        isinstance(value, _STATEK_PRINT_SCALAR_TYPES)
+        or _is_dbzero_collection_type(value, "List", "Tuple", "Set", "FrozenSet", "Dict")
+    )
+
+
 _NONE_TYPE = type(None)
 
 _JSON_SCHEMA_TYPE_MAP = {
@@ -874,7 +888,8 @@ def format_value_repr(value: Any) -> str:
         return f'"{value}"'
     if isinstance(value, datetime):
         return f'datetime("{value.strftime("%Y-%m-%d %H:%M")}")'
-    if isinstance(value, (list, tuple, set, frozenset, dict)):
+    if (_uses_default_llm_format(value)
+            and not isinstance(value, (bool, int, float, Decimal, str, datetime))):
         type_name = type(value).__name__.capitalize()
         return f"<{type_name} of {len(value)} items>"
     return "<Object>"
@@ -902,12 +917,16 @@ def format_llm_repr(value: Any, hide: List[str] = None,
     if isinstance(value, (bool, int, float, Decimal, str, datetime)):
         return format_value_repr(value)
 
-    if isinstance(value, (list, tuple)):
-        brackets = ('[', ']') if isinstance(value, list) else ('(', ')')
+    if (isinstance(value, (list, tuple))
+            or _is_dbzero_collection_type(value, "List", "Tuple")):
+        if isinstance(value, list) or _is_dbzero_collection_type(value, "List"):
+            brackets = ('[', ']')
+        else:
+            brackets = ('(', ')')
         return _format_sequence(list(value), *brackets, max_len)
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, (set, frozenset)) or _is_dbzero_collection_type(value, "Set", "FrozenSet"):
         return _format_sequence(sorted(value, key=repr), '{', '}', max_len)
-    if isinstance(value, dict):
+    if isinstance(value, dict) or _is_dbzero_collection_type(value, "Dict"):
         return _format_dict_llm(value, max_len)
 
     members = _get_object_members(value)
@@ -924,7 +943,7 @@ def _format_element(item: Any, max_len: int, repeated: bool) -> str:
     Applies the same dispatch as format_default_llm_repr, threading max_len and
     repeated through to the fallback format_llm_repr call for plain objects.
     """
-    if isinstance(item, _STATEK_PRINT_SCALAR_TYPES):
+    if _uses_default_llm_format(item):
         return format_llm_repr(item, max_len=max_len)
     if hasattr(item, '__llm_repr__'):
         method = item.__llm_repr__
@@ -1029,7 +1048,7 @@ def format_default_llm_repr(obj: Any, **kwargs) -> str:
     Returns:
         LLM-friendly string representation.
     """
-    if isinstance(obj, _STATEK_PRINT_SCALAR_TYPES):
+    if _uses_default_llm_format(obj):
         return format_llm_repr(obj, **kwargs)
 
     if hasattr(obj, '__llm_repr__'):
