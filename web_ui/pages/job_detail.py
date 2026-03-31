@@ -7,7 +7,7 @@ import dbzero as db0
 from nicegui import ui
 
 from statek.utils import CodeBlock
-from statek.executors.chat_log_item import WarmupLogItem
+from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 from web_ui.components.status_badge import create_status_badge
 
 
@@ -86,7 +86,7 @@ def _get_llm_items(job) -> list:
     """Return only LLM_LogItem entries from job.chat_log (filter out WarmupLogItems)."""
     if not job.chat_log:
         return []
-    return [item for item in job.chat_log if not isinstance(item, WarmupLogItem)]
+    return [item for item in job.chat_log if isinstance(item, LLM_LogItem)]
 
 
 def _get_turn_console_ranges(job) -> list[tuple[int, int]]:

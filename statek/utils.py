@@ -868,6 +868,8 @@ def format_value_repr(value: Any) -> str:
     Returns:
         A string representation suitable for LLM consumption.
     """
+    if value is None:
+        return "None"
     if isinstance(value, (bool, int, float, Decimal)):
         return str(value)
     if isinstance(value, str):
