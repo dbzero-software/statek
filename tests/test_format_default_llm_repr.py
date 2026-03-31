@@ -47,6 +47,28 @@ def test_datetime():
     assert format_default_llm_repr(dt) == 'datetime("2026-01-01 12:00")'
 
 
+# --- None values ---
+
+def test_none():
+    assert format_default_llm_repr(None) == "None"
+
+
+def test_none_in_tuple():
+    assert format_default_llm_repr((None, None, None)) == "(None,None,None)"
+
+
+def test_none_in_list():
+    assert format_default_llm_repr([None, None]) == "[None,None]"
+
+
+def test_none_in_dict_value():
+    assert format_default_llm_repr({"a": None}) == '{"a":None}'
+
+
+def test_none_in_set():
+    assert format_default_llm_repr({None}) == "{None}"
+
+
 # --- Collections use format_llm_repr ---
 
 def test_list():
