@@ -46,6 +46,16 @@ async def _async_agent_tool_error(**kwargs):  # pylint: disable=unused-argument
     raise ValueError("async agent tool error")
 
 
+class _LLMReprToolObject:  # pylint: disable=too-few-public-methods
+    """Simple object with custom LLM representation for exec_tool tests."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __llm_repr__(self):
+        return f"custom:{self.name}"
+
+
 def _call_spec(func_name, args=None, kwargs=None):
     return CallSpec(id="TEST-001", func_name=func_name, args=args or [], kwargs=kwargs or {})
 
@@ -72,8 +82,8 @@ class TestExecTool:
     """Tests for exec_tool."""
 
     @pytest.mark.asyncio
-    async def test_return_value_appended_as_repr(self, db0_fixture):  # pylint: disable=unused-argument
-        """Non-None return value appears in the output as repr()."""
+    async def test_return_value_appended_with_llm_formatting(self, db0_fixture):  # pylint: disable=unused-argument
+        """Non-None return values are serialized with format_default_llm_repr."""
         def add(a, b):
             return a + b
 
@@ -82,6 +92,18 @@ class TestExecTool:
 
         assert "7" in result
         assert job.py_env.console is None
+
+    @pytest.mark.asyncio
+    async def test_return_value_list_uses_llm_repr_for_items(self, db0_fixture):  # pylint: disable=unused-argument
+        """List return values format nested objects with __llm_repr__."""
+        def list_staff():
+            return [_LLMReprToolObject("anna"), _LLMReprToolObject("jan")]
+
+        job = _make_job("role_return_list", context_extras={"list_staff": list_staff})
+        result = await exec_tool(_call_spec("list_staff"), job)
+
+        assert result == "[custom:anna,custom:jan]"
+        assert "object at" not in result
 
     @pytest.mark.asyncio
     async def test_none_return_not_added_to_output(self, db0_fixture):  # pylint: disable=unused-argument
@@ -150,7 +172,7 @@ class TestExecTool:
             _call_spec("greet", kwargs={"name": "World", "greeting": "Hi"}), job
         )
 
-        assert "'Hi, World!'" in result
+        assert '"Hi, World!"' in result
 
     @pytest.mark.asyncio
     async def test_tool_found_in_agent_tools(self, db0_fixture):  # pylint: disable=unused-argument
@@ -160,7 +182,7 @@ class TestExecTool:
             _call_spec("_module_agent_tool", kwargs={"value": "ok"}), job
         )
 
-        assert "'tool: ok'" in result
+        assert '"tool: ok"' in result
         assert job.py_env.console is None
 
     @pytest.mark.asyncio
@@ -241,7 +263,7 @@ class TestExecTool:
             _call_spec("_async_agent_tool", kwargs={"value": "ok"}), job
         )
 
-        assert "'async_tool: ok'" in result
+        assert '"async_tool: ok"' in result
         assert job.py_env.console is None
 
     @pytest.mark.asyncio

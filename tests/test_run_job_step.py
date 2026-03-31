@@ -315,9 +315,9 @@ class TestRunJobStepToolExecution:
         assert warmup_items[0].tool_log is not None
         tool_log = warmup_items[0].tool_log
         if isinstance(tool_log, str):
-            assert "'result_value'" in tool_log
+            assert '"result_value"' in tool_log
         else:
-            assert "'result_value'" in tool_log[0]
+            assert '"result_value"' in tool_log[0]
 
     @pytest.mark.asyncio
     async def test_multiple_tool_results_stored_as_list(self, db0_fixture):  # pylint: disable=unused-argument
@@ -342,8 +342,8 @@ class TestRunJobStepToolExecution:
         stored = warmup_items[0].tool_log
         assert not isinstance(stored, str)
         assert len(stored) == 2
-        assert "'alpha'" in stored[0]
-        assert "'beta'" in stored[1]
+        assert '"alpha"' in stored[0]
+        assert '"beta"' in stored[1]
 
     @pytest.mark.asyncio
     async def test_tool_not_executed_on_continuation(self, db0_fixture):  # pylint: disable=unused-argument
@@ -430,7 +430,7 @@ class TestRunJobStepToolCallLogging:
             await run_job_step(job)
 
         content = self._read_logs(tmp_path)
-        assert "'tool_result'" in content
+        assert '"tool_result"' in content
 
     @pytest.mark.asyncio
     async def test_warmup_tool_result_prefixed_with_gt_in_console_style(  # pylint: disable=unused-argument
@@ -658,15 +658,15 @@ class TestMultiBlockWarmupToolLog:
         # Block 0 result
         tool_log_0 = warmup_items[0].tool_log
         if isinstance(tool_log_0, str):
-            assert "'alpha'" in tool_log_0
+            assert '"alpha"' in tool_log_0
         else:
-            assert "'alpha'" in tool_log_0[0]
+            assert '"alpha"' in tool_log_0[0]
         # Block 1 result
         tool_log_1 = warmup_items[1].tool_log
         if isinstance(tool_log_1, str):
-            assert "'beta'" in tool_log_1
+            assert '"beta"' in tool_log_1
         else:
-            assert "'beta'" in tool_log_1[0]
+            assert '"beta"' in tool_log_1[0]
 
 
 class TestRunJobStepWarmupException:
@@ -981,9 +981,9 @@ class TestRunJobStepEmptyCodeBlock:
         tool_log = warmup_items[0].tool_log
         assert tool_log is not None
         if isinstance(tool_log, str):
-            assert "'my_result'" in tool_log
+            assert '"my_result"' in tool_log
         else:
-            assert "'my_result'" in tool_log[0]
+            assert '"my_result"' in tool_log[0]
 
 
 class TestRunJobStepCliToolCalls:
@@ -1056,7 +1056,7 @@ class TestRunJobStepCliToolCalls:
         tool_log = warmup_items[0].tool_log
         assert not isinstance(tool_log, str)
         assert len(tool_log) == 2
-        assert "'regular_out'" in tool_log[0]
+        assert '"regular_out"' in tool_log[0]
         assert "cli-out" in tool_log[1]
 
     @pytest.mark.asyncio

@@ -913,6 +913,20 @@ text"""
         assert simple_job.py_env.console[0] == "custom:slot"
 
     @pytest.mark.asyncio
+    async def test_exec_step_expression_list_uses_llm_repr_for_items(self, job_factory):
+        """Test that list expressions format nested items via __llm_repr__."""
+        simple_job = self.create_job(job_factory)
+        simple_job.py_env.local_state = {
+            'items': [_LLMReprTestObj(name="anna"), _LLMReprTestObj(name="jan")]
+        }
+
+        await exec_step("items", simple_job)
+
+        assert simple_job.py_env.console is not None
+        assert len(simple_job.py_env.console) == 1
+        assert simple_job.py_env.console[0] == "[custom:anna,custom:jan]"
+
+    @pytest.mark.asyncio
     async def test_exec_step_expression_complex(self, job_factory):
         """Test that complex expressions are evaluated and printed."""
         simple_job = self.create_job(job_factory)

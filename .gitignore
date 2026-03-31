@@ -27,7 +27,7 @@ wheels/
 # PyInstaller
 *.manifest
 *.spec
-*.env
+*.env*
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -60,3 +60,5 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+AGENTS.md
