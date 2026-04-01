@@ -1077,3 +1077,117 @@ class TestRunJobStepCliToolCalls:
         assert job.next_instr_num is not None
         assert job.next_instr_num[0] == 0  # first CLI step
         assert job.next_instr_num[1] is not None  # instruction within CLI step
+
+
+class TestRunJobStepMdDialog:
+    """Tests that MD_DIALOG skips code execution and exits after sending response."""
+
+    @staticmethod
+    def _make_job(job_def_factory, warmup_code=None, status=None):
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+        if status is None:
+            status = JobStatus.STARTED
+        job_def = job_def_factory(warmup_code=warmup_code)
+        job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        return Job(
+            job_def=job_def, model_family="test", model="test-model",
+            job_status=status,
+        )
+
+    @pytest.mark.asyncio
+    async def test_md_dialog_skips_code_execution_and_exits(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """In MD_DIALOG style, LLM response is sent via handle_md_dialog and job exits."""
+        job = self._make_job(job_def_factory)
+
+        mock_response = LLM_Response(
+            text="Hello, how can I help?",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_md_dialog",
+                   new_callable=AsyncMock) as mock_handle:
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is True
+        assert job.status == JobStatus.DONE
+        mock_handle.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_md_dialog_no_error_on_empty_llm_response(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """MD_DIALOG does not raise 'Error: no code submitted' for empty LLM response."""
+        job = self._make_job(job_def_factory)
+        # Simulate LLM having returned a previous response (which would be "code" to execute)
+        from tests.conftest import create_chat_log_item  # pylint: disable=import-outside-toplevel
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=""))
+
+        mock_response = LLM_Response(
+            text="I understand.",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_md_dialog", new_callable=AsyncMock):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        assert "Error: no code submitted." not in console_text
+        assert result is True
+        assert job.status == JobStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_md_dialog_warmup_still_executes_code(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """MD_DIALOG warmup blocks still execute code normally."""
+        job = self._make_job(job_def_factory, warmup_code='test_var = 42',
+                             status=JobStatus.READY)
+
+        mock_response = LLM_Response(
+            text="Warmup complete.",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_md_dialog", new_callable=AsyncMock):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        # Warmup code was executed
+        assert job.py_env.local_state.get('test_var') == 42
+        # Job exits after LLM response in MD_DIALOG
+        assert result is True
+        assert job.status == JobStatus.DONE

@@ -681,6 +681,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 2: Get next code block pending execution
     code = job.get_next_code_block()
 
+    # MD_DIALOG: skip code execution for non-warmup steps (LLM response is
+    # a user-facing message, not code to execute).
+    if (code is not None
+            and job.job_def.chat_style == ChatStyle.MD_DIALOG  # pylint: disable=no-member
+            and job.status not in (JobStatus.READY, JobStatus.WARMING_UP)):
+        code = None
+
     # Step 3: If code is None, change status to STARTED and go to step #9
     if code is None:
         job.set_status(JobStatus.STARTED)
@@ -822,6 +829,14 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 13: MD_DIALOG/DIRECT — dispatch LLM response to user via send_message
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         await handle_md_dialog(response.text, _local_context=local_context)
+
+    # MD_DIALOG: job completes after sending the response
+    if job.job_def.chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+        custom_exit(job)
+        job.set_status(JobStatus.DONE)
+        _log_pending_console(job)
+        job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
+        return True
 
     # Step 14: Check harness constraints after step
     harness.check_after_step(job)
