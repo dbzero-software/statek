@@ -334,7 +334,8 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                 raise
 
 
-async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) -> bool:
+async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
+                    local_context: Optional[dict] = None) -> bool:
     """
     Execute a single step of code within the job's Python environment.
 
@@ -363,10 +364,8 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
         global_context = globals()
     else:
         global_context = {key: value for key, value in job.py_env.global_state.items()}
-    if job.py_env.local_state is None:
-        local_context = {}
-    else:
-        local_context = {key: value for key, value in job.py_env.local_state.items()}
+    if local_context is None:
+        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
 
     try:
         _exec_code_body(
@@ -382,7 +381,8 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None) ->
 
 
 async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
-                        instr_num: Optional[int] = None) -> bool:
+                        instr_num: Optional[int] = None,
+                        local_context: Optional[dict] = None) -> bool:
     """Execute a code block submitted via a ``python_cli`` tool request.
 
     Behaves like :func:`exec_step` — same context sharing, temporal-function
@@ -405,10 +405,8 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         global_context = globals()
     else:
         global_context = {key: value for key, value in job.py_env.global_state.items()}
-    if job.py_env.local_state is None:
-        local_context = {}
-    else:
-        local_context = {key: value for key, value in job.py_env.local_state.items()}
+    if local_context is None:
+        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
 
     def cli_print(*args, sep=' ', end='\n', **kwargs):
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
@@ -430,7 +428,8 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
 
 async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
                          console_append: Callable,
-                         instr_num: Optional[Union[int, Tuple[int, int]]] = None) -> bool:
+                         instr_num: Optional[Union[int, Tuple[int, int]]] = None,
+                         local_context: Optional[dict] = None) -> bool:
     """Execute regular code and any ``python_cli`` tool calls from a code block.
 
     First executes the regular code (if present) via :func:`exec_step`, then
@@ -467,7 +466,8 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
 
     # --- regular code ---
     if not skip_regular and not _is_empty_code(code.code):
-        exited = not await exec_step(code.code, job, instr_num=regular_instr_num)
+        exited = not await exec_step(code.code, job, instr_num=regular_instr_num,
+                                     local_context=local_context)
         if exited:
             return True
 
@@ -493,6 +493,7 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
                 cli_code, job,
                 console_append=lambda s, _idx=cli_idx: console_append(_idx, s),
                 instr_num=step_instr,
+                local_context=local_context,
             )
         except FutureError as e:
             e.instr_num = (cli_idx, e.instr_num)
@@ -504,7 +505,8 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
     return job.py_env.exit_status is not None
 
 
-async def exec_tool(call_spec: CallSpec, job: Job) -> str:
+async def exec_tool(call_spec: CallSpec, job: Job,
+                    local_context: Optional[dict] = None) -> str:
     """Execute a single non-temporal tool invocation within the job's local context.
 
     Uses _setup_execution_context to inject the same global_context / local_context
@@ -541,10 +543,8 @@ async def exec_tool(call_spec: CallSpec, job: Job) -> str:
         global_context = globals()
     else:
         global_context = {key: value for key, value in job.py_env.global_state.items()}
-    if job.py_env.local_state is None:
-        local_context = {}
-    else:
-        local_context = {key: value for key, value in job.py_env.local_state.items()}
+    if local_context is None:
+        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
 
     with _setup_execution_context(job, global_context, local_context, print_fn=_private_print):
         # Re-wrap the original tool with a combined context (global + local) so that
@@ -615,7 +615,7 @@ def _log_pending_console(job: Job):
     job._log_console_batch(from_pos, to_pos)  # pylint: disable=protected-access
 
 
-async def handle_md_dialog(llm_resp: str):
+async def handle_md_dialog(llm_resp: str, _local_context: Optional[dict] = None):
     """Dispatch LLM response text to the user via the DialogAgent's send_message.
 
     Retrieves the current agent from the execution context, verifies it is a
@@ -675,6 +675,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     if job.status == JobStatus.DONE:
         return True
 
+    # Build shared local_context for all context-aware functions in this step
+    local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+
     # Step 2: Get next code block pending execution
     code = job.get_next_code_block()
 
@@ -719,7 +722,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             regular_calls = code.get_regular_tool_calls()
             if regular_calls:
                 for call_spec in regular_calls:
-                    result = await exec_tool(call_spec, job)
+                    result = await exec_tool(call_spec, job, local_context=dict(local_context))
                     if last_chat_log_item is not None:
                         last_chat_log_item.push_tool_result(result)
                     job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
@@ -732,7 +735,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         try:
             code_block = code if isinstance(code, CodeBlock) else CodeBlock(code=code)
-            await exec_all_steps(code_block, job, _cli_console_append, job.next_instr_num)
+            await exec_all_steps(code_block, job, _cli_console_append, job.next_instr_num,
+                                local_context=local_context)
 
             # Push CLI tool results into tool_log in order
             if cli_outputs and last_chat_log_item is not None:
@@ -817,7 +821,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 13: MD_DIALOG/DIRECT — dispatch LLM response to user via send_message
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
-        await handle_md_dialog(response.text)
+        await handle_md_dialog(response.text, _local_context=local_context)
 
     # Step 14: Check harness constraints after step
     harness.check_after_step(job)
@@ -904,6 +908,8 @@ def handle_critical_error(error: Optional[Exception] = None) -> None:
 async def job_worker(semaphore, job: Job, provider: str = None):
     async with semaphore:
         _STATEK_CTX = {'job': job}  # noqa: F841 — makes job accessible to handle_critical_error
+        if job.job_def.agent is not None:
+            _STATEK_CTX['agent'] = job.job_def.agent
         try:
             # Log which agent is running this job
             agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
