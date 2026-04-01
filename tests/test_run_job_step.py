@@ -1080,7 +1080,7 @@ class TestRunJobStepCliToolCalls:
 
 
 class TestRunJobStepMdDialog:
-    """Tests that MD_DIALOG skips code execution and exits after sending response."""
+    """Tests MD_DIALOG: execute code, send text to user, exit only on text-only response."""
 
     @staticmethod
     def _make_job(job_def_factory, warmup_code=None, status=None):
@@ -1095,10 +1095,10 @@ class TestRunJobStepMdDialog:
         )
 
     @pytest.mark.asyncio
-    async def test_md_dialog_skips_code_execution_and_exits(
+    async def test_md_dialog_text_only_response_exits(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
-        """In MD_DIALOG style, LLM response is sent via handle_md_dialog and job exits."""
+        """In MD_DIALOG style, text-only LLM response is sent via handle_md_dialog and job exits."""
         job = self._make_job(job_def_factory)
 
         mock_response = LLM_Response(
@@ -1126,17 +1126,51 @@ class TestRunJobStepMdDialog:
         mock_handle.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_md_dialog_no_error_on_empty_llm_response(
+    async def test_md_dialog_code_response_executes_and_continues(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
-        """MD_DIALOG does not raise 'Error: no code submitted' for empty LLM response."""
+        """In MD_DIALOG style, LLM response with code is sent (text only) and job continues."""
         job = self._make_job(job_def_factory)
-        # Simulate LLM having returned a previous response (which would be "code" to execute)
-        from tests.conftest import create_chat_log_item  # pylint: disable=import-outside-toplevel
-        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=""))
 
         mock_response = LLM_Response(
-            text="I understand.",
+            text="Here is the result:\n```python\ntest_var = 99\n```",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_md_dialog",
+                   new_callable=AsyncMock) as mock_handle:
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        # Job should continue (not exit) so the code can be executed next step
+        assert result is False
+        assert job.status != JobStatus.DONE
+        # Text was dispatched to user
+        mock_handle.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_md_dialog_executes_code_from_previous_response(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """In MD_DIALOG style, code from previous LLM response is executed."""
+        job = self._make_job(job_def_factory)
+        # Simulate previous LLM response containing code
+        from tests.conftest import create_chat_log_item  # pylint: disable=import-outside-toplevel
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="test_var = 42"))
+
+        # Next LLM response is text-only (job will exit after this)
+        mock_response = LLM_Response(
+            text="Done.",
             session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
@@ -1154,8 +1188,9 @@ class TestRunJobStepMdDialog:
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
 
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
-        assert "Error: no code submitted." not in console_text
+        # Code from previous response was executed
+        assert job.py_env.local_state.get('test_var') == 42
+        # Text-only response exits the job
         assert result is True
         assert job.status == JobStatus.DONE
 
