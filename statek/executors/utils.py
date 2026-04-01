@@ -23,7 +23,8 @@ from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.utils import (CodeBlock, CallSpec, format_default_llm_repr,
-                         get_current_job, get_current_agent, parse_md_dialog)
+                         get_current_job, get_current_agent, parse_md_dialog,
+                         strip_markup)
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -819,9 +820,21 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 12: Add new log item using append_chat_log
     job.append_chat_log(request, response)
 
-    # Step 13: MD_DIALOG/DIRECT — dispatch LLM response to user via send_message
+    # Step 13: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         await handle_md_dialog(response.text, _local_context=local_context)
+
+    # MD_DIALOG: if LLM returned only text (no code), job is done;
+    # if LLM returned code, continue the loop to execute it next step.
+    if job.job_def.chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+        has_code = (response.call_requests
+                    or not _is_empty_code(strip_markup(response.text, strict=True)))
+        if not has_code:
+            custom_exit(job)
+            job.set_status(JobStatus.DONE)
+            _log_pending_console(job)
+            job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
+            return True
 
     # Step 14: Check harness constraints after step
     harness.check_after_step(job)
