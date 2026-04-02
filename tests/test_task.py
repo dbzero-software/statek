@@ -2,7 +2,10 @@
 from unittest.mock import Mock, patch
 import pytest
 
-from statek.task import copy_locals, delegate_task, start_dialog
+from statek.task import (
+    copy_locals, delegate_task, start_dialog,
+    build_shared_vars_warmup, submit_new_job, submit_new_jobs_batch,
+)
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import UserLogItem
 from statek.agents.dialog_agent import DialogAgent
@@ -351,3 +354,111 @@ class TestStartDialog:
         child_job = start_dialog(agent, message="child", parent_job=parent_job)
         assert len(child_job.error_handlers) == 1
         assert child_job.error_handlers[0].error_handler is _noop_error_handler
+
+
+class TestBuildSharedVarsWarmup:
+    """Tests for build_shared_vars_warmup helper."""
+
+    def test_none_returns_none_and_empty_dict(self):
+        warmup, local_vars = build_shared_vars_warmup(None)
+        assert warmup is None
+        assert not local_vars
+
+    def test_empty_dict_returns_none(self):
+        warmup, local_vars = build_shared_vars_warmup({})
+        assert warmup is None
+        assert not local_vars
+
+    def test_dict_form(self):
+        obj_a = object()
+        obj_b = object()
+        warmup, local_vars = build_shared_vars_warmup({"alpha": obj_a, "beta": obj_b})
+        assert len(warmup) == 2
+        assert local_vars == {"alpha": obj_a, "beta": obj_b}
+        assert "print(alpha)" in warmup
+        assert "print(beta)" in warmup
+
+    def test_list_form_derives_name_from_type(self):
+        class Invoice:
+            pass
+
+        inv = Invoice()
+        warmup, local_vars = build_shared_vars_warmup([inv])
+        assert local_vars == {"invoice": inv}
+        assert warmup == ["print(invoice)"]
+
+
+class TestSubmitNewJob:
+    """Tests for submit_new_job function."""
+
+    @pytest.fixture
+    def mock_settings(self):
+        with patch('statek.task.get_statek_settings') as mock_statek, \
+             patch('statek.task.get_provider_settings') as mock_provider:
+            mock_statek_settings = Mock()
+            mock_statek_settings.default_llm_api_provider = "OPENAI"
+            mock_statek.return_value = mock_statek_settings
+            mock_provider_settings = Mock()
+            mock_provider_settings.default_model = "gpt-4"
+            mock_provider.return_value = mock_provider_settings
+            yield
+
+    def test_no_shared_vars(self, db0_fixture, supervised_agent, mock_settings):
+        """Creates a job with empty local_state when no shared_vars given."""
+        job = submit_new_job(supervised_agent)
+        assert isinstance(job, Job)
+        assert not job.py_env.local_state
+
+    def test_dict_shared_vars(self, db0_fixture, supervised_agent, mock_settings):
+        """Dict shared_vars populate local_state with correct names."""
+        data = {"count": 42, "label": "test"}
+        job = submit_new_job(supervised_agent, shared_vars=data)
+        assert job.py_env.local_state["count"] == 42
+        assert job.py_env.local_state["label"] == "test"
+
+    def test_list_shared_vars(self, db0_fixture, supervised_agent, mock_settings):
+        """List shared_vars derive names from object type."""
+        job = submit_new_job(supervised_agent, shared_vars=[supervised_agent])
+        assert job.py_env.local_state["supervisedagent"] is supervised_agent
+
+    def test_kwargs_forwarded_as_job_params(self, db0_fixture, mock_settings):
+        """Extra kwargs become job_params on the JobDef."""
+        from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+        agent = SupervisedAgent(
+            role="test",
+            _system_prompt="Test",
+            _metadata={'prompt_template': 'Handle {kind}'},
+            _tools=[]
+        )
+        job = submit_new_job(agent, kind="invoice")
+        assert job.job_def.job_params["kind"] == "invoice"
+        assert job.job_def.prompt() == "Handle invoice"
+
+
+class TestSubmitNewJobsBatch:
+    """Tests for submit_new_jobs_batch function."""
+
+    @pytest.fixture
+    def mock_settings(self):
+        with patch('statek.task.get_statek_settings') as mock_statek, \
+             patch('statek.task.get_provider_settings') as mock_provider:
+            mock_statek_settings = Mock()
+            mock_statek_settings.default_llm_api_provider = "OPENAI"
+            mock_statek.return_value = mock_statek_settings
+            mock_provider_settings = Mock()
+            mock_provider_settings.default_model = "gpt-4"
+            mock_provider.return_value = mock_provider_settings
+            yield
+
+    def test_creates_multiple_jobs(self, db0_fixture, supervised_agent, mock_settings):
+        """Creates one job per shared_vars entry."""
+        batch = [
+            {"x": 1},
+            {"x": 2},
+            None,
+        ]
+        jobs = submit_new_jobs_batch(supervised_agent, batch)
+        assert len(jobs) == 3
+        assert jobs[0].py_env.local_state["x"] == 1
+        assert jobs[1].py_env.local_state["x"] == 2
+        assert not jobs[2].py_env.local_state

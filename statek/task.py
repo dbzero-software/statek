@@ -1,5 +1,5 @@
 # pylint: disable=no-member
-from typing import Tuple, Dict, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import ast
 import inspect
 import dbzero as db0
@@ -166,3 +166,103 @@ def start_dialog(
     job.push_user_message(message)
 
     return job
+
+
+def build_shared_vars_warmup(
+    shared_vars: Optional[Union[List[Any], Dict[str, Any]]]
+) -> Tuple[Optional[List[str]], Dict[str, Any]]:
+    """Build warmup code blocks and a local_vars dict from shared variables.
+
+    This is the generic code-generation utility for sharing variables with a
+    new job.  It works with already-resolved objects — no frame inspection.
+
+    **Dict form** ``{"var_name": obj}``: each entry produces a
+    ``print(var_name)`` warmup block with the object stored under *var_name*.
+
+    **List form** ``[obj, ...]``: the variable name is derived from the
+    object's type (lowercased class name).
+
+    Args:
+        shared_vars: Variables to share with the job.
+
+    Returns:
+        ``(warmup_code, local_vars)`` — *warmup_code* is ``None`` when
+        *shared_vars* is empty/None.
+    """
+    if not shared_vars:
+        return None, {}
+
+    warmup_blocks: List[str] = []
+    local_vars: Dict[str, Any] = {}
+
+    if isinstance(shared_vars, dict):
+        for var_name, obj in shared_vars.items():
+            local_vars[var_name] = obj
+            warmup_blocks.append(f"print({var_name})")
+    else:
+        for obj in shared_vars:
+            var_name = type(obj).__name__.lower()
+            local_vars[var_name] = obj
+            warmup_blocks.append(f"print({var_name})")
+
+    return warmup_blocks, local_vars
+
+
+def submit_new_job(
+    agent: SupervisedAgent,
+    shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
+    **kwargs
+) -> Job:
+    """Create a new job for external use.
+
+    Similar to :func:`delegate_task` but intended for external scripts and
+    processes.  Accepts actual objects instead of relying on call-stack
+    frame inspection.
+
+    Args:
+        agent: The agent (must inherit from SupervisedAgent).
+        shared_vars: Variables to share with the job.  A dict maps
+            ``{var_name: object}``; a list derives names from each
+            object's type.
+        kwargs: Agent-specific job parameters.
+
+    Returns:
+        The newly created :class:`Job` instance.
+    """
+    warmup_code, local_vars = build_shared_vars_warmup(shared_vars)
+
+    job_def = agent.create_job_def(warmup_code=warmup_code, **kwargs)
+
+    env = PyEnv()
+    if warmup_code:
+        for block in warmup_code:
+            copy_locals(block, env.local_state, local_vars)
+
+    return Job(
+        job_def=job_def,
+        model_family=get_statek_settings().default_llm_api_provider,
+        model=get_provider_settings().default_model,
+        job_status=JobStatus.READY,
+        py_env=env,
+    )
+
+
+def submit_new_jobs_batch(
+    agent: SupervisedAgent,
+    shared_vars_batch: List[Optional[Union[List[Any], Dict[str, Any]]]],
+    **kwargs
+) -> List[Job]:
+    """Create multiple jobs with different shared variables in one call.
+
+    Args:
+        agent: The agent (must inherit from SupervisedAgent).
+        shared_vars_batch: A list of shared_vars entries — one per job.
+        kwargs: Agent-specific job parameters (same for all jobs).
+
+    Returns:
+        A list of newly created :class:`Job` instances.
+    """
+    return [
+        submit_new_job(agent, shared_vars=sv, **kwargs)
+        for sv in shared_vars_batch
+    ]
