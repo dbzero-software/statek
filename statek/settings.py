@@ -74,6 +74,10 @@ class StatekSettings(BaseSettings):
     log_level: str = "WARNING"
     """The default ACL mode string: GRANT or DENY (loaded from STATEK_DEFAULT_ACL)"""
     default_acl_str: str = "DENY"
+    """Host for the STATEK RPC server"""
+    statek_rpc_host: str = "0.0.0.0"
+    """Port for the STATEK RPC server"""
+    statek_rpc_port: int = 8300
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -135,6 +139,14 @@ class StatekSettings(BaseSettings):
         env_val = os.environ.get('STATEK_DEFAULT_ACL')
         if env_val is not None and 'default_acl_str' not in data:
             self.default_acl_str = env_val.upper()
+
+        env_val = os.environ.get('STATEK_RPC_HOST')
+        if env_val is not None and 'statek_rpc_host' not in data:
+            self.statek_rpc_host = env_val
+
+        env_val = os.environ.get('STATEK_RPC_PORT')
+        if env_val is not None and 'statek_rpc_port' not in data:
+            self.statek_rpc_port = int(env_val)
 
         if not self.prompt_defs:
             self.prompt_defs = (
