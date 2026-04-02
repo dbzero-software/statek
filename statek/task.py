@@ -76,6 +76,7 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
 @tool
 def delegate_task(agent: SupervisedAgent,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    parent_job: Optional[Job] = None,
     **kwargs) -> TaskFutureResult:
     """Create a new job delegated to given agent.
 
@@ -83,6 +84,8 @@ def delegate_task(agent: SupervisedAgent,
         agent: The `Agent` to delegate task to
         warmup_code: Optional Python code (single block or sequence of blocks)
                     to be executed prior to task start
+        parent_job: Optional parent job — when provided, the child job
+                    inherits the parent's error handlers.
         kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
 
@@ -108,6 +111,9 @@ def delegate_task(agent: SupervisedAgent,
         py_env=env
     )
 
+    if parent_job is not None:
+        job.add_error_handlers_from(parent_job)
+
     return TaskFutureResult(job, deps=None, state_num=0)
 
 
@@ -115,6 +121,7 @@ def start_dialog(
     agent: DialogAgent,
     message: str,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    parent_job: Optional[Job] = None,
     **kwargs
 ) -> Job:
     """Start a dialog job with a DialogAgent and an initial user message.
@@ -126,6 +133,8 @@ def start_dialog(
                      executed prior to task start.  When provided, all
                      referenced locals of the caller are copied into the
                      new job's context.
+        parent_job: Optional parent job — when provided, the child job
+                    inherits the parent's error handlers.
         kwargs: Optional agent-specific extra arguments (job_params).
 
     Returns:
@@ -150,6 +159,9 @@ def start_dialog(
         job_status=JobStatus.READY,
         py_env=env
     )
+
+    if parent_job is not None:
+        job.add_error_handlers_from(parent_job)
 
     job.push_user_message(message)
 

@@ -8,6 +8,10 @@ from statek.executors.chat_log_item import UserLogItem
 from statek.agents.dialog_agent import DialogAgent
 from statek.exceptions import FutureError
 
+def _noop_error_handler(context, error=None):
+    """Minimal error handler for tests."""
+
+
 class TestCopyLocals:
     """Tests for copy_locals function."""
 
@@ -251,6 +255,26 @@ class TestDelegateTask:
         assert result.value == ("OK", result.job)
 
 
+    def test_delegate_task_with_parent_job_copies_error_handlers(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Error handlers from parent_job are inherited by the child job."""
+        parent_result = delegate_task(supervised_agent)
+        parent_job = parent_result.job
+        parent_job.add_error_handler(_noop_error_handler, "ctx")
+
+        child_result = delegate_task(supervised_agent, parent_job=parent_job)
+        assert len(child_result.job.error_handlers) == 1
+        assert child_result.job.error_handlers[0].error_handler is _noop_error_handler
+
+    def test_delegate_task_without_parent_job_has_no_handlers(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Without parent_job, the child job has no error handlers."""
+        result = delegate_task(supervised_agent)
+        assert len(result.job.error_handlers) == 0
+
+
 def _make_send_message(body: str, media=None):
     """Mock send_message for DialogAgent tests.
 
@@ -315,3 +339,15 @@ class TestStartDialog:
         job = start_dialog(
             agent, message="hi", topic="weather")
         assert job.job_def.job_params["topic"] == "weather"
+
+    def test_start_dialog_with_parent_job_copies_error_handlers(
+        self, db0_fixture, mock_settings
+    ):
+        """Error handlers from parent_job are inherited by the dialog job."""
+        agent = DialogAgent(send_message=_make_send_message)
+        parent_job = start_dialog(agent, message="parent")
+        parent_job.add_error_handler(_noop_error_handler, "ctx")
+
+        child_job = start_dialog(agent, message="child", parent_job=parent_job)
+        assert len(child_job.error_handlers) == 1
+        assert child_job.error_handlers[0].error_handler is _noop_error_handler

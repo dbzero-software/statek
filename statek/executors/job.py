@@ -260,6 +260,10 @@ class Job:
         """
         self.error_handlers.append(ErrorHandler(error_handler=error_handler, context=context))
 
+    def add_error_handlers_from(self, parent_job: 'Job') -> None:
+        """Copy all registered error handlers from *parent_job* into this job."""
+        self.error_handlers.extend(parent_job.error_handlers)
+
     def notify_handlers(self, error: Optional[Exception] = None) -> None:
         """Invoke all registered error handlers and clear the handler list.
 
@@ -904,7 +908,7 @@ class Job:
         max_streak = 0
         streak = 0
         for item in self.chat_log:
-            if isinstance(item, WarmupLogItem):
+            if not isinstance(item, LLM_LogItem):
                 continue
             if item.console_pos in exception_positions:
                 streak += 1
