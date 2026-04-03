@@ -362,6 +362,7 @@ def _call_build_md(job, **kwargs):
         total_cost=kwargs.get('total_cost', 0.0042),
         num_turns=kwargs.get('num_turns', 0),
         exception_count=kwargs.get('exception_count', 0),
+        chat_style=kwargs.get('chat_style', ''),
         system_prompt=kwargs.get('system_prompt', ''),
         initial_prompt=kwargs.get('initial_prompt', ''),
         job=job,
@@ -390,6 +391,17 @@ class TestBuildMdContent:
         assert 'gpt-4' in md
         assert '1.5' in md
         assert '7' in md
+
+    def test_includes_chat_style_when_present(self, db0_fixture):
+        job = _make_job_for_md()
+        md = _call_build_md(job, chat_style='MD_DIALOG')
+        assert 'Chat Style' in md
+        assert 'MD_DIALOG' in md
+
+    def test_omits_chat_style_when_empty(self, db0_fixture):
+        job = _make_job_for_md()
+        md = _call_build_md(job, chat_style='')
+        assert 'Chat Style' not in md
 
     def test_includes_system_prompt_section_when_present(self, db0_fixture):
         job = _make_job_for_md()

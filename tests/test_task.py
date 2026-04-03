@@ -356,6 +356,24 @@ class TestStartDialog:
         assert child_job.error_handlers[0].error_handler is _noop_error_handler
 
 
+class TestDialogAgentCreateJobDefChatStyle:
+    """Tests for DialogAgent.create_job_def chat_style parameter."""
+
+    def test_default_chat_style_is_md_dialog(self, db0_fixture):
+        """Without explicit chat_style, jobs default to MD_DIALOG."""
+        from statek.chat_style import ChatStyle
+        agent = DialogAgent(send_message=_make_send_message)
+        job_def = agent.create_job_def()
+        assert job_def.chat_style == ChatStyle.MD_DIALOG
+
+    def test_explicit_chat_style_overrides_default(self, db0_fixture):
+        """Passing chat_style overrides the MD_DIALOG default."""
+        from statek.chat_style import ChatStyle
+        agent = DialogAgent(send_message=_make_send_message)
+        job_def = agent.create_job_def(chat_style=ChatStyle.DIRECT)
+        assert job_def.chat_style == ChatStyle.DIRECT
+
+
 class TestBuildSharedVarsWarmup:
     """Tests for build_shared_vars_warmup helper."""
 

@@ -118,7 +118,11 @@ class TestProcessRequestToolScope:
                 metadata={"LLM_TOOLS_SCOPE": "SYSTEM"},
             )
 
-        assert captured["tools"] == [sys_tool]
+        tool_names = [t.__name__ for t in captured["tools"]]
+        assert sys_tool.__name__ in tool_names
+        assert app_tool.__name__ not in tool_names
+        # Registry system tools (e.g. python_cli) are merged in
+        assert "python_cli" in tool_names
 
     @pytest.mark.asyncio
     async def test_application_scope_filters_to_app_tools(
@@ -156,7 +160,11 @@ class TestProcessRequestToolScope:
                 metadata={"LLM_TOOLS_SCOPE": "ALL"},
             )
 
-        assert set(captured["tools"]) == {app_tool, sys_tool}
+        tool_names = [t.__name__ for t in captured["tools"]]
+        assert app_tool.__name__ in tool_names
+        assert sys_tool.__name__ in tool_names
+        # Registry system tools are merged in for ALL scope
+        assert "python_cli" in tool_names
 
     @pytest.mark.asyncio
     async def test_tools_scope_without_available_tools_passes_none(
@@ -648,17 +656,21 @@ class TestClaudeCallRequests:
 class TestAgentAllTools:
     """Tests for Agent.all_tools property."""
 
-    def test_all_tools_includes_list_tools(self, agent):
-        """all_tools contains the tools in _tools."""
+    def test_all_tools_excludes_system_registry_tools(self, agent):
+        """all_tools does not contain system tools from the registry."""
         tools = agent.all_tools
         assert isinstance(tools, list)
-        # Agent fixture has list_of_examples and show_example appended in __post_init__
+        # System tools are in the registry, not on the agent
         tool_names = [t.__name__ for t in tools]
-        assert "list_of_examples" in tool_names
-        assert "show_example" in tool_names
+        assert "list_of_examples" not in tool_names
+        assert "show_example" not in tool_names
 
     def test_all_tools_returns_copy(self, agent):
         """Mutating the returned list does not affect the agent."""
+        @tool
+        def _copy_test_tool(**kwargs):
+            """Dummy tool."""
+        agent.append_tool(_copy_test_tool)
         tools1 = agent.all_tools
         tools1.clear()
         tools2 = agent.all_tools
@@ -756,7 +768,7 @@ class TestAppendTool:
         assert _hidden in agent.all_tools
 
     def test_append_system_tool_with_args(self, agent):
-        """A system tool with arguments is included in system_tools after append."""
+        """A system tool with arguments is included in all_tools after append."""
         @tool(system=True)
         def sys_info(detail: str, **kwargs):
             """System info tool.
@@ -767,22 +779,7 @@ class TestAppendTool:
             return detail
 
         agent.append_tool(sys_info)
-        assert sys_info in agent.system_tools
-
-    def test_append_app_tool_not_in_system_tools(self, agent):
-        """A non-system tool with arguments is NOT in system_tools."""
-        @tool
-        def app_info(detail: str, **kwargs):
-            """App info tool.
-
-            Args:
-                detail: Detail level.
-            """
-            return detail
-
-        agent.append_tool(app_info)
-        assert app_info not in agent.system_tools
-        assert app_info in agent.all_tools
+        assert sys_info in agent.all_tools
 
 
 class TestGetNextRequestAvailableTools:

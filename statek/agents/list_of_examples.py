@@ -5,8 +5,8 @@ Provides base tools for listing and showing examples for a given agent from the 
 examples directory. The base directory is read from StatekSettings.examples_dir
 (env: STATEK_EXAMPLES_DIR). Examples for each agent live under <examples_dir>/<agent_name>/.
 
-These tools are registered on every Agent instance from Agent.__post_init__. The wrappers
-in agent.py resolve agent_name at call time via find_locals() and delegate here.
+These tools are registered in the global tool registry via ``@tool(system=True)``.
+The wrappers in agent.py resolve agent_name at call time via get_current_agent() and delegate here.
 """
 
 import logging

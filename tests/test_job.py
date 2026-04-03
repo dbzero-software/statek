@@ -1091,19 +1091,22 @@ class TestUserLogItem:
 class TestGetNextRequestUserMessages:
     """Tests for _full_history yielding ChatStepUserData for user messages."""
 
-    def test_str_in_chat_log_yields_user_data(self, job_factory):
-        """A str entry in chat_log is yielded as ChatStepUserData."""
+    def test_str_in_chat_log_not_yielded(self, job_factory):
+        """A str entry in chat_log (initial user message) is NOT yielded as
+        ChatStepUserData — its content is already in the warmup output."""
         job = job_factory()
         job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append("initial user message")
         job.chat_log.append(
             create_chat_log_item(console_pos=2, llm_resp="Response 1"))
-        job.chat_log.append("user question")
 
         request = job.get_next_request()
         history = list(request["chat_history"])
 
-        # Normal history + user message at the end
-        assert history[-1] == ChatStepUserData(message="user question")
+        user_data_items = [
+            h for h in history if isinstance(h, ChatStepUserData)
+        ]
+        assert len(user_data_items) == 0
 
     def test_user_log_item_in_chat_log_yields_user_data(self, job_factory):
         """A UserLogItem in chat_log is yielded as ChatStepUserData."""
@@ -1118,13 +1121,13 @@ class TestGetNextRequestUserMessages:
 
         assert history[-1] == ChatStepUserData(message="user follow-up")
 
-    def test_multiple_user_messages_after_llm(self, job_factory):
-        """Multiple user messages after LLM turns are all yielded."""
+    def test_multiple_user_log_items_after_llm(self, job_factory):
+        """Multiple UserLogItem follow-ups after LLM turns are all yielded."""
         job = job_factory()
         job.py_env.console = ["Out1"]
         job.chat_log.append(
             create_chat_log_item(console_pos=1, llm_resp="R1"))
-        job.chat_log.append("msg1")
+        job.chat_log.append(UserLogItem(message="msg1"))
         job.chat_log.append(UserLogItem(message="msg2"))
 
         request = job.get_next_request()
@@ -1143,7 +1146,7 @@ class TestGetNextRequestUserMessages:
         job.py_env.console = ["Out1", "Out2"]
         job.chat_log.append(
             create_chat_log_item(console_pos=2, llm_resp="Response 1"))
-        job.chat_log.append("user msg")
+        job.chat_log.append(UserLogItem(message="user msg"))
 
         request = job.get_next_request()
         history = list(request["chat_history"])

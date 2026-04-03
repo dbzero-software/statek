@@ -232,7 +232,7 @@ class LLM_API(ABC):
         Raises:
             Exception: If the API request fails or model cannot be determined
         """
-        from .system import select_tools  # pylint: disable=import-outside-toplevel
+        from .system import select_tools, find_tools  # pylint: disable=import-outside-toplevel
 
         STATEK_LOGGER.debug("%s metadata: %s", self.__class__.__name__, metadata)
         STATEK_LOGGER.debug(
@@ -242,11 +242,17 @@ class LLM_API(ABC):
         )
 
         tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
-        tools = (
-            select_tools(available_tools, tools_scope, chat_style=chat_style)
-            if tools_scope and available_tools
-            else None
-        )
+        if tools_scope and available_tools:
+            tools = select_tools(available_tools, tools_scope, chat_style=chat_style)
+            # Merge system tools from the global registry that aren't already
+            # in the agent's tool list (e.g. python_cli).
+            if tools_scope in ("SYSTEM", "ALL", None):
+                existing = {t.__name__ for t in tools}
+                for rt in find_tools("SYSTEM", chat_style=chat_style):
+                    if rt.__name__ not in existing:
+                        tools.append(rt)
+        else:
+            tools = None
 
         response = await self._process_request(
             system_prompt=system_prompt,

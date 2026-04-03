@@ -713,11 +713,14 @@ class Job:
                 tool_calls=_get_step_tool_calls(k)
             )
 
-            # Yield user messages (str / UserLogItem) from chat_log
+            # Yield follow-up user messages (UserLogItem only) from chat_log.
+            # The initial str entry (chat_log[0]) set by push_user_message is
+            # NOT yielded — its content is already communicated to the LLM via
+            # warmup code (e.g. print(message)).  Yielding it here would place
+            # it after the latest console output, making the LLM see the raw
+            # user text instead of the most recent execution result.
             for item in self.chat_log:
-                if isinstance(item, str) and item:
-                    yield ChatStepUserData(message=item)
-                elif isinstance(item, UserLogItem) and item.message:
+                if isinstance(item, UserLogItem) and item.message:
                     yield ChatStepUserData(message=item.message)
 
         metadata = dict(self.job_def.agent._metadata) if self.job_def.agent._metadata else {}  # pylint: disable=protected-access

@@ -88,8 +88,15 @@ class DialogAgent(SupervisedAgent):
         _send_message.__doc__ = getattr(original, "__doc__", None)
         self.append_tool(_send_message)
 
-    def create_job_def(self, tools=None, warmup_code=None, **kwargs):  # pylint: disable=no-member
-        """Create a JobDef with MD_DIALOG chat style."""
+    def create_job_def(self, tools=None, warmup_code=None, chat_style=None, **kwargs):  # pylint: disable=no-member
+        """Create a JobDef with a dialog chat style.
+
+        Args:
+            tools: additional tools for this job
+            warmup_code: optional initialization code
+            chat_style: chat style override; defaults to MD_DIALOG
+            **kwargs: job-specific parameters forwarded to the parent
+        """
         job_def = super().create_job_def(tools=tools, warmup_code=warmup_code, **kwargs)
-        job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        job_def.set_chat_style(chat_style or ChatStyle.MD_DIALOG)  # pylint: disable=no-member
         return job_def

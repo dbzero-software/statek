@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
-from typing import Iterable, List, Callable, Dict, Optional, Sequence, Union
+from typing import List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import block_comment, get_current_agent, _get_class_name
 from statek.system import tool
@@ -126,11 +126,6 @@ class Agent:
                 self._system_prompt = prompt_def.system
             if prompt_def.metadata:
                 self.update_metadata(prompt_def.metadata)
-        self.append_tool(list_of_examples)
-        self.append_tool(show_example)
-        self.append_tool(list_of_documents)
-        self.append_tool(show_document)
-
         # Migrate any '_'-prefixed tools passed directly to _tools into _internal_tools
         internal = [fn for fn in self._tools if fn.__name__.startswith('_')]
         if internal:
@@ -294,17 +289,6 @@ class Agent:
             for tool_name in self._internal_tools_by_name:
                 fn = self.context.get(tool_name)
                 if fn is not None:
-                    result.append(fn)
-        return result
-
-    @property
-    def system_tools(self) -> Iterable[Callable]:
-        """Return agent-assigned tools marked with system=True."""
-        result = [fn for fn in self._tools if getattr(fn, 'tool_system', False)]
-        if self._tools_by_name:
-            for tool_name in self._tools_by_name:
-                fn = self.context.get(tool_name)
-                if fn is not None and getattr(fn, 'tool_system', False):
                     result.append(fn)
         return result
 
