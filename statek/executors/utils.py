@@ -757,6 +757,12 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 for cli_idx in sorted(cli_outputs):
                     last_chat_log_item.push_tool_result("\n".join(cli_outputs[cli_idx]))
 
+            # DIRECT: also echo CLI output to job console so the user sees it
+            if job.job_def.chat_style == ChatStyle.DIRECT and cli_outputs:  # pylint: disable=no-member
+                for cli_idx in sorted(cli_outputs):
+                    for line in cli_outputs[cli_idx]:
+                        job.console_append(line)
+
             # Clear continuation state after successful execution
             job.awaited_result = None
             job.next_instr_num = None
@@ -837,11 +843,14 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         await handle_md_dialog(response.text, _local_context=local_context)
 
-    # MD_DIALOG: if LLM returned only text (no code), job is done;
-    # if LLM returned code, continue the loop to execute it next step.
-    if job.job_def.chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
-        has_code = (response.call_requests
-                    or not _is_empty_code(strip_markup(response.text, strict=True)))
+    # MD_DIALOG / DIRECT: if LLM returned only text (no code / no tool calls), job is done;
+    # if LLM returned code (MD_DIALOG) or tool calls (DIRECT), continue the loop.
+    if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
+        if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
+            has_code = bool(response.call_requests)
+        else:
+            has_code = (response.call_requests
+                        or not _is_empty_code(strip_markup(response.text, strict=True)))
         if not has_code:
             custom_exit(job)
             job.set_status(JobStatus.DONE)
