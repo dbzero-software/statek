@@ -100,6 +100,7 @@ class Agent:
     _internal_tools_by_name: Optional[List[str]] = field(default_factory=list)
     _metadata: Optional[Dict[str, str]] = None  # prompt meta-data as key/value pairs
     _X__context: Optional[Dict] = None  # Agent's specific context (e.g. with private tools)
+    _description: Optional[str] = None  # optional LLM-friendly description of agent capabilities
 
     def __post_init__(self):
         """
@@ -168,6 +169,26 @@ class Agent:
             return False
         self._metadata = new_metadata
         STATEK_LOGGER.debug("Agent '%s' metadata updated: %s", self.role, self._metadata)
+        return True
+
+    @property
+    def description(self) -> Optional[str]:
+        """Return the short description of the agent's capabilities."""
+        return self._description
+
+    def update_description(self, new_description: str) -> bool:
+        """Update _description only if it differs from the current value.
+
+        Args:
+            new_description: New description string to apply.
+
+        Returns:
+            True if the description was updated, False if it was already up to date.
+        """
+        if self._description == new_description:
+            return False
+        self._description = new_description
+        STATEK_LOGGER.debug("Agent '%s' description updated", self.role)
         return True
 
     def _expand_tool_placeholders(self, text: str) -> Optional[str]:

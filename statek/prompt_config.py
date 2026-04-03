@@ -42,7 +42,7 @@ def parse_prompt_file(file_path: Path) -> PromptDef:
                 # Check for metadata comment: # KEY: value
                 meta_match = re.match(r'^#\s+(\w+):\s+(.+)$', line)
                 if meta_match:
-                    metadata[meta_match.group(1)] = meta_match.group(2).strip()
+                    metadata[meta_match.group(1).upper()] = meta_match.group(2).strip()
 
     if not in_system:
         raise ValueError(
@@ -108,9 +108,14 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
         if prompt_def.system:
             agent.update_system_prompt(prompt_def.system)
 
-        # # Update agent's metadata if changed
+        # Update agent's metadata if changed
         if prompt_def.metadata:
             agent.update_metadata(prompt_def.metadata)
+
+        # Update agent description from DESCRIPTION metadata key
+        description = prompt_def.metadata.get('DESCRIPTION') if prompt_def.metadata else None
+        if description:
+            agent.update_description(description)
 
         # Propagate CHAT_STYLE to associated JobDefs
         chat_style_str = prompt_def.metadata.get('CHAT_STYLE') if prompt_def.metadata else None

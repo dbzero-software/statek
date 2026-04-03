@@ -119,6 +119,35 @@ class TestAgent:
 
         assert _internal_tool in agent.all_tools
 
+    def test_description_default_none(self, db0_fixture):  # pylint: disable=unused-argument
+        """Agent description defaults to None."""
+        agent = Agent(role="test", _system_prompt="test", _tools=[])
+        assert agent.description is None
+
+    def test_description_set_at_init(self, db0_fixture):  # pylint: disable=unused-argument
+        """Agent description can be set at initialization."""
+        agent = Agent(role="test", _system_prompt="test", _tools=[], _description="A test agent")
+        assert agent.description == "A test agent"
+
+    def test_update_description_sets_value(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_description sets description when previously None."""
+        agent = Agent(role="test", _system_prompt="test", _tools=[])
+        result = agent.update_description("New description")
+        assert result is True
+        assert agent.description == "New description"
+
+    def test_update_description_no_change(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_description returns False when value hasn't changed."""
+        agent = Agent(role="test", _system_prompt="test", _tools=[], _description="Same")
+        result = agent.update_description("Same")
+        assert result is False
+
+    def test_update_description_changed_value(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_description returns True and updates when value changes."""
+        agent = Agent(role="test", _system_prompt="test", _tools=[], _description="Old")
+        result = agent.update_description("New")
+        assert result is True
+        assert agent.description == "New"
 
 
 class TestSupervisedAgentCustomRole:
