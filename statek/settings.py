@@ -75,9 +75,9 @@ class StatekSettings(BaseSettings):
     """The default ACL mode string: GRANT or DENY (loaded from STATEK_DEFAULT_ACL)"""
     default_acl_str: str = "DENY"
     """Host for the STATEK RPC server"""
-    statek_rpc_host: str = "0.0.0.0"
+    statek_rpc_host: Optional[str] = None
     """Port for the STATEK RPC server"""
-    statek_rpc_port: int = 8300
+    statek_rpc_port: Optional[int] = None
 
     model_config = SettingsConfigDict(extra='ignore')
 
