@@ -11,7 +11,6 @@ import dbzero as db0
 from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
 from .utils import find_locals, get_current_agent_name, get_current_job
-from .chat_style import ChatStyle
 
 
 _TOOL_REGISTRY: list[Callable] = []
@@ -346,7 +345,7 @@ def _matches_chat_style(tool_func: Callable, chat_style) -> bool:
     target = getattr(tool_func, 'tool_target', None)
     if target is None:
         return True
-    if isinstance(target, (list, tuple)):
+    if isinstance(target, (list, tuple, set, frozenset)):
         return chat_style in target
     return target == chat_style
 
@@ -547,7 +546,7 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
         print(f"{type(e).__name__}: {e}")
 
 
-@tool(system=True, target=ChatStyle.DIRECT)  # pylint: disable=no-member
+@tool(system=True)
 def python_cli(code: str, **kwargs):  # pylint: disable=unused-argument
     """Execute Python code within the current job context.
 

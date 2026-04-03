@@ -60,8 +60,9 @@ class TestAgent:
         )
 
         assert "Available tools:" in agent.system_prompt()
-        assert "list_of_examples" in agent.system_prompt()
-        assert "show_example" in agent.system_prompt()
+        # System tools are in the registry, not on the agent
+        assert "list_of_examples" not in agent.system_prompt()
+        assert "show_example" not in agent.system_prompt()
 
     def test_system_prompt_with_block_comment(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with block comment placeholder."""
@@ -118,6 +119,12 @@ class TestAgent:
         agent = Agent(role="test", _system_prompt="{tools}", _tools=[_internal_tool])
 
         assert _internal_tool in agent.all_tools
+
+    def test_python_cli_in_system_registry(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli is a global system tool available via find_tools."""
+        from statek.system import find_tools  # pylint: disable=import-outside-toplevel
+        tool_names = [t.__name__ for t in find_tools("SYSTEM")]
+        assert "python_cli" in tool_names
 
     def test_description_default_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Agent description defaults to None."""

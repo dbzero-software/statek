@@ -9,6 +9,7 @@ from statek.task import (
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import UserLogItem
 from statek.agents.dialog_agent import DialogAgent
+from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 
 def _noop_error_handler(context, error=None):
@@ -354,6 +355,22 @@ class TestStartDialog:
         child_job = start_dialog(agent, message="child", parent_job=parent_job)
         assert len(child_job.error_handlers) == 1
         assert child_job.error_handlers[0].error_handler is _noop_error_handler
+
+
+class TestDialogAgentCreateJobDefChatStyle:
+    """Tests for DialogAgent.create_job_def chat_style parameter."""
+
+    def test_default_chat_style_is_md_dialog(self, db0_fixture):
+        """Without explicit chat_style, jobs default to MD_DIALOG."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job_def = agent.create_job_def()
+        assert job_def.chat_style == ChatStyle.MD_DIALOG
+
+    def test_explicit_chat_style_overrides_default(self, db0_fixture):
+        """Passing chat_style overrides the MD_DIALOG default."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job_def = agent.create_job_def(chat_style=ChatStyle.DIRECT)
+        assert job_def.chat_style == ChatStyle.DIRECT
 
 
 class TestBuildSharedVarsWarmup:

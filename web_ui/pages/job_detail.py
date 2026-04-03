@@ -410,6 +410,7 @@ def _build_md_content(
     total_cost: float,
     num_turns: int,
     exception_count: int,
+    chat_style: str,
     system_prompt: str,
     initial_prompt: str,
     job,
@@ -430,6 +431,8 @@ def _build_md_content(
     parts.append(f'| **Model** | `{_escape_md(model)}` |')
     parts.append(f'| **Cost** | `${total_cost:.4f}` |')
     parts.append(f'| **Turns** | {num_turns} |')
+    if chat_style:
+        parts.append(f'| **Chat Style** | `{_escape_md(chat_style)}` |')
     if exception_count:
         parts.append(f'| **Errors** | {exception_count} |')
     parts.append('')
@@ -750,6 +753,12 @@ def create_job_detail_dialog(job) -> None:
         pass
 
     model = getattr(job, 'model', None) or '—'
+    chat_style_str = ''
+    try:
+        if job.job_def and job.job_def.chat_style is not None:
+            chat_style_str = str(job.job_def.chat_style)
+    except Exception:  # pylint: disable=broad-except
+        pass
     total_cost = getattr(job, 'total_cost', 0.0) or 0.0
     num_turns = getattr(job, 'num_turns', 0) or 0
     exception_count = getattr(job, 'exception_count', 0) or 0
@@ -788,6 +797,10 @@ def create_job_detail_dialog(job) -> None:
                         with ui.row().classes('items-center gap-1'):
                             ui.icon('memory').classes('text-sm text-gray-500')
                             ui.label(model).classes('text-xs font-mono text-gray-600')
+                        if chat_style_str:
+                            with ui.row().classes('items-center gap-1'):
+                                ui.icon('forum').classes('text-sm text-gray-500')
+                                ui.label(chat_style_str).classes('text-xs font-mono text-gray-600')
                         with ui.row().classes('items-center gap-1'):
                             ui.icon('payments').classes('text-sm text-gray-500')
                             ui.label(f'${total_cost:.4f}').classes('text-xs font-mono text-gray-600')
@@ -807,13 +820,15 @@ def create_job_detail_dialog(job) -> None:
                     def _download_md(
                         _uuid=uuid_str, _status=status_str, _agent=agent_role,
                         _model=model, _cost=total_cost, _turns=num_turns,
-                        _errors=exception_count, _sys=system_prompt, _init=initial_prompt,
+                        _errors=exception_count, _chat_style=chat_style_str,
+                        _sys=system_prompt, _init=initial_prompt,
                         _job=job, _wb=warmup_blocks, _wr=warmup_ranges, _tr=turn_ranges,
                     ):
                         md = _build_md_content(
                             uuid_str=_uuid, status_str=_status, agent_role=_agent,
                             model=_model, total_cost=_cost, num_turns=_turns,
-                            exception_count=_errors, system_prompt=_sys,
+                            exception_count=_errors, chat_style=_chat_style,
+                            system_prompt=_sys,
                             initial_prompt=_init, job=_job,
                             warmup_blocks=_wb, warmup_ranges=_wr, turn_ranges=_tr,
                         )
@@ -822,13 +837,15 @@ def create_job_detail_dialog(job) -> None:
                     def _download_pdf(
                         _uuid=uuid_str, _status=status_str, _agent=agent_role,
                         _model=model, _cost=total_cost, _turns=num_turns,
-                        _errors=exception_count, _sys=system_prompt, _init=initial_prompt,
+                        _errors=exception_count, _chat_style=chat_style_str,
+                        _sys=system_prompt, _init=initial_prompt,
                         _job=job, _wb=warmup_blocks, _wr=warmup_ranges, _tr=turn_ranges,
                     ):
                         md = _build_md_content(
                             uuid_str=_uuid, status_str=_status, agent_role=_agent,
                             model=_model, total_cost=_cost, num_turns=_turns,
-                            exception_count=_errors, system_prompt=_sys,
+                            exception_count=_errors, chat_style=_chat_style,
+                            system_prompt=_sys,
                             initial_prompt=_init, job=_job,
                             warmup_blocks=_wb, warmup_ranges=_wr, turn_ranges=_tr,
                         )

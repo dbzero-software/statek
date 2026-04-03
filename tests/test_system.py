@@ -1033,6 +1033,7 @@ class TestToolTarget:
         assert sys_direct.tool_target == ChatStyle.DIRECT  # pylint: disable=no-member
 
 
+
 class TestFindToolsChatStyle:
     """Test cases for chat_style parameter on find_tools."""
 

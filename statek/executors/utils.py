@@ -186,6 +186,12 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     all_direct_tools = list(job.job_def.agent._tools)
     if job.job_def.agent._internal_tools:
         all_direct_tools.extend(job.job_def.agent._internal_tools)
+    # Include system tools from the global registry (not stored on agents)
+    from statek.system import find_tools  # pylint: disable=import-outside-toplevel
+    agent_tool_names = {t.__name__ for t in all_direct_tools}
+    for sys_tool in find_tools("SYSTEM"):
+        if sys_tool.__name__ not in agent_tool_names:
+            all_direct_tools.append(sys_tool)
     for tool in all_direct_tools:
         global_context[tool.__name__] = inject_context(tool, global_context)
 
@@ -558,6 +564,13 @@ async def exec_tool(call_spec: CallSpec, job: Job,
                 if t.__name__ == call_spec.func_name:
                     original_tool = t
                     break
+            # Also search system tools from the global registry
+            if original_tool is None:
+                from statek.system import find_tools  # pylint: disable=import-outside-toplevel
+                for t in find_tools("SYSTEM"):
+                    if t.__name__ == call_spec.func_name:
+                        original_tool = t
+                        break
 
         if original_tool is not None:
             combined_ctx = {**global_context, **local_context}
