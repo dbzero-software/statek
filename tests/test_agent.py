@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
-from statek.settings import ChatStyle
 from tests.conftest import clock, docs, exit_tool
 
 
