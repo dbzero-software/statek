@@ -121,3 +121,14 @@ class TestExecAllSteps:
         assert job.py_env.local_state.get('x') is None  # regular code skipped
         assert job.py_env.local_state.get('a') is None   # cli step 0 skipped
         assert job.py_env.local_state.get('b') == 3      # resumed at instr 1
+
+    @pytest.mark.asyncio
+    async def test_cli_expression_output_routed_to_callback(self, job_factory):
+        """Standalone expressions in python_cli produce REPL-style output via callback."""
+        job = self.create_job(job_factory)
+        cs = CallSpec(id="1", func_name="python_cli",
+                      kwargs={"code": "var = 123;var"})
+        block = CodeBlock(code=None, tool_calls=[cs])
+        outputs = []
+        await exec_all_steps(block, job, lambda idx, s: outputs.append((idx, s)))
+        assert outputs == [(0, "123")]

@@ -290,6 +290,23 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
 
     with _setup_execution_context(job, global_context, local_context, print_fn=print_fn):
         tree = ast.parse(code_str)
+
+        # Before transformation, record which expression nodes are print()
+        # calls.  print() is always called for side effects and returns
+        # None — showing "None" after every print would be noisy.  All
+        # other expressions (variable lookups, function calls, etc.)
+        # always display their result, including None.
+        def _is_print_call(node):
+            return (isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == 'print')
+
+        print_call_exprs = frozenset(
+            idx for idx, node in enumerate(tree.body)
+            if _is_print_call(node)
+        )
+
         _ResilientTransformer().visit(tree)
         ast.fix_missing_locations(tree)
 
@@ -313,7 +330,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                         compile(ast.Expression(body=node.value),
                                 filename="<string>", mode="eval"),
                         global_context, sync_local)
-                    if result is not None:
+                    if result is not None or idx not in print_call_exprs:
                         output_fn(format_default_llm_repr(result))
                 else:
                     exec(code_obj, global_context, sync_local)
@@ -407,7 +424,6 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         ``True`` if ``exit()`` was called (program finished), ``False``
         otherwise.
     """
-    statek_log(f"Executing CLI code step (instr_num={instr_num}):\n{code_str}", level='debug')
     if job.py_env.global_state is None:
         global_context = globals()
     else:
@@ -743,25 +759,14 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 6: Execute code and CLI tool calls using exec_all_steps
         cli_outputs = {}  # cli_idx -> list of output lines
+        code_block = code if isinstance(code, CodeBlock) else CodeBlock(code=code)
 
         def _cli_console_append(cli_idx, text):
             cli_outputs.setdefault(cli_idx, []).append(text)
 
         try:
-            code_block = code if isinstance(code, CodeBlock) else CodeBlock(code=code)
             await exec_all_steps(code_block, job, _cli_console_append, job.next_instr_num,
                                 local_context=local_context)
-
-            # Push CLI tool results into tool_log in order
-            if cli_outputs and last_chat_log_item is not None:
-                for cli_idx in sorted(cli_outputs):
-                    last_chat_log_item.push_tool_result("\n".join(cli_outputs[cli_idx]))
-
-            # DIRECT: also echo CLI output to job console so the user sees it
-            if job.job_def.chat_style == ChatStyle.DIRECT and cli_outputs:  # pylint: disable=no-member
-                for cli_idx in sorted(cli_outputs):
-                    for line in cli_outputs[cli_idx]:
-                        job.console_append(line)
 
             # Clear continuation state after successful execution
             job.awaited_result = None
@@ -786,6 +791,23 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 return True
             # Non-warmup exception: already printed to console by exec_step
             pass
+        finally:
+            # Push CLI tool results into tool_log — one entry per python_cli
+            # call so that _make_tool_calls can match results by index.
+            # Must run even on exception (error text) and even when the code
+            # produced no output (empty string) so the tool call is not lost
+            # from the LLM chat history.
+            cli_calls = code_block.get_cli_tool_calls()
+            if cli_calls and last_chat_log_item is not None:
+                for cli_idx in range(len(cli_calls)):
+                    last_chat_log_item.push_tool_result(
+                        "\n".join(cli_outputs.get(cli_idx, [])))
+
+            # DIRECT: also echo CLI output to job console so the user sees it
+            if job.job_def.chat_style == ChatStyle.DIRECT and cli_outputs:  # pylint: disable=no-member
+                for cli_idx in sorted(cli_outputs):
+                    for line in cli_outputs[cli_idx]:
+                        job.console_append(line)
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:

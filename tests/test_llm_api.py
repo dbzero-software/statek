@@ -253,6 +253,26 @@ class TestProcessRequestToolScope:
         assert sys_universal in captured["tools"]
         assert sys_console_only not in captured["tools"]
 
+    @pytest.mark.asyncio
+    async def test_system_scope_deduplicates_tools_by_name(self, openrouter_api, sys_tool):
+        """Registry tools with the same name are not duplicated in the merged list."""
+        captured = {}
+
+        async def fake_process(self_, *, system_prompt=None, metadata=None,
+                               tools=None, chat_history=None, session_id=None):
+            captured["tools"] = tools
+            return _make_response()
+
+        with patch.object(OpenRouter_API, "_process_request", fake_process):
+            await openrouter_api.process_request(
+                available_tools=[sys_tool],
+                metadata={"LLM_TOOLS_SCOPE": "SYSTEM"},
+            )
+
+        tool_names = [t.__name__ for t in captured["tools"]]
+        duplicates = [n for n in set(tool_names) if tool_names.count(n) > 1]
+        assert duplicates == [], f"Duplicate tools in merged list: {duplicates}"
+
 
 # ---------------------------------------------------------------------------
 # OpenRouter_API: tools in payload

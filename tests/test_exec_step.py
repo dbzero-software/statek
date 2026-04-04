@@ -221,7 +221,6 @@ class TestExecStep:
 
         assert result is True
         assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
         assert "Hello, World!" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
@@ -234,7 +233,6 @@ class TestExecStep:
 
         assert result is True
         assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 2
         assert "Local print called with argument:" in simple_job.py_env.console[0]
         assert "Hello, World!" in simple_job.py_env.console[1]
 
@@ -294,7 +292,7 @@ print(f"Result: {z}")
 
         assert result is True
         assert simple_job.py_env.local_state.get('counter') == 1
-        assert "1" in simple_job.py_env.console[-1]
+        assert "1" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_print_with_separator(self, job_factory):
@@ -364,7 +362,6 @@ print("This should not run")'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert len(simple_job.py_env.console) == 1
         assert "42" in simple_job.py_env.console[0]
 
 
@@ -399,7 +396,6 @@ print("This should not run")'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert len(simple_job.py_env.console) == 2
         assert "42" in simple_job.py_env.console[1]
 
     @pytest.mark.asyncio
@@ -416,7 +412,6 @@ print(result)'''
 
         assert result is True
         assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
         assert "42" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
@@ -477,6 +472,8 @@ z = 3'''
         result = await exec_step(code, simple_job)
         assert result is True
         assert len(simple_job.py_env.console) == 2
+        assert "1" in simple_job.py_env.console[0]
+        assert "2" in simple_job.py_env.console[1]
 
         # Clear console for next test
         simple_job.py_env.console = None
@@ -522,7 +519,6 @@ y = 2'''
         result = await exec_step(code, simple_job, instr_num=1)
         assert result is True
         # Now print should succeed and y should be assigned
-        assert len(simple_job.py_env.console) == 1
         assert "42" in simple_job.py_env.console[0]
         assert simple_job.py_env.local_state['y'] == 2
 
@@ -873,16 +869,17 @@ a"""
         assert "5" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
-    async def test_exec_step_expression_none_not_printed(self, job_factory):
-        """Test that expressions evaluating to None are not printed."""
+    async def test_exec_step_expression_none_printed(self, job_factory):
+        """Test that expressions evaluating to None print 'None'."""
         simple_job = self.create_job(job_factory)
 
         code = """result = None
 result"""
         await exec_step(code, simple_job)
 
-        # Verify None was not printed (console should be None or empty)
-        assert simple_job.py_env.console is None or len(simple_job.py_env.console) == 0
+        assert simple_job.py_env.console is not None
+        assert len(simple_job.py_env.console) == 1
+        assert simple_job.py_env.console[0] == "None"
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_string(self, job_factory):

@@ -1060,6 +1060,49 @@ class TestRunJobStepCliToolCalls:
         assert "cli-out" in tool_log[1]
 
     @pytest.mark.asyncio
+    async def test_cli_error_output_stored_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli error output is stored in tool_log even when execution raises."""
+        cs = CallSpec(id="C-001", func_name="python_cli",
+                      kwargs={"code": '1 / 0'})
+        warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
+        agent = Agent(role="cli_err", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) >= 1
+        tool_log = warmup_items[0].tool_log
+        assert tool_log is not None
+        if isinstance(tool_log, str):
+            assert "ZeroDivisionError" in tool_log
+        else:
+            assert any("ZeroDivisionError" in entry for entry in tool_log)
+
+    @pytest.mark.asyncio
+    async def test_cli_no_output_stored_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli with no output still gets an entry in tool_log (empty string)."""
+        cs = CallSpec(id="C-001", func_name="python_cli",
+                      kwargs={"code": 'x = None\nx'})
+        warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
+        agent = Agent(role="cli_none", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) >= 1
+        tool_log = warmup_items[0].tool_log
+        # tool_log must not be None — an empty-string entry must exist
+        assert tool_log is not None
+
+    @pytest.mark.asyncio
     async def test_cli_future_error_stores_tuple_instr_num(self, db0_fixture):  # pylint: disable=unused-argument
         """FutureError from a python_cli step stores a tuple next_instr_num on the job."""
         cs = CallSpec(id="C-001", func_name="python_cli",
@@ -1077,6 +1120,7 @@ class TestRunJobStepCliToolCalls:
         assert job.next_instr_num is not None
         assert job.next_instr_num[0] == 0  # first CLI step
         assert job.next_instr_num[1] is not None  # instruction within CLI step
+
 
 
 class TestRunJobStepMdDialog:
