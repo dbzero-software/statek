@@ -1342,3 +1342,212 @@ class TestClaudeBuildMessagesUserData:
         assert msgs[1] == {"role": "assistant", "content": "x = 1"}
         assert msgs[2] == {"role": "user", "content": "> ok"}
         assert msgs[3] == {"role": "user", "content": "follow-up"}
+
+
+# ---------------------------------------------------------------------------
+# _wrap_direct_chat_history
+# ---------------------------------------------------------------------------
+
+class TestWrapDirectChatHistory:
+    """Tests for LLM_API._wrap_direct_chat_history."""
+
+    def test_plain_code_step_wrapped_as_python_cli(self):
+        """A step with code and no tool_calls is wrapped as a python_cli call."""
+        step = ChatStepAssistantData(
+            code="```python\nx = 1\n```", console_output="> 1"
+        )
+        result = list(OpenRouter_API._wrap_direct_chat_history([step]))
+        assert len(result) == 1
+        wrapped = result[0]
+        assert wrapped.code == ""
+        assert wrapped.console_output == ""
+        assert wrapped.tool_calls is not None
+        cp = list(wrapped.tool_calls.keys())[0]
+        assert cp.name == "python_cli"
+        assert cp.kwargs == {"code": "x = 1"}
+        assert wrapped.tool_calls[cp] == "> 1"
+
+    def test_step_with_existing_tool_calls_gets_python_cli_merged(self):
+        """A step with code AND existing tool_calls gets python_cli merged in."""
+        existing_cp = CallParams(call_id="call_1", name="my_tool", args=[], kwargs={"a": 1})
+        step = ChatStepAssistantData(
+            code="```python\nx = do_stuff()\n```", console_output="> done",
+            tool_calls={existing_cp: "result"}
+        )
+        result = list(OpenRouter_API._wrap_direct_chat_history([step]))
+        assert len(result) == 1
+        wrapped = result[0]
+        assert wrapped.code == ""
+        assert len(wrapped.tool_calls) == 2
+        # Original tool call preserved
+        assert wrapped.tool_calls[existing_cp] == "result"
+        # New python_cli call added
+        new_cp = [cp for cp in wrapped.tool_calls if cp.name == "python_cli"][0]
+        assert new_cp.kwargs == {"code": "x = do_stuff()"}
+        assert wrapped.tool_calls[new_cp] == "> done"
+
+    def test_step_with_existing_tool_calls_but_no_code_unchanged(self):
+        """A step with tool_calls but empty code is yielded as-is."""
+        cp = CallParams(call_id="call_1", name="my_tool", args=[], kwargs={"a": 1})
+        step = ChatStepAssistantData(
+            code="", console_output="> done",
+            tool_calls={cp: "result"}
+        )
+        result = list(OpenRouter_API._wrap_direct_chat_history([step]))
+        assert len(result) == 1
+        assert result[0] is step
+
+    def test_step_with_empty_code_unchanged(self):
+        """A step with empty code (user-only step) is yielded as-is."""
+        step = ChatStepAssistantData(code="", console_output="prompt text")
+        result = list(OpenRouter_API._wrap_direct_chat_history([step]))
+        assert len(result) == 1
+        assert result[0] is step
+
+    def test_user_data_step_unchanged(self):
+        """ChatStepUserData steps pass through unchanged."""
+        step = ChatStepUserData(message="hello")
+        result = list(OpenRouter_API._wrap_direct_chat_history([step]))
+        assert len(result) == 1
+        assert result[0] is step
+
+    def test_multiple_plain_steps_get_sequential_ids(self):
+        """Multiple wrapped steps get sequentially numbered STATEK-W-NNN IDs."""
+        steps = [
+            ChatStepAssistantData(code="```python\na = 1\n```", console_output="> ok"),
+            ChatStepAssistantData(code="```python\nb = 2\n```", console_output="> ok"),
+            ChatStepAssistantData(code="```python\nc = 3\n```", console_output="> ok"),
+        ]
+        result = list(OpenRouter_API._wrap_direct_chat_history(steps))
+        ids = [list(r.tool_calls.keys())[0].id for r in result]
+        assert ids == ["STATEK-W-001", "STATEK-W-002", "STATEK-W-003"]
+
+    def test_mixed_steps_all_code_wrapped(self):
+        """All steps with code are wrapped, including those with existing tool_calls."""
+        existing_cp = CallParams(call_id="call_1", name="my_tool", args=[], kwargs={})
+        steps = [
+            ChatStepAssistantData(code="", console_output="prompt"),
+            ChatStepAssistantData(code="```python\nwarmup1\n```", console_output="> ok"),
+            ChatStepAssistantData(
+                code="```python\nwith_tools()\n```", console_output="> done",
+                tool_calls={existing_cp: "result"}
+            ),
+            ChatStepAssistantData(code="```python\nwarmup2\n```", console_output="> ok2"),
+            ChatStepUserData(message="user msg"),
+        ]
+        result = list(OpenRouter_API._wrap_direct_chat_history(steps))
+        assert len(result) == 5
+        # First step: empty code, not wrapped
+        assert result[0].tool_calls is None
+        # Second step: plain code wrapped
+        assert len(result[1].tool_calls) == 1
+        cli_cp = list(result[1].tool_calls.keys())[0]
+        assert cli_cp.name == "python_cli"
+        assert cli_cp.id == "STATEK-W-001"
+        # Third step: existing tool_calls + python_cli merged
+        assert len(result[2].tool_calls) == 2
+        assert existing_cp in result[2].tool_calls
+        new_cp = [cp for cp in result[2].tool_calls if cp.name == "python_cli"][0]
+        assert new_cp.id == "STATEK-W-002"
+        assert new_cp.kwargs == {"code": "with_tools()"}
+        # Fourth step: plain code wrapped
+        assert len(result[3].tool_calls) == 1
+        assert list(result[3].tool_calls.keys())[0].id == "STATEK-W-003"
+        # Fifth step: user data, unchanged
+        assert result[4] is steps[4]
+
+    def test_wrapped_step_args_always_empty_list(self):
+        """Wrapped CallParams should have args=[]."""
+        step = ChatStepAssistantData(code="```python\nx = 1\n```", console_output="> 1")
+        result = list(OpenRouter_API._wrap_direct_chat_history([step]))
+        cp = list(result[0].tool_calls.keys())[0]
+        assert cp.args == []
+
+class TestProcessRequestDirectChatStyle:
+    """Tests that process_request applies _wrap_direct_chat_history for DIRECT style."""
+
+    @pytest.mark.asyncio
+    async def test_direct_style_wraps_warmup_in_openrouter(self, openrouter_api):
+        """process_request wraps plain code steps as python_cli for DIRECT style."""
+        from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        captured = {}
+
+        async def fake_process_request(self, **kwargs):
+            captured["chat_history"] = list(kwargs.get("chat_history", []))
+            return LLM_Response(text="ok", session_id=None, stats=_make_stats(),
+                                call_requests=None)
+
+        history = [
+            ChatStepAssistantData(code="", console_output="prompt"),
+            ChatStepAssistantData(
+                code="```python\nwarmup_code()\n```", console_output="> result"
+            ),
+        ]
+
+        with patch.object(OpenRouter_API, '_process_request', fake_process_request):
+            await openrouter_api.process_request(
+                chat_history=iter(history),
+                chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
+            )
+
+        steps = captured["chat_history"]
+        assert len(steps) == 2
+        # First step: empty code, unchanged
+        assert steps[0].tool_calls is None
+        # Second step: wrapped as python_cli with markdown stripped
+        assert steps[1].tool_calls is not None
+        cp = list(steps[1].tool_calls.keys())[0]
+        assert cp.name == "python_cli"
+        assert cp.kwargs == {"code": "warmup_code()"}
+
+    @pytest.mark.asyncio
+    async def test_non_direct_style_does_not_wrap(self, openrouter_api):
+        """process_request does not wrap steps for non-DIRECT chat styles."""
+        from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        captured = {}
+
+        async def fake_process_request(self, **kwargs):
+            captured["chat_history"] = list(kwargs.get("chat_history", []))
+            return LLM_Response(text="ok", session_id=None, stats=_make_stats(),
+                                call_requests=None)
+
+        history = [
+            ChatStepAssistantData(code="warmup_code()", console_output="> result"),
+        ]
+
+        with patch.object(OpenRouter_API, '_process_request', fake_process_request):
+            await openrouter_api.process_request(
+                chat_history=iter(history),
+                chat_style=ChatStyle.MD_DIALOG,  # pylint: disable=no-member
+            )
+
+        steps = captured["chat_history"]
+        assert len(steps) == 1
+        assert steps[0].tool_calls is None
+        assert steps[0].code == "warmup_code()"
+
+    @pytest.mark.asyncio
+    async def test_no_chat_style_does_not_wrap(self, openrouter_api):
+        """process_request without chat_style passes history through unchanged."""
+        captured = {}
+
+        async def fake_process_request(self, **kwargs):
+            captured["chat_history"] = list(kwargs.get("chat_history", []))
+            return LLM_Response(text="ok", session_id=None, stats=_make_stats(),
+                                call_requests=None)
+
+        history = [
+            ChatStepAssistantData(code="warmup_code()", console_output="> result"),
+        ]
+
+        with patch.object(OpenRouter_API, '_process_request', fake_process_request):
+            await openrouter_api.process_request(
+                chat_history=iter(history),
+            )
+
+        steps = captured["chat_history"]
+        assert len(steps) == 1
+        assert steps[0].tool_calls is None
+        assert steps[0].code == "warmup_code()"

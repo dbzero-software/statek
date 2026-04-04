@@ -318,7 +318,7 @@ class Job:
             return
         settings = get_statek_settings()
         text = prompt_append_console(
-            self.py_env.console, settings.chat_style,
+            self.py_env.console, self.job_def.chat_style,
             from_pos=from_pos, limit=to_pos - from_pos,
             xml_tags=settings.get_xml_box_tags()
         )
@@ -338,21 +338,22 @@ class Job:
             result: The tool execution result string
         """
         settings = get_statek_settings()
+        chat_style = self.job_def.chat_style
         raw_call = f"{call_spec.format()}  {_STATEK_TOOL_MARKER}"
-        if settings.chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
+        if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             call_line = f"```python\n{raw_call}\n```"
         else:
             call_line = raw_call
         if result:
             result_lines = result.split('\n')
-            if settings.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
+            if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
                 result_text = '<CONSOLE>\n' + '\n'.join(result_lines) + '\n</CONSOLE>'
-            elif settings.chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+            elif chat_style in (ChatStyle.MARKDOWN, ChatStyle.DIRECT):  # pylint: disable=no-member
                 result_text = '\n'.join(result_lines)
             else:
                 result_text = '\n'.join(f"> {line}" for line in result_lines)
             xml_tags = settings.get_xml_box_tags()
-            tag = xml_tags and xml_tags.get("console")
+            tag = xml_tags and xml_tags.get("console") if chat_style != ChatStyle.DIRECT else None  # pylint: disable=no-member
             if tag:
                 result_text = f"<{tag}>\n{result_text}\n</{tag}>"
             self._log(f"{call_line}\n{result_text}")

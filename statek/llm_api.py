@@ -10,6 +10,7 @@ import httpx
 
 from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
 from .exceptions import InvalidFormat
+from .utils import strip_markup
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -255,6 +256,11 @@ class LLM_API(ABC):
         else:
             tools = None
 
+        if chat_history is not None and chat_style is not None:
+            from .chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
+            if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
+                chat_history = self._wrap_direct_chat_history(chat_history)
+
         response = await self._process_request(
             system_prompt=system_prompt,
             metadata=metadata,
@@ -270,6 +276,48 @@ class LLM_API(ABC):
                 [cp.name for cp in response.call_requests]
             )
         return response
+
+    @staticmethod
+    def _wrap_direct_chat_history(
+        chat_history: Iterable["ChatStepData"],
+    ) -> Iterable["ChatStepData"]:
+        """Rewrite chat history for DIRECT chat style.
+
+        In DIRECT mode the LLM executes code exclusively via ``python_cli``
+        tool calls.  Any ``ChatStepAssistantData`` step that carries ``code``
+        is rewritten so the code appears as a ``python_cli`` tool call with
+        the ``console_output`` as its result.  When the step already has
+        ``tool_calls``, the new ``python_cli`` call is merged into them.
+        This keeps the conversation history consistent with the actual chat
+        style the LLM operates in.
+
+        Steps without ``code`` or ``ChatStepUserData`` are yielded unchanged.
+        """
+        counter = 0
+        for step in chat_history:
+            if not isinstance(step, ChatStepAssistantData):
+                yield step
+                continue
+            if not step.code:
+                yield step
+                continue
+            # Strip markdown code fences (e.g. ```python\n...\n```)
+            code = strip_markup(step.code, strict=True)
+            # Wrap code as a python_cli tool call
+            counter += 1
+            cp = CallParams(
+                call_id=f"STATEK-W-{counter:03d}",
+                name="python_cli",
+                args=[],
+                kwargs={"code": code},
+            )
+            tool_calls = dict(step.tool_calls) if step.tool_calls else {}
+            tool_calls[cp] = step.console_output
+            yield ChatStepAssistantData(
+                code="",
+                console_output="",
+                tool_calls=tool_calls,
+            )
 
     @abstractmethod
     async def _process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
