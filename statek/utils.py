@@ -267,19 +267,19 @@ def strip_markup(input: str, strict: bool) -> str:  # pylint: disable=redefined-
     return '\n'.join(result_parts)
 
 
-def extract_dialog(input: str) -> Optional[str]:  # pylint: disable=redefined-builtin
+def extract_dialog(text: str) -> Optional[str]:
     """Extract the free-text / dialog part from LLM output, stripping markdown blocks.
 
     This is the opposite of strip_markup: it returns only the text *outside*
     any markdown code fences, cleaned up from extra whitespace.
 
     Args:
-        input: The input text (possibly containing markdown blocks).
+        text: The input text (possibly containing markdown blocks).
 
     Returns:
         The free-text portion of the input, or None if there is no dialog text.
     """
-    parts = re.split(r'```\w*\n?', input, flags=re.DOTALL)
+    parts = re.split(r'```\w*\n?', text, flags=re.DOTALL)
     text_parts = []
     for i, part in enumerate(parts):
         if i % 2 == 0:
@@ -290,19 +290,19 @@ def extract_dialog(input: str) -> Optional[str]:  # pylint: disable=redefined-bu
     return result or None
 
 
-def parse_md_dialog(input: str) -> Iterable[Tuple[str, Optional[str]]]:  # pylint: disable=redefined-builtin
+def parse_dialog(text: str) -> Iterable[Tuple[str, Optional[str]]]:
     """Parse LLM-generated output into (body, media) tuples for message delivery.
 
     Chains extract_dialog (to strip markdown blocks) with extract_media
     (to split body text from media paths).
 
     Args:
-        input: The LLM generated text to be processed.
+        text: The LLM generated text to be processed.
 
     Yields:
         (body, media) tuples where either or both may be None.
     """
-    dialog = extract_dialog(input)
+    dialog = extract_dialog(text)
     if dialog is None:
         return
     yield from extract_media(dialog)
@@ -1146,7 +1146,10 @@ def extract_media(text: str) -> Iterable[Tuple[str, Optional[str]]]:
         (body, media) tuples where *media* is a file path or None for the
         trailing body fragment.
     """
-    tokens = text.split()
+    # Strip markdown image/link syntax: ![alt](url) or [text](url) → alt url
+    text = re.sub(r'!\[([^\]]*)\]\(([^)]*)\)', r'\1 \2', text)
+    text = re.sub(r'\[([^\]]*)\]\(([^)]*)\)', r'\1 \2', text)
+    tokens = [t for t in re.split(r'[\s\[\]\(\)\{\},]+', text.strip()) if t]
     body_parts: List[str] = []
 
     for token in tokens:

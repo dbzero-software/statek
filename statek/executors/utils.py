@@ -23,7 +23,7 @@ from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.utils import (CodeBlock, CallSpec, format_default_llm_repr,
-                         get_current_job, get_current_agent, parse_md_dialog,
+                         get_current_job, get_current_agent, parse_dialog,
                          strip_markup)
 
 STATEK_LOGGER = get_statek_logger()
@@ -645,7 +645,7 @@ def _log_pending_console(job: Job):
     job._log_console_batch(from_pos, to_pos)  # pylint: disable=protected-access
 
 
-async def handle_md_dialog(llm_resp: str, _local_context: Optional[dict] = None):
+async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
     """Dispatch LLM response text to the user via the DialogAgent's send_message.
 
     Retrieves the current agent from the execution context, verifies it is a
@@ -667,7 +667,7 @@ async def handle_md_dialog(llm_resp: str, _local_context: Optional[dict] = None)
             f"got {type(agent).__name__}."
         )
 
-    for body, media in parse_md_dialog(llm_resp):
+    for body, media in parse_dialog(llm_resp):
         if body or media:
             kwargs = {"body": body}
             if media is not None:
@@ -857,12 +857,19 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     job.append_chat_log(request, response)
 
     # Step 13: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
+    dialog_error = False
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
-        await handle_md_dialog(response.text, _local_context=local_context)
+        try:
+            await handle_dialog(response.text, _local_context=local_context)
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}"
+            job.console_append(error_msg, error_message=error_msg)
+            dialog_error = True
 
     # MD_DIALOG / DIRECT: if LLM returned only text (no code / no tool calls), job is done;
     # if LLM returned code (MD_DIALOG) or tool calls (DIRECT), continue the loop.
-    if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
+    # If send_message raised, always continue so the LLM can react to the error.
+    if not dialog_error and job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
             has_code = bool(response.call_requests)
         else:
