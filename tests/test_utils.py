@@ -5,7 +5,7 @@ from typing import Union, List, Dict, Optional, Iterable, ForwardRef
 import dbzero as db0
 from statek.utils import (format_callable_decl,
                           prompt_append_console, block_comment, strip_markup,
-                          extract_media, extract_dialog, parse_md_dialog)
+                          extract_media, extract_dialog, parse_dialog)
 from statek.future import temporal, FutureResult
 from statek.settings import ChatStyle
 
@@ -566,6 +566,18 @@ class TestExtractMedia:
         result = list(extract_media("See /tmp/output/chart.svg here"))
         assert result == [("See", "/tmp/output/chart.svg"), ("here", None)]
 
+    def test_media_delimited(self):
+        result = list(extract_media("[Media](private/chart.svg) is here"))
+        assert result == [("Media", "private/chart.svg"), ("is here", None)]
+
+    def test_markdown_image_syntax(self):
+        """Markdown image ![alt](path) is parsed correctly."""
+        text = " ![April On-Call Schedule](private/calendar_zeo144sc.svg)"
+        result = list(extract_media(text))
+        assert result == [
+            ("April On-Call Schedule", "private/calendar_zeo144sc.svg"),
+        ]
+
 
 # ---------------------------------------------------------------------------
 # extract_dialog
@@ -604,26 +616,26 @@ class TestExtractDialog:
 
 
 # ---------------------------------------------------------------------------
-# parse_md_dialog
+# parse_dialog
 # ---------------------------------------------------------------------------
 
-class TestParseMdDialog:
-    """Tests for parse_md_dialog utility."""
+class TestParseDialog:
+    """Tests for parse_dialog utility."""
 
     def test_text_only(self):
         """Plain text without code blocks or media yields (body, None)."""
-        result = list(parse_md_dialog("Hello world"))
+        result = list(parse_dialog("Hello world"))
         assert result == [("Hello world", None)]
 
     def test_code_block_only(self):
         """Input that is only a code block yields nothing."""
-        result = list(parse_md_dialog('```python\nprint("hi")\n```'))
+        result = list(parse_dialog('```python\nprint("hi")\n```'))
         assert not result
 
     def test_text_with_media(self):
         """Dialog text containing a media path is split correctly."""
         text = 'Here is your chart: gen/chart.svg\n```python\ncode\n```'
-        result = list(parse_md_dialog(text))
+        result = list(parse_dialog(text))
         assert result == [("Here is your chart:", "gen/chart.svg")]
 
     def test_text_and_media_interleaved(self):
@@ -632,7 +644,7 @@ class TestParseMdDialog:
             'First chart: gen/a.svg and second: gen/b.svg Done!\n'
             '```python\ncode\n```'
         )
-        result = list(parse_md_dialog(text))
+        result = list(parse_dialog(text))
         assert result == [
             ("First chart:", "gen/a.svg"),
             ("and second:", "gen/b.svg"),

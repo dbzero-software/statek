@@ -1142,7 +1142,7 @@ class TestRunJobStepMdDialog:
     async def test_md_dialog_text_only_response_exits(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
-        """In MD_DIALOG style, text-only LLM response is sent via handle_md_dialog and job exits."""
+        """In MD_DIALOG style, text-only LLM response is sent via handle_dialog and job exits."""
         job = self._make_job(job_def_factory)
 
         mock_response = LLM_Response(
@@ -1160,7 +1160,7 @@ class TestRunJobStepMdDialog:
 
         with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
              patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
-             patch("statek.executors.utils.handle_md_dialog",
+             patch("statek.executors.utils.handle_dialog",
                    new_callable=AsyncMock) as mock_handle:
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
@@ -1191,7 +1191,7 @@ class TestRunJobStepMdDialog:
 
         with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
              patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
-             patch("statek.executors.utils.handle_md_dialog",
+             patch("statek.executors.utils.handle_dialog",
                    new_callable=AsyncMock) as mock_handle:
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
@@ -1228,7 +1228,7 @@ class TestRunJobStepMdDialog:
 
         with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
              patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
-             patch("statek.executors.utils.handle_md_dialog", new_callable=AsyncMock):
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock):
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
 
@@ -1261,7 +1261,7 @@ class TestRunJobStepMdDialog:
 
         with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
              patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
-             patch("statek.executors.utils.handle_md_dialog", new_callable=AsyncMock):
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock):
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
 
@@ -1270,6 +1270,84 @@ class TestRunJobStepMdDialog:
         # Job exits after LLM response in MD_DIALOG
         assert result is True
         assert job.status == JobStatus.DONE
+
+
+    @pytest.mark.asyncio
+    async def test_md_dialog_send_message_exception_appended_to_console(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """When handle_dialog raises, exception is appended to console and job continues."""
+        job = self._make_job(job_def_factory)
+
+        # LLM response with code so job would normally continue
+        mock_response = LLM_Response(
+            text="Here is the result:\n```python\ntest_var = 99\n```",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        async def _failing_handle_dialog(*args, **kwargs):
+            raise ConnectionError("network is down")
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog",
+                   side_effect=_failing_handle_dialog):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        # Job should NOT crash — it should continue so LLM can react
+        assert result is False
+        assert job.status != JobStatus.DONE
+        # Error should be in the console
+        console_text = "\n".join(job.py_env.console)
+        assert "ConnectionError" in console_text
+        assert "network is down" in console_text
+
+    @pytest.mark.asyncio
+    async def test_md_dialog_send_message_exception_text_only_continues(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """When handle_dialog raises on text-only response, job continues instead of exiting."""
+        job = self._make_job(job_def_factory)
+
+        # Text-only response — normally would exit job
+        mock_response = LLM_Response(
+            text="Hello, how can I help?",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        async def _failing_handle_dialog(*args, **kwargs):
+            raise RuntimeError("send failed")
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog",
+                   side_effect=_failing_handle_dialog):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        # Job should NOT exit — error means message wasn't delivered, LLM should react
+        assert result is False
+        assert job.status != JobStatus.DONE
+        console_text = "\n".join(job.py_env.console)
+        assert "RuntimeError" in console_text
+        assert "send failed" in console_text
 
 
 class TestRunJobStepDirect:
@@ -1309,7 +1387,7 @@ class TestRunJobStepDirect:
 
         with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
              patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
-             patch("statek.executors.utils.handle_md_dialog",
+             patch("statek.executors.utils.handle_dialog",
                    new_callable=AsyncMock) as mock_handle:
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
@@ -1344,9 +1422,46 @@ class TestRunJobStepDirect:
 
         with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
              patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
-             patch("statek.executors.utils.handle_md_dialog", new_callable=AsyncMock):
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock):
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
 
         assert result is False
         assert job.status != JobStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_direct_send_message_exception_appended_to_console(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """handle_dialog error in DIRECT: appended to console, job continues."""
+        job = self._make_job(job_def_factory)
+
+        mock_response = LLM_Response(
+            text="Hello!",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        async def _failing_handle_dialog(*args, **kwargs):
+            raise ConnectionError("send failed")
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog",
+                   side_effect=_failing_handle_dialog):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        # Job should continue so LLM can react to the error
+        assert result is False
+        assert job.status != JobStatus.DONE
+        console_text = "\n".join(job.py_env.console)
+        assert "ConnectionError" in console_text
+        assert "send failed" in console_text
