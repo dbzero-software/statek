@@ -613,10 +613,10 @@ def _format_type(type_hint) -> str:  # pylint: disable=too-many-return-statement
 def _fmt_console_lines(lines: List[str], chat_style) -> str:
     """Format a slice of console lines according to chat_style."""
     from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
-    if chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
+    if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
         joined = "\n".join(lines)
         return f"<CONSOLE>\n{joined}\n</CONSOLE>"
-    if chat_style == ChatStyle.MARKDOWN:  # pylint: disable=no-member
+    if chat_style in (ChatStyle.MARKDOWN, ChatStyle.DIRECT):  # pylint: disable=no-member
         return "\n".join(lines)
     return "\n".join(f"> {line}" for line in lines)
 
@@ -676,7 +676,7 @@ def prompt_append_console(  # pylint: disable=too-many-arguments,too-many-positi
     console_slice = console[from_pos:end_pos]
     if console_slice:
         console_text = _fmt_console_lines(console_slice, chat_style)
-        tag = xml_tags and xml_tags.get("console")
+        tag = xml_tags and xml_tags.get("console") if chat_style != ChatStyle.DIRECT else None  # pylint: disable=no-member
         if tag:
             console_text = f"<{tag}>\n{console_text}\n</{tag}>"
         if result:
