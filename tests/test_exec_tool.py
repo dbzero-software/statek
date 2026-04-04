@@ -172,7 +172,7 @@ class TestExecTool:
             _call_spec("greet", kwargs={"name": "World", "greeting": "Hi"}), job
         )
 
-        assert '"Hi, World!"' in result
+        assert 'Hi, World!' in result
 
     @pytest.mark.asyncio
     async def test_tool_found_in_agent_tools(self, db0_fixture):  # pylint: disable=unused-argument
@@ -182,7 +182,7 @@ class TestExecTool:
             _call_spec("_module_agent_tool", kwargs={"value": "ok"}), job
         )
 
-        assert '"tool: ok"' in result
+        assert 'tool: ok' in result
         assert job.py_env.console is None
 
     @pytest.mark.asyncio
@@ -263,7 +263,7 @@ class TestExecTool:
             _call_spec("_async_agent_tool", kwargs={"value": "ok"}), job
         )
 
-        assert '"async_tool: ok"' in result
+        assert 'async_tool: ok' in result
         assert job.py_env.console is None
 
     @pytest.mark.asyncio

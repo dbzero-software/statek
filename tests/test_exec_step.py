@@ -883,17 +883,17 @@ result"""
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_string(self, job_factory):
-        """Test that string expressions are printed with LLM repr (double-quoted)."""
+        """Test that string expressions are printed unquoted at top level."""
         simple_job = self.create_job(job_factory)
 
         code = """text = "hello"
 text"""
         await exec_step(code, simple_job)
 
-        # Verify the string was printed with double quotes (format_default_llm_repr)
+        # Verify the string was printed without quotes
         assert simple_job.py_env.console is not None
         assert len(simple_job.py_env.console) == 1
-        assert '"hello"' in simple_job.py_env.console[0]
+        assert simple_job.py_env.console[0] == 'hello'
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_uses_llm_repr(self, job_factory):

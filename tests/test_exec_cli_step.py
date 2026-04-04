@@ -53,11 +53,11 @@ class TestExecCliStep:
 
     @pytest.mark.asyncio
     async def test_expression_string_output(self, job_factory):
-        """String expressions use format_default_llm_repr (double-quoted)."""
+        """String expressions are output unquoted at top level."""
         job = self.create_job(job_factory)
         outputs = []
         await exec_cli_step('text = "hello"\ntext', job, outputs.append)
-        assert outputs == ['"hello"']
+        assert outputs == ['hello']
         assert not job.py_env.console
 
     @pytest.mark.asyncio
