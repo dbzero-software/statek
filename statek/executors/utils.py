@@ -803,11 +803,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                     last_chat_log_item.push_tool_result(
                         "\n".join(cli_outputs.get(cli_idx, [])))
 
-            # DIRECT: also echo CLI output to job console so the user sees it
-            if job.job_def.chat_style == ChatStyle.DIRECT and cli_outputs:  # pylint: disable=no-member
-                for cli_idx in sorted(cli_outputs):
-                    for line in cli_outputs[cli_idx]:
-                        job.console_append(line)
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
