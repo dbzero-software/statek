@@ -873,11 +873,13 @@ def find_locals(var_type: Optional[Type] = None,
         )
 
 
-def format_value_repr(value: Any) -> str:
+def format_value_repr(value: Any, is_nested: bool = True) -> str:
     """Format a single value for LLM representation.
 
     Args:
         value: the value to be formatted
+        is_nested: when True the value appears inside a collection or object
+            and strings are double-quoted for clarity.
 
     Returns:
         A string representation suitable for LLM consumption.
@@ -887,7 +889,7 @@ def format_value_repr(value: Any) -> str:
     if isinstance(value, (bool, int, float, Decimal)):
         return str(value)
     if isinstance(value, str):
-        return f'"{value}"'
+        return f'"{value}"' if is_nested else value
     if isinstance(value, datetime):
         return f'datetime("{value.strftime("%Y-%m-%d %H:%M")}")'
     if (_uses_default_llm_format(value)
@@ -916,8 +918,9 @@ def format_llm_repr(value: Any, hide: List[str] = None,
     Returns:
         LLM-friendly string representation.
     """
+    is_nested = kwargs.pop('is_nested', True)
     if isinstance(value, (bool, int, float, Decimal, str, datetime)):
-        return format_value_repr(value)
+        return format_value_repr(value, is_nested=is_nested)
 
     if (isinstance(value, (list, tuple))
             or _is_dbzero_collection_type(value, "List", "Tuple")):
@@ -946,7 +949,7 @@ def _format_element(item: Any, max_len: int, repeated: bool) -> str:
     repeated through to the fallback format_llm_repr call for plain objects.
     """
     if _uses_default_llm_format(item):
-        return format_llm_repr(item, max_len=max_len)
+        return format_llm_repr(item, max_len=max_len, is_nested=True)
     if hasattr(item, '__llm_repr__'):
         method = item.__llm_repr__
         sig = inspect.signature(method)
@@ -957,7 +960,7 @@ def _format_element(item: Any, max_len: int, repeated: bool) -> str:
         return method(repeated=repeated) if accepts_kwargs else method()
     if type(item).__str__ is not object.__str__:
         return str(item)
-    return format_llm_repr(item, max_len=max_len, repeated=repeated)
+    return format_llm_repr(item, max_len=max_len, repeated=repeated, is_nested=True)
 
 
 def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
@@ -989,8 +992,9 @@ def _format_dict_llm(value: dict, max_len: int) -> str:
         v_type = type(v)
         is_repeated = v_type in seen_types
         seen_types.add(v_type)
-        parts.append(
-            f"{format_value_repr(k)}:{_format_element(v, max_len=max_len, repeated=is_repeated)}")
+        key_repr = format_value_repr(k, is_nested=True)
+        val_repr = _format_element(v, max_len=max_len, repeated=is_repeated)
+        parts.append(f"{key_repr}:{val_repr}")
     formatted = ",".join(parts)
     if total > max_len:
         return "{" + formatted + ", ...} (" + str(total) + " items total)"
@@ -1050,6 +1054,7 @@ def format_default_llm_repr(obj: Any, **kwargs) -> str:
     Returns:
         LLM-friendly string representation.
     """
+    kwargs.setdefault('is_nested', False)
     if _uses_default_llm_format(obj):
         return format_llm_repr(obj, **kwargs)
 
@@ -1110,9 +1115,9 @@ def _format_object_llm(class_name: str, members: Dict[str, Any],
     has_omitted = False
     for name, val in shown.items():
         if expand and name in expand:
-            formatted_val = format_llm_repr(val, **kwargs)
+            formatted_val = format_llm_repr(val, is_nested=True, **kwargs)
         else:
-            formatted_val = format_value_repr(val)
+            formatted_val = format_value_repr(val, is_nested=True)
             if repeated and formatted_val == '<Object>':
                 has_omitted = True
                 continue

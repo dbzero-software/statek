@@ -250,6 +250,7 @@ class LLM_API(ABC):
                 existing = {t.__name__ for t in tools}
                 for rt in find_tools("SYSTEM", chat_style=chat_style):
                     if rt.__name__ not in existing:
+                        existing.add(rt.__name__)
                         tools.append(rt)
         else:
             tools = None

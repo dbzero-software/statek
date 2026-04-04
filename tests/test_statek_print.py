@@ -36,7 +36,7 @@ def test_print_bool_false(capsys):
 
 def test_print_string(capsys):
     statek_print("hello")
-    assert capsys.readouterr().out == '"hello"\n'
+    assert capsys.readouterr().out == 'hello\n'
 
 
 def test_print_decimal(capsys):
@@ -180,12 +180,12 @@ def test_custom_sep(capsys):
 
 def test_custom_end(capsys):
     statek_print("hello", end="!")
-    assert capsys.readouterr().out == '"hello"!'
+    assert capsys.readouterr().out == 'hello!'
 
 
 def test_empty_end(capsys):
     statek_print("hello", end="")
-    assert capsys.readouterr().out == '"hello"'
+    assert capsys.readouterr().out == 'hello'
 
 
 def test_no_objects(capsys):
@@ -202,7 +202,7 @@ def test_file_parameter():
 def test_file_parameter_with_string():
     buf = io.StringIO()
     statek_print("world", file=buf)
-    assert buf.getvalue() == '"world"\n'
+    assert buf.getvalue() == 'world\n'
 
 
 def test_flush_parameter():
@@ -213,7 +213,7 @@ def test_flush_parameter():
 
 def test_mixed_types(capsys):
     statek_print(1, "two", [3])
-    assert capsys.readouterr().out == '1 "two" [3]\n'
+    assert capsys.readouterr().out == '1 two [3]\n'
 
 
 # --- __llm_repr__ with **kwargs receives repeated in lists ---

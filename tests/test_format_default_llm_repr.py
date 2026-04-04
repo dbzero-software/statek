@@ -29,13 +29,13 @@ def test_bool_false():
     assert format_default_llm_repr(False) == "False"
 
 
-def test_string_is_quoted():
-    """Strings are quoted (format_llm_repr path), not passed through str()."""
-    assert format_default_llm_repr("hello") == '"hello"'
+def test_string_is_unquoted():
+    """Top-level strings are unquoted."""
+    assert format_default_llm_repr("hello") == 'hello'
 
 
 def test_string_empty():
-    assert format_default_llm_repr("") == '""'
+    assert format_default_llm_repr("") == ''
 
 
 def test_decimal():

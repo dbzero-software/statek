@@ -692,11 +692,24 @@ class TestFindTools:
 
     def test_list_of_examples_and_show_example_in_system_scope(self):
         """list_of_examples and show_example appear in find_tools("SYSTEM")."""
-        # Import triggers registration
-        from statek.agents.list_of_examples import list_of_examples, show_example  # pylint: disable=import-outside-toplevel
         system_tools = list(find_tools("SYSTEM"))
-        assert list_of_examples in system_tools
-        assert show_example in system_tools
+        names = [t.__name__ for t in system_tools]
+        assert "list_of_examples" in names
+        assert "show_example" in names
+
+    def test_find_tools_deduplicates_by_name(self):
+        """find_tools returns no duplicate tool names."""
+        all_tools = list(find_tools())
+        names = [t.__name__ for t in all_tools]
+        duplicates = [n for n in set(names) if names.count(n) > 1]
+        assert duplicates == [], f"Duplicate tools: {duplicates}"
+
+    def test_find_tools_system_scope_deduplicates_by_name(self):
+        """find_tools("SYSTEM") returns no duplicate tool names."""
+        system_tools = list(find_tools("SYSTEM"))
+        names = [t.__name__ for t in system_tools]
+        duplicates = [n for n in set(names) if names.count(n) > 1]
+        assert duplicates == [], f"Duplicate system tools: {duplicates}"
 
 
 class TestSelectTools:

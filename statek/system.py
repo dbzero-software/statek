@@ -374,7 +374,14 @@ def find_tools(scope: Optional[str] = None,
         result = list(_TOOL_REGISTRY)
     if chat_style is not None:
         result = [t for t in result if _matches_chat_style(t, chat_style)]
-    return result
+    # Deduplicate by name, keeping the first occurrence
+    seen: set[str] = set()
+    deduped = []
+    for t in result:
+        if t.__name__ not in seen:
+            seen.add(t.__name__)
+            deduped.append(t)
+    return deduped
 
 
 def select_tools(tools: Iterable[Callable], scope: str,

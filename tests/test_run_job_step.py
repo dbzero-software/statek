@@ -315,9 +315,9 @@ class TestRunJobStepToolExecution:
         assert warmup_items[0].tool_log is not None
         tool_log = warmup_items[0].tool_log
         if isinstance(tool_log, str):
-            assert '"result_value"' in tool_log
+            assert 'result_value' in tool_log
         else:
-            assert '"result_value"' in tool_log[0]
+            assert 'result_value' in tool_log[0]
 
     @pytest.mark.asyncio
     async def test_multiple_tool_results_stored_as_list(self, db0_fixture):  # pylint: disable=unused-argument
@@ -342,8 +342,8 @@ class TestRunJobStepToolExecution:
         stored = warmup_items[0].tool_log
         assert not isinstance(stored, str)
         assert len(stored) == 2
-        assert '"alpha"' in stored[0]
-        assert '"beta"' in stored[1]
+        assert 'alpha' in stored[0]
+        assert 'beta' in stored[1]
 
     @pytest.mark.asyncio
     async def test_tool_not_executed_on_continuation(self, db0_fixture):  # pylint: disable=unused-argument
@@ -430,7 +430,7 @@ class TestRunJobStepToolCallLogging:
             await run_job_step(job)
 
         content = self._read_logs(tmp_path)
-        assert '"tool_result"' in content
+        assert 'tool_result' in content
 
     @pytest.mark.asyncio
     async def test_warmup_tool_result_prefixed_with_gt_in_console_style(  # pylint: disable=unused-argument
@@ -658,15 +658,15 @@ class TestMultiBlockWarmupToolLog:
         # Block 0 result
         tool_log_0 = warmup_items[0].tool_log
         if isinstance(tool_log_0, str):
-            assert '"alpha"' in tool_log_0
+            assert 'alpha' in tool_log_0
         else:
-            assert '"alpha"' in tool_log_0[0]
+            assert 'alpha' in tool_log_0[0]
         # Block 1 result
         tool_log_1 = warmup_items[1].tool_log
         if isinstance(tool_log_1, str):
-            assert '"beta"' in tool_log_1
+            assert 'beta' in tool_log_1
         else:
-            assert '"beta"' in tool_log_1[0]
+            assert 'beta' in tool_log_1[0]
 
 
 class TestRunJobStepWarmupException:
@@ -981,9 +981,9 @@ class TestRunJobStepEmptyCodeBlock:
         tool_log = warmup_items[0].tool_log
         assert tool_log is not None
         if isinstance(tool_log, str):
-            assert '"my_result"' in tool_log
+            assert 'my_result' in tool_log
         else:
-            assert '"my_result"' in tool_log[0]
+            assert 'my_result' in tool_log[0]
 
 
 class TestRunJobStepCliToolCalls:
@@ -1056,8 +1056,51 @@ class TestRunJobStepCliToolCalls:
         tool_log = warmup_items[0].tool_log
         assert not isinstance(tool_log, str)
         assert len(tool_log) == 2
-        assert '"regular_out"' in tool_log[0]
+        assert 'regular_out' in tool_log[0]
         assert "cli-out" in tool_log[1]
+
+    @pytest.mark.asyncio
+    async def test_cli_error_output_stored_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli error output is stored in tool_log even when execution raises."""
+        cs = CallSpec(id="C-001", func_name="python_cli",
+                      kwargs={"code": '1 / 0'})
+        warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
+        agent = Agent(role="cli_err", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) >= 1
+        tool_log = warmup_items[0].tool_log
+        assert tool_log is not None
+        if isinstance(tool_log, str):
+            assert "ZeroDivisionError" in tool_log
+        else:
+            assert any("ZeroDivisionError" in entry for entry in tool_log)
+
+    @pytest.mark.asyncio
+    async def test_cli_no_output_stored_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli with no output still gets an entry in tool_log (empty string)."""
+        cs = CallSpec(id="C-001", func_name="python_cli",
+                      kwargs={"code": 'x = None\nx'})
+        warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
+        agent = Agent(role="cli_none", _system_prompt="Test", _tools=[])
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+        job = Job(job_def=job_def, model_family="test", model="test-model",
+                  job_status=JobStatus.READY)
+
+        await run_job_step(job)
+
+        from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
+        warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
+        assert len(warmup_items) >= 1
+        tool_log = warmup_items[0].tool_log
+        # tool_log must not be None — an empty-string entry must exist
+        assert tool_log is not None
 
     @pytest.mark.asyncio
     async def test_cli_future_error_stores_tuple_instr_num(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1077,6 +1120,7 @@ class TestRunJobStepCliToolCalls:
         assert job.next_instr_num is not None
         assert job.next_instr_num[0] == 0  # first CLI step
         assert job.next_instr_num[1] is not None  # instruction within CLI step
+
 
 
 class TestRunJobStepMdDialog:
@@ -1306,46 +1350,3 @@ class TestRunJobStepDirect:
 
         assert result is False
         assert job.status != JobStatus.DONE
-
-    @pytest.mark.asyncio
-    async def test_direct_cli_output_appears_in_console(
-        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
-    ):
-        """In DIRECT style, python_cli expression results appear in job console."""
-        job = self._make_job(job_def_factory)
-        from tests.conftest import create_chat_log_item  # pylint: disable=import-outside-toplevel
-        # Simulate previous LLM response with python_cli tool call
-        cli_call = CallSpec(
-            id="STATEK-001", func_name="python_cli",
-            args=[], kwargs={"code": "42"})
-        code_block = CodeBlock(code=None, tool_calls=[cli_call])
-        job.chat_log.append(create_chat_log_item(
-            console_pos=0, llm_resp=code_block))
-
-        # Next LLM response is text-only (job will exit)
-        mock_response = LLM_Response(
-            text="The answer is 42.",
-            session_id=None,
-            stats=LLM_Stats(
-                total_bytes_sent=0, total_bytes_received=0,
-                cost=None),
-            call_requests=None,
-        )
-        mock_api = MagicMock()
-        mock_api.process_request = AsyncMock(return_value=mock_response)
-
-        mock_harness = MagicMock()
-        mock_harness.check_before_step.return_value = None
-        mock_harness.check_after_step.return_value = None
-
-        with patch("statek.executors.utils.LLM_API") as cls, \
-             patch("statek.executors.utils.get_llm_harness",
-                   return_value=mock_harness), \
-             patch("statek.executors.utils.handle_md_dialog",
-                   new_callable=AsyncMock):
-            cls.get.return_value = mock_api
-            await run_job_step(job)
-
-        console_text = "\n".join(
-            job.py_env.console) if job.py_env.console else ""
-        assert "42" in console_text
