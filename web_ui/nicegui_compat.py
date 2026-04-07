@@ -9,7 +9,8 @@ class _MissingNiceGUI:
     def __getattr__(self, name):
         raise ModuleNotFoundError(
             "nicegui is required to render the web UI. "
-            "Install requirements from requirements-ui.txt to use this module."
+            "Install the package dependencies with `pip install -e .` "
+            "or use `pip install -r requirements-ui.txt`."
         )
 
 

@@ -667,7 +667,38 @@ class TestBuildMdContent:
             ),
         ]
         md = _call_build_md(job)
+        assert 'Warmup Code 2' in md
         assert 'tool_result_here' in md
+
+    def test_creates_warmup_title_for_tool_only_block_without_content_src(self):
+        """Tool-only warmup blocks should still render as warmup sections."""
+        cs = MagicMock()
+        cs.format.return_value = 'docs("topic")'
+        block = MagicMock()
+        block.tool_calls = [cs]
+        job = _make_job(warmup_code=[block])
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.ASSISTANT,
+                content=None,
+                tool_calls=[cs],
+            ),
+            ChatHistoryItem(
+                role=ChatRole.TOOL,
+                content='docs result',
+                content_src=ContentSource.CONSOLE,
+                tool_calls=cs,
+            ),
+        ]
+
+        sections = _build_history_sections(job)
+
+        assert len(sections) == 1
+        assert sections[0].title == 'Warmup Code 1'
+        assert sections[0].content_src == ContentSource.SYSTEM
+        assert sections[0].warmup_num == 1
+        assert sections[0].warmup_total == 1
+        assert sections[0].tool_data == [(cs, 'docs result')]
 
 
 def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, raw_prompt=None,
@@ -695,56 +726,34 @@ def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, r
 class TestGetSystemPrompt:
     def test_returns_formatted_system_prompt(self):
         job = _make_job_with_agent(system_prompt_return='You are an assistant.')
-        text, error = _get_system_prompt(job)
-        assert text == 'You are an assistant.'
-        assert error is None
+        assert _get_system_prompt(job) == 'You are an assistant.'
 
     def test_returns_empty_string_when_no_job_def(self):
         job = _make_job_with_agent(no_job_def=True)
-        text, error = _get_system_prompt(job)
-        assert text == ''
-        assert error is None
+        assert _get_system_prompt(job) == ''
 
     def test_returns_empty_string_when_no_agent(self):
         job = _make_job_with_agent(no_agent=True)
-        text, error = _get_system_prompt(job)
-        assert text == ''
-        assert error is None
+        assert _get_system_prompt(job) == ''
 
     def test_falls_back_to_raw_prompt_on_format_error(self):
         job = _make_job_with_agent(
             system_prompt_raises=KeyError('missing_key'),
             raw_prompt='Raw template with {missing_key}.',
         )
-        text, error = _get_system_prompt(job)
-        assert text == 'Raw template with {missing_key}.'
-        assert error is not None
-        assert 'KeyError' in error
-
-    def test_error_message_contains_exception_detail(self):
-        job = _make_job_with_agent(
-            system_prompt_raises=ValueError('bad format'),
-            raw_prompt='template',
-        )
-        _, error = _get_system_prompt(job)
-        assert 'ValueError' in error
-        assert 'bad format' in error
+        assert _get_system_prompt(job) == 'Raw template with {missing_key}.'
 
     def test_returns_empty_string_when_formatted_and_raw_both_none(self):
         job = _make_job_with_agent(
             system_prompt_raises=KeyError('x'),
             raw_prompt=None,
         )
-        text, error = _get_system_prompt(job)
-        assert text == ''
-        assert error is not None
+        assert _get_system_prompt(job) == ''
 
     def test_returns_empty_string_on_unexpected_error(self):
         job = MagicMock()
         type(job).job_def = PropertyMock(side_effect=RuntimeError('db error'))
-        text, error = _get_system_prompt(job)
-        assert text == ''
-        assert error is None
+        assert _get_system_prompt(job) == ''
 
 
 class TestBuildHistorySections:
@@ -786,7 +795,7 @@ class TestBuildHistorySections:
         assert sections[1].followups[0].content == 'console output\n'
 
     def test_creates_warmup_titles_from_system_assistant_items(self, db0_fixture):
-        job = _make_job()
+        job = _make_job(warmup_code=['x = 1', 'y = 2'])
         job.get_chat_history.return_value = [
             ChatHistoryItem(
                 role=ChatRole.ASSISTANT,
@@ -803,6 +812,9 @@ class TestBuildHistorySections:
         sections = _build_history_sections(job)
 
         assert [section.title for section in sections] == ['Warmup Code 1', 'Warmup Code 2']
+        assert [
+            (section.warmup_num, section.warmup_total) for section in sections
+        ] == [(1, 2), (2, 2)]
 
 
 class _StubPyEnv:  # pylint: disable=too-few-public-methods

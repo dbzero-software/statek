@@ -9,7 +9,7 @@ from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import Job, JobDefError, JobStatus
 from statek.llm_api import LLM_Response, LLM_Stats
 from statek.chat_history import ChatRole, ContentSource
-from statek.executors.chat_log_item import UserLogItem
+from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle
 from statek.utils import CodeBlock, CallSpec
 
@@ -599,6 +599,23 @@ class TestJobGetChatHistoryWithWarmup:
         assert history[2].content == "warmup out"   # warmup user
         assert history[3].content == "resp1"        # llm asst
         assert history[4].content == "post-warmup out"  # llm user
+
+    def test_tool_only_warmup_keeps_system_content_source(self, job_factory):
+        """Tool-only warmup assistant items should still be marked as SYSTEM."""
+        call_spec = CallSpec(id="T", func_name="docs", args=["topic"])
+        job = job_factory(warmup_code=CodeBlock(code=None, tool_calls=[call_spec]))
+        warmup_item = WarmupLogItem(console_pos=0, warmup_block_num=0, tool_log="tool result")
+        job.chat_log.append(warmup_item)
+
+        history = list(job.get_chat_history())
+
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[1].role == ChatRole.ASSISTANT
+        assert history[1].content is None
+        assert history[1].content_src == ContentSource.SYSTEM
+        assert history[1].tool_calls == [call_spec]
+        assert history[2].role == ChatRole.TOOL
+        assert history[2].content == "tool result"
 
     def test_warmup_not_in_subsequent_messages(self, job_factory):
         """Warmup code does not appear in console items after the first LLM turn."""

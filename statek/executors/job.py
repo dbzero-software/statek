@@ -626,7 +626,7 @@ class Job:
                     yield ChatHistoryItem(
                         role=ChatRole.ASSISTANT,
                         content=block_code if block_code else None,
-                        content_src=asst_src if block_code else None,
+                        content_src=asst_src,
                         tool_calls=tool_calls,
                     )
                     for j, cs in enumerate(tool_calls):

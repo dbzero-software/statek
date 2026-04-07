@@ -175,6 +175,8 @@ class _HistorySection:
     content_src: Optional[ContentSource] = None
     tool_data: list = field(default_factory=list)
     followups: list[_HistoryMessage] = field(default_factory=list)
+    warmup_num: Optional[int] = None
+    warmup_total: Optional[int] = None
 
 
 def _get_history_items(job) -> list:
@@ -205,6 +207,7 @@ def _build_history_sections(job) -> list[_HistorySection]:
     """Group ``Job.get_chat_history()`` into job-detail display sections."""
     sections: list[_HistorySection] = []
     current: Optional[_HistorySection] = None
+    expected_warmups = len(_get_warmup_blocks(job))
     warmup_num = 0
     turn_num = 0
 
@@ -217,12 +220,18 @@ def _build_history_sections(job) -> list[_HistorySection]:
     for item in _get_history_items(job):
         if item.role == ChatRole.ASSISTANT:
             _flush_current()
-            if item.content_src == ContentSource.SYSTEM:
+            is_warmup = (
+                item.content_src == ContentSource.SYSTEM
+                or (item.content_src is None and warmup_num < expected_warmups)
+            )
+            if is_warmup:
                 warmup_num += 1
                 title = f'Warmup Code {warmup_num}'
+                content_src = ContentSource.SYSTEM
             else:
                 turn_num += 1
                 title = f'Turn {turn_num}'
+                content_src = item.content_src
             tool_data = []
             if item.tool_calls:
                 tool_data = [(cs, '') for cs in list(item.tool_calls)]
@@ -230,8 +239,10 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 kind='assistant',
                 title=title,
                 content=item.content or '',
-                content_src=item.content_src,
+                content_src=content_src,
                 tool_data=tool_data,
+                warmup_num=warmup_num if is_warmup else None,
+                warmup_total=expected_warmups if is_warmup else None,
             )
             continue
 
@@ -776,27 +787,26 @@ def _render_history_section(section: _HistorySection) -> None:
         return
 
     code_bg = _CODE_WARMUP_BG if section.content_src == ContentSource.SYSTEM else _CODE_LLM_BG
-    code_label = 'warmup code' if section.content_src == ContentSource.SYSTEM else 'LLM submitted code'
+    if section.content_src == ContentSource.SYSTEM:
+        if section.warmup_num is not None and (section.warmup_total or 0) > 1:
+            code_label = f'warmup code {section.warmup_num} / {section.warmup_total}'
+        else:
+            code_label = 'warmup code'
+    else:
+        code_label = 'LLM submitted code'
 
     with ui.column().classes('w-full gap-2'):
-        header_bg = (
-            'background: linear-gradient(90deg, #fff8e1, #fdf6e3)'
-            if section.content_src == ContentSource.SYSTEM
-            else _LLM_HEADER_BG
-        )
-        header_border = '#f0d77a' if section.content_src == ContentSource.SYSTEM else '#c5cae9'
-        with ui.row().classes('w-full items-center gap-3 px-3 py-2 rounded-lg').style(
-            header_bg + f'; border: 1px solid {header_border}'
-        ):
-            ui.icon('smart_toy' if section.content_src != ContentSource.SYSTEM else 'play_arrow').classes(
-                'text-indigo-600'
-            )
-            ui.label(section.title).classes('text-sm font-bold text-indigo-800 flex-1')
-            if section.tool_data:
-                ui.icon('build').classes('text-orange-500 text-sm')
-                ui.label(f'{len(section.tool_data)} tool call{"s" if len(section.tool_data) != 1 else ""}').classes(
-                    'text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700'
-                )
+        if section.content_src != ContentSource.SYSTEM:
+            with ui.row().classes('w-full items-center gap-3 px-3 py-2 rounded-lg').style(
+                _LLM_HEADER_BG + '; border: 1px solid #c5cae9'
+            ):
+                ui.icon('smart_toy').classes('text-indigo-600')
+                ui.label(section.title).classes('text-sm font-bold text-indigo-800 flex-1')
+                if section.tool_data:
+                    ui.icon('build').classes('text-orange-500 text-sm')
+                    ui.label(
+                        f'{len(section.tool_data)} tool call{"s" if len(section.tool_data) != 1 else ""}'
+                    ).classes('text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700')
 
         _render_code_block(section.content, code_bg, code_label)
 
@@ -879,25 +889,20 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
             _render_console_output(console_out, has_error=has_error)
 
 
-def _get_system_prompt(job) -> tuple[str, Optional[str]]:
-    """Return (prompt_text, error_message) for a job's system prompt.
-
-    Tries to return the fully formatted prompt. On formatting failure, falls back
-    to the raw template and sets error_message to describe what went wrong.
-    Returns ('', None) if no system prompt is available.
-    """
+def _get_system_prompt(job) -> str:
+    """Return the formatted system prompt, or the raw template on render failure."""
     try:
         if not job.job_def or not job.job_def.agent:
-            return '', None
+            return ''
         try:
             return job.job_def.agent.system_prompt(
                 job_params=job.job_def.job_params
-            ) or '', None
-        except Exception as exc:  # pylint: disable=broad-except
+            ) or ''
+        except Exception:  # pylint: disable=broad-except
             raw = job.job_def.agent._system_prompt or ''  # pylint: disable=protected-access
-            return raw, f'{type(exc).__name__}: {exc}'
+            return raw
     except Exception:  # pylint: disable=broad-except
-        return '', None
+        return ''
 
 
 def create_job_detail_dialog(job) -> None:
@@ -930,7 +935,7 @@ def create_job_detail_dialog(job) -> None:
     except Exception:  # pylint: disable=broad-except
         pass
 
-    system_prompt, system_prompt_error = _get_system_prompt(job)
+    system_prompt = _get_system_prompt(job)
     history_sections = _build_history_sections(job)
     exception_messages = _get_exception_messages(job)
 
@@ -1001,39 +1006,6 @@ def create_job_detail_dialog(job) -> None:
                         pdf = _build_pdf_bytes(md)
                         ui.download(pdf, filename=f'job_{_uuid}.pdf', media_type='application/pdf')
 
-                    if system_prompt:
-                        def _show_system_prompt(_sp=system_prompt, _err=system_prompt_error):
-                            with ui.dialog() as sp_dlg:
-                                with ui.card().classes('w-full max-w-5xl'):
-                                    with ui.row().classes('w-full items-center justify-between mb-2'):
-                                        with ui.row().classes('items-center gap-2'):
-                                            ui.icon('description').classes('text-gray-600')
-                                            ui.label('System Prompt').classes(
-                                                'text-lg font-bold text-gray-800'
-                                            )
-                                        ui.button(
-                                            icon='close', on_click=sp_dlg.close
-                                        ).props('flat round dense')
-                                    ui.separator().classes('mb-2')
-                                    ui.label(_sp).classes(
-                                        'text-sm text-gray-700 whitespace-pre-wrap w-full rounded p-3'
-                                    ).style(
-                                        'font-family: "JetBrains Mono", monospace;'
-                                        ' background: #fdf6e3; max-height: 70vh; overflow-y: auto'
-                                    )
-                                    if _err:
-                                        with ui.row().classes('items-center gap-2 mt-3 px-3 py-2 rounded').style(
-                                            'background: #fff0f0; border: 1px solid #ffcdd2'
-                                        ):
-                                            ui.icon('warning').classes('text-amber-600 text-sm')
-                                            ui.label(
-                                                f'Showing raw template — rendering failed: {_err}'
-                                            ).classes('text-xs text-red-700 font-mono')
-                            sp_dlg.open()
-
-                        ui.button('System Prompt', icon='description', on_click=_show_system_prompt).props(
-                            'flat dense no-caps'
-                        ).classes('text-xs text-gray-600').tooltip('View system prompt')
                     ui.button('MD', icon='download', on_click=_download_md).props(
                         'flat dense no-caps'
                     ).classes('text-xs text-indigo-600').tooltip('Download as Markdown')
