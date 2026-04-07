@@ -77,6 +77,7 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
 def delegate_task(agent: SupervisedAgent,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
     parent_job: Optional[Job] = None,
+    shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
     **kwargs) -> TaskFutureResult:
     """Create a new job delegated to given agent.
 
@@ -86,10 +87,16 @@ def delegate_task(agent: SupervisedAgent,
                     to be executed prior to task start
         parent_job: Optional parent job — when provided, the child job
                     inherits the parent's error handlers.
+        shared_vars: Optional variables to be additionally shared with the
+                    child job's context. A dict ``{var_name: value}`` assigns
+                    explicit names; a list derives names from each value's
+                    type (lowercased class name).
         kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
 
-    job_def = agent.create_job_def(warmup_code=warmup_code, **kwargs)
+    job_def = agent.create_job_def(
+        warmup_code=warmup_code, shared_vars=shared_vars, **kwargs
+    )
 
     env = PyEnv()
     if warmup_code:
@@ -102,6 +109,8 @@ def delegate_task(agent: SupervisedAgent,
         else:
             for block in warmup_code:
                 copy_locals(block, env.local_state, caller_locals)
+
+    env.local_state.update(_resolve_shared_vars(shared_vars))
 
     job = Job(
         job_def=job_def,
@@ -117,11 +126,31 @@ def delegate_task(agent: SupervisedAgent,
     return TaskFutureResult(job, deps=None, state_num=0)
 
 
+def _resolve_shared_vars(
+    shared_vars: Optional[Union[List[Any], Dict[str, Any]]]
+) -> Dict[str, Any]:
+    """Resolve a *shared_vars* argument into a ``{var_name: value}`` dict.
+
+    **Dict form** ``{"var_name": obj}`` is returned as a shallow copy.
+
+    **List form** ``[obj, ...]`` derives the variable name from each value's
+    type (lowercased class name).
+
+    Returns an empty dict when *shared_vars* is ``None`` or empty.
+    """
+    if not shared_vars:
+        return {}
+    if isinstance(shared_vars, dict):
+        return dict(shared_vars)
+    return {type(obj).__name__.lower(): obj for obj in shared_vars}
+
+
 def start_dialog(
     agent: DialogAgent,
     message: str,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
     parent_job: Optional[Job] = None,
+    shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
     **kwargs
 ) -> Job:
     """Start a dialog job with a DialogAgent and an initial user message.
@@ -135,12 +164,16 @@ def start_dialog(
                      new job's context.
         parent_job: Optional parent job — when provided, the child job
                     inherits the parent's error handlers.
+        shared_vars: Optional variables to share with the dialog job's
+                     context (see :func:`delegate_task`).
         kwargs: Optional agent-specific extra arguments (job_params).
 
     Returns:
         The newly created Job instance.
     """
-    job_def = agent.create_job_def(warmup_code=warmup_code, **kwargs)
+    job_def = agent.create_job_def(
+        warmup_code=warmup_code, shared_vars=shared_vars, **kwargs
+    )
 
     env = PyEnv()
     if warmup_code:
@@ -151,6 +184,8 @@ def start_dialog(
         else:
             for block in warmup_code:
                 copy_locals(block, env.local_state, caller_locals)
+
+    env.local_state.update(_resolve_shared_vars(shared_vars))
 
     job = Job(
         job_def=job_def,
@@ -166,46 +201,6 @@ def start_dialog(
     job.push_user_message(message)
 
     return job
-
-
-def build_shared_vars_warmup(
-    shared_vars: Optional[Union[List[Any], Dict[str, Any]]]
-) -> Tuple[Optional[List[str]], Dict[str, Any]]:
-    """Build warmup code blocks and a local_vars dict from shared variables.
-
-    This is the generic code-generation utility for sharing variables with a
-    new job.  It works with already-resolved objects — no frame inspection.
-
-    **Dict form** ``{"var_name": obj}``: each entry produces a
-    ``print(var_name)`` warmup block with the object stored under *var_name*.
-
-    **List form** ``[obj, ...]``: the variable name is derived from the
-    object's type (lowercased class name).
-
-    Args:
-        shared_vars: Variables to share with the job.
-
-    Returns:
-        ``(warmup_code, local_vars)`` — *warmup_code* is ``None`` when
-        *shared_vars* is empty/None.
-    """
-    if not shared_vars:
-        return None, {}
-
-    warmup_blocks: List[str] = []
-    local_vars: Dict[str, Any] = {}
-
-    if isinstance(shared_vars, dict):
-        for var_name, obj in shared_vars.items():
-            local_vars[var_name] = obj
-            warmup_blocks.append(f"print({var_name})")
-    else:
-        for obj in shared_vars:
-            var_name = type(obj).__name__.lower()
-            local_vars[var_name] = obj
-            warmup_blocks.append(f"print({var_name})")
-
-    return warmup_blocks, local_vars
 
 
 def submit_new_job(
@@ -229,14 +224,10 @@ def submit_new_job(
     Returns:
         The newly created :class:`Job` instance.
     """
-    warmup_code, local_vars = build_shared_vars_warmup(shared_vars)
-
-    job_def = agent.create_job_def(warmup_code=warmup_code, **kwargs)
+    job_def = agent.create_job_def(shared_vars=shared_vars, **kwargs)
 
     env = PyEnv()
-    if warmup_code:
-        for block in warmup_code:
-            copy_locals(block, env.local_state, local_vars)
+    env.local_state.update(_resolve_shared_vars(shared_vars))
 
     return Job(
         job_def=job_def,

@@ -4,7 +4,7 @@ import pytest
 
 from statek.task import (
     copy_locals, delegate_task, start_dialog,
-    build_shared_vars_warmup, submit_new_job, submit_new_jobs_batch,
+    submit_new_job, submit_new_jobs_batch,
 )
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import UserLogItem
@@ -278,6 +278,63 @@ class TestDelegateTask:
         result = delegate_task(supervised_agent)
         assert len(result.job.error_handlers) == 0
 
+    def test_delegate_task_dict_shared_vars_populates_local_state(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Dict shared_vars populate the child job's local_state with the
+        provided names."""
+        result = delegate_task(
+            supervised_agent, shared_vars={"alpha": 42, "label": "test"}
+        )
+        assert result.job.py_env.local_state["alpha"] == 42
+        assert result.job.py_env.local_state["label"] == "test"
+
+    def test_delegate_task_list_shared_vars_derives_names_from_type(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """List shared_vars derive variable names from each value's type."""
+        result = delegate_task(supervised_agent, shared_vars=[supervised_agent])
+        assert (
+            result.job.py_env.local_state["supervisedagent"]
+            is supervised_agent
+        )
+
+    def test_delegate_task_dict_shared_vars_reported_in_job_params(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Dict shared_vars surface their names in the job_def's job_params."""
+        result = delegate_task(
+            supervised_agent, shared_vars={"alpha": 1, "beta": 2}
+        )
+        assert result.job.job_def.job_params["shared_vars"] == ["alpha", "beta"]
+
+    def test_delegate_task_shared_vars_no_print_warmup_generated(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """shared_vars should not produce ad-hoc print() warmup_code."""
+        result = delegate_task(supervised_agent, shared_vars={"alpha": 1})
+        assert result.job.job_def.warmup_code is None
+
+    def test_delegate_task_shared_vars_combines_with_warmup_code(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """shared_vars and warmup_code can be supplied together."""
+        x = 5  # picked up by warmup_code via frame inspection
+        result = delegate_task(
+            supervised_agent,
+            warmup_code="result = x",
+            shared_vars={"alpha": 99},
+        )
+        assert result.job.py_env.local_state["x"] == 5
+        assert result.job.py_env.local_state["alpha"] == 99
+
+    def test_delegate_task_no_shared_vars_keeps_local_state_empty(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Without shared_vars or warmup_code, local_state stays empty."""
+        result = delegate_task(supervised_agent)
+        assert not result.job.py_env.local_state
+
 
 def _make_send_message(body: str, media=None):
     """Mock send_message for DialogAgent tests.
@@ -356,6 +413,66 @@ class TestStartDialog:
         assert len(child_job.error_handlers) == 1
         assert child_job.error_handlers[0].error_handler is _noop_error_handler
 
+    def test_start_dialog_dict_shared_vars_populates_local_state(
+        self, db0_fixture, mock_settings
+    ):
+        """Dict shared_vars populate the dialog job's local_state."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(
+            agent, message="hi", shared_vars={"alpha": 42, "label": "test"}
+        )
+        assert job.py_env.local_state["alpha"] == 42
+        assert job.py_env.local_state["label"] == "test"
+
+    def test_start_dialog_list_shared_vars_derives_names_from_type(
+        self, db0_fixture, mock_settings
+    ):
+        """List shared_vars derive variable names from each value's type."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hi", shared_vars=[agent])
+        assert job.py_env.local_state["dialogagent"] is agent
+
+    def test_start_dialog_dict_shared_vars_reported_in_job_params(
+        self, db0_fixture, mock_settings
+    ):
+        """Dict shared_vars surface their names in the job_def's job_params."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(
+            agent, message="hi", shared_vars={"alpha": 1, "beta": 2}
+        )
+        assert job.job_def.job_params["shared_vars"] == ["alpha", "beta"]
+
+    def test_start_dialog_shared_vars_no_print_warmup_generated(
+        self, db0_fixture, mock_settings
+    ):
+        """shared_vars should not produce ad-hoc print() warmup_code."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hi", shared_vars={"alpha": 1})
+        assert job.job_def.warmup_code is None
+
+    def test_start_dialog_shared_vars_combines_with_warmup_code(
+        self, db0_fixture, mock_settings
+    ):
+        """shared_vars and warmup_code can be supplied together."""
+        agent = DialogAgent(send_message=_make_send_message)
+        x = 5  # picked up by warmup_code via frame inspection
+        job = start_dialog(
+            agent,
+            message="hi",
+            warmup_code="result = x",
+            shared_vars={"alpha": 99},
+        )
+        assert job.py_env.local_state["x"] == 5
+        assert job.py_env.local_state["alpha"] == 99
+
+    def test_start_dialog_no_shared_vars_keeps_local_state_empty(
+        self, db0_fixture, mock_settings
+    ):
+        """Without shared_vars or warmup_code, local_state stays empty."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hi")
+        assert not job.py_env.local_state
+
 
 class TestDialogAgentCreateJobDefChatStyle:
     """Tests for DialogAgent.create_job_def chat_style parameter."""
@@ -373,36 +490,32 @@ class TestDialogAgentCreateJobDefChatStyle:
         assert job_def.chat_style == ChatStyle.DIRECT
 
 
-class TestBuildSharedVarsWarmup:
-    """Tests for build_shared_vars_warmup helper."""
+class TestResolveSharedVars:
+    """Tests for the _resolve_shared_vars helper."""
 
-    def test_none_returns_none_and_empty_dict(self):
-        warmup, local_vars = build_shared_vars_warmup(None)
-        assert warmup is None
-        assert not local_vars
+    def test_none_returns_empty(self):
+        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
+        assert _resolve_shared_vars(None) == {}
 
-    def test_empty_dict_returns_none(self):
-        warmup, local_vars = build_shared_vars_warmup({})
-        assert warmup is None
-        assert not local_vars
+    def test_empty_dict_returns_empty(self):
+        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
+        assert _resolve_shared_vars({}) == {}
 
     def test_dict_form(self):
+        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
         obj_a = object()
         obj_b = object()
-        warmup, local_vars = build_shared_vars_warmup({"alpha": obj_a, "beta": obj_b})
-        assert len(warmup) == 2
-        assert local_vars == {"alpha": obj_a, "beta": obj_b}
-        assert "print(alpha)" in warmup
-        assert "print(beta)" in warmup
+        result = _resolve_shared_vars({"alpha": obj_a, "beta": obj_b})
+        assert result == {"alpha": obj_a, "beta": obj_b}
 
     def test_list_form_derives_name_from_type(self):
+        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
         class Invoice:
             pass
 
         inv = Invoice()
-        warmup, local_vars = build_shared_vars_warmup([inv])
-        assert local_vars == {"invoice": inv}
-        assert warmup == ["print(invoice)"]
+        result = _resolve_shared_vars([inv])
+        assert result == {"invoice": inv}
 
 
 class TestSubmitNewJob:

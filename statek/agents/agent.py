@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
-from typing import List, Callable, Dict, Optional, Sequence, Union
+from typing import Any, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import block_comment, get_current_agent, _get_class_name
 from statek.system import tool
@@ -341,6 +341,20 @@ class Agent:
                     self._tools_by_name.append(tool_name)
                     self.context[tool_name] = tool_or_name
 
+def _shared_var_names(
+    shared_vars: Optional[Union[List[Any], Dict[str, Any]]]
+) -> List[str]:
+    """Return the variable names implied by a *shared_vars* argument.
+
+    Only the dict form carries names (its keys). List entries are values
+    without recoverable names and are ignored here. Returns an empty list
+    when no names can be reported.
+    """
+    if isinstance(shared_vars, dict):
+        return list(shared_vars.keys())
+    return []
+
+
 @db0.memo
 @dataclass
 class WarmupDef:
@@ -385,6 +399,7 @@ class SupervisedAgent(Agent):
         self,
         tools: Optional[List[Callable]] = None,
         warmup_code: Optional[Union[str, Sequence[str]]] = None,
+        shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -394,13 +409,25 @@ class SupervisedAgent(Agent):
         Args:
             tools: agent's tools additional tools (currently not used)
             warmup_code: optional initialization code (single block or sequence of blocks)
+            shared_vars: optional list / mapping of variables additionally shared
+                by the parent job. When passed as a dict, its keys are reported
+                as a ``shared_vars`` entry in ``job_params`` so they can be
+                referenced from the agent's system prompt template. List entries
+                have no recoverable names and are not reported.
             kwargs: job specific parameters for prompt formatting (i.e. job_params)
 
         Returns:
             A new job definition object with specific job_params
         """
         # kwargs become job_params
-        job_params = kwargs if kwargs else None
+        job_params = dict(kwargs) if kwargs else {}
+
+        shared_var_names = _shared_var_names(shared_vars)
+        if shared_var_names:
+            job_params["shared_vars"] = shared_var_names
+
+        if not job_params:
+            job_params = None
 
         combined = self._combine_warmup_code(warmup_code)
 
