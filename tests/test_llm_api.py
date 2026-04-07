@@ -1143,7 +1143,9 @@ class TestClaudeBuildMessages:
         assert len(rest) == 1
         assert rest[0].role == ChatRole.USER
 
-    def test_openrouter_build_messages_includes_dedicated_system_prompt(self, openrouter_api, db0_fixture):
+    def test_openrouter_build_messages_includes_dedicated_system_prompt(
+        self, openrouter_api, db0_fixture
+    ):
         msgs = openrouter_api.build_messages(
             system_prompt="sysprompt",
             chat_history=[_user("hello")],

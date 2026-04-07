@@ -259,7 +259,7 @@ class TestJobGetChatHistory:
         """Empty chat_log: no conversational history is yielded."""
         job = job_factory()
         history = list(job.get_chat_history())
-        assert history == []
+        assert not history
 
     def test_get_chat_history_single_chat_item(self, job_factory):
         """Single LLM turn at console_pos=0 with subsequent console output."""
@@ -351,7 +351,7 @@ class TestJobGetNextRequest:
         job = job_factory()
         history = list(job.get_next_request()["chat_history"])
 
-        assert history == []
+        assert not history
 
     def test_get_next_request_with_session_id(self, job_factory):
         """get_next_request includes session_id when set."""
@@ -399,7 +399,7 @@ class TestJobGetNextRequest:
         """No console, no chat_log: chat_history is empty."""
         job = job_factory()
         history = list(job.get_next_request()["chat_history"])
-        assert history == []
+        assert not history
 
     def test_last_response_empty_chat_log(self, job_factory):
         """Test last_response returns None when chat_log is empty."""
