@@ -289,16 +289,6 @@ class TestDelegateTask:
         assert result.job.py_env.local_state["alpha"] == 42
         assert result.job.py_env.local_state["label"] == "test"
 
-    def test_delegate_task_list_shared_vars_derives_names_from_type(
-        self, db0_fixture, supervised_agent, mock_settings
-    ):
-        """List shared_vars derive variable names from each value's type."""
-        result = delegate_task(supervised_agent, shared_vars=[supervised_agent])
-        assert (
-            result.job.py_env.local_state["supervisedagent"]
-            is supervised_agent
-        )
-
     def test_delegate_task_dict_shared_vars_reported_in_job_params(
         self, db0_fixture, supervised_agent, mock_settings
     ):
@@ -424,14 +414,6 @@ class TestStartDialog:
         assert job.py_env.local_state["alpha"] == 42
         assert job.py_env.local_state["label"] == "test"
 
-    def test_start_dialog_list_shared_vars_derives_names_from_type(
-        self, db0_fixture, mock_settings
-    ):
-        """List shared_vars derive variable names from each value's type."""
-        agent = DialogAgent(send_message=_make_send_message)
-        job = start_dialog(agent, message="hi", shared_vars=[agent])
-        assert job.py_env.local_state["dialogagent"] is agent
-
     def test_start_dialog_dict_shared_vars_reported_in_job_params(
         self, db0_fixture, mock_settings
     ):
@@ -490,34 +472,6 @@ class TestDialogAgentCreateJobDefChatStyle:
         assert job_def.chat_style == ChatStyle.DIRECT
 
 
-class TestResolveSharedVars:
-    """Tests for the _resolve_shared_vars helper."""
-
-    def test_none_returns_empty(self):
-        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
-        assert _resolve_shared_vars(None) == {}
-
-    def test_empty_dict_returns_empty(self):
-        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
-        assert _resolve_shared_vars({}) == {}
-
-    def test_dict_form(self):
-        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
-        obj_a = object()
-        obj_b = object()
-        result = _resolve_shared_vars({"alpha": obj_a, "beta": obj_b})
-        assert result == {"alpha": obj_a, "beta": obj_b}
-
-    def test_list_form_derives_name_from_type(self):
-        from statek.task import _resolve_shared_vars  # pylint: disable=import-outside-toplevel
-        class Invoice:
-            pass
-
-        inv = Invoice()
-        result = _resolve_shared_vars([inv])
-        assert result == {"invoice": inv}
-
-
 class TestSubmitNewJob:
     """Tests for submit_new_job function."""
 
@@ -545,11 +499,6 @@ class TestSubmitNewJob:
         job = submit_new_job(supervised_agent, shared_vars=data)
         assert job.py_env.local_state["count"] == 42
         assert job.py_env.local_state["label"] == "test"
-
-    def test_list_shared_vars(self, db0_fixture, supervised_agent, mock_settings):
-        """List shared_vars derive names from object type."""
-        job = submit_new_job(supervised_agent, shared_vars=[supervised_agent])
-        assert job.py_env.local_state["supervisedagent"] is supervised_agent
 
     def test_kwargs_forwarded_as_job_params(self, db0_fixture, mock_settings):
         """Extra kwargs become job_params on the JobDef."""

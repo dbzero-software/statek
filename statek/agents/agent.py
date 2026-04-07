@@ -341,20 +341,6 @@ class Agent:
                     self._tools_by_name.append(tool_name)
                     self.context[tool_name] = tool_or_name
 
-def _shared_var_names(
-    shared_vars: Optional[Union[List[Any], Dict[str, Any]]]
-) -> List[str]:
-    """Return the variable names implied by a *shared_vars* argument.
-
-    Only the dict form carries names (its keys). List entries are values
-    without recoverable names and are ignored here. Returns an empty list
-    when no names can be reported.
-    """
-    if isinstance(shared_vars, dict):
-        return list(shared_vars.keys())
-    return []
-
-
 @db0.memo
 @dataclass
 class WarmupDef:
@@ -399,7 +385,7 @@ class SupervisedAgent(Agent):
         self,
         tools: Optional[List[Callable]] = None,
         warmup_code: Optional[Union[str, Sequence[str]]] = None,
-        shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
+        shared_vars: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -409,11 +395,10 @@ class SupervisedAgent(Agent):
         Args:
             tools: agent's tools additional tools (currently not used)
             warmup_code: optional initialization code (single block or sequence of blocks)
-            shared_vars: optional list / mapping of variables additionally shared
-                by the parent job. When passed as a dict, its keys are reported
+            shared_vars: optional ``{var_name: value}`` mapping of variables
+                additionally shared by the parent job. Its keys are reported
                 as a ``shared_vars`` entry in ``job_params`` so they can be
-                referenced from the agent's system prompt template. List entries
-                have no recoverable names and are not reported.
+                referenced from the agent's system prompt template.
             kwargs: job specific parameters for prompt formatting (i.e. job_params)
 
         Returns:
@@ -422,9 +407,8 @@ class SupervisedAgent(Agent):
         # kwargs become job_params
         job_params = dict(kwargs) if kwargs else {}
 
-        shared_var_names = _shared_var_names(shared_vars)
-        if shared_var_names:
-            job_params["shared_vars"] = shared_var_names
+        if shared_vars:
+            job_params["shared_vars"] = list(shared_vars.keys())
 
         if not job_params:
             job_params = None

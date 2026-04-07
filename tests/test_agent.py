@@ -316,12 +316,6 @@ class TestCreateJobDefSharedVars:
         job_def = agent.create_job_def(shared_vars={"alpha": 1, "beta": 2})
         assert job_def.job_params == {"shared_vars": ["alpha", "beta"]}
 
-    def test_list_shared_vars_not_reported(self, db0_fixture):  # pylint: disable=unused-argument
-        """List shared_vars: names cannot be recovered, so nothing is reported."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
-        job_def = agent.create_job_def(shared_vars=[agent])
-        assert job_def.job_params is None
-
     def test_empty_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
         """Empty shared_vars: 'shared_vars' is not added to job_params."""
         agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])

@@ -77,7 +77,7 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
 def delegate_task(agent: SupervisedAgent,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
     parent_job: Optional[Job] = None,
-    shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
+    shared_vars: Optional[Dict[str, Any]] = None,
     **kwargs) -> TaskFutureResult:
     """Create a new job delegated to given agent.
 
@@ -87,10 +87,8 @@ def delegate_task(agent: SupervisedAgent,
                     to be executed prior to task start
         parent_job: Optional parent job — when provided, the child job
                     inherits the parent's error handlers.
-        shared_vars: Optional variables to be additionally shared with the
-                    child job's context. A dict ``{var_name: value}`` assigns
-                    explicit names; a list derives names from each value's
-                    type (lowercased class name).
+        shared_vars: Optional ``{var_name: value}`` mapping of variables to
+                    be additionally shared with the child job's context.
         kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
 
@@ -110,7 +108,8 @@ def delegate_task(agent: SupervisedAgent,
             for block in warmup_code:
                 copy_locals(block, env.local_state, caller_locals)
 
-    env.local_state.update(_resolve_shared_vars(shared_vars))
+    if shared_vars:
+        env.local_state.update(shared_vars)
 
     job = Job(
         job_def=job_def,
@@ -126,31 +125,12 @@ def delegate_task(agent: SupervisedAgent,
     return TaskFutureResult(job, deps=None, state_num=0)
 
 
-def _resolve_shared_vars(
-    shared_vars: Optional[Union[List[Any], Dict[str, Any]]]
-) -> Dict[str, Any]:
-    """Resolve a *shared_vars* argument into a ``{var_name: value}`` dict.
-
-    **Dict form** ``{"var_name": obj}`` is returned as a shallow copy.
-
-    **List form** ``[obj, ...]`` derives the variable name from each value's
-    type (lowercased class name).
-
-    Returns an empty dict when *shared_vars* is ``None`` or empty.
-    """
-    if not shared_vars:
-        return {}
-    if isinstance(shared_vars, dict):
-        return dict(shared_vars)
-    return {type(obj).__name__.lower(): obj for obj in shared_vars}
-
-
 def start_dialog(
     agent: DialogAgent,
     message: str,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
     parent_job: Optional[Job] = None,
-    shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
+    shared_vars: Optional[Dict[str, Any]] = None,
     **kwargs
 ) -> Job:
     """Start a dialog job with a DialogAgent and an initial user message.
@@ -185,7 +165,8 @@ def start_dialog(
             for block in warmup_code:
                 copy_locals(block, env.local_state, caller_locals)
 
-    env.local_state.update(_resolve_shared_vars(shared_vars))
+    if shared_vars:
+        env.local_state.update(shared_vars)
 
     job = Job(
         job_def=job_def,
@@ -205,7 +186,7 @@ def start_dialog(
 
 def submit_new_job(
     agent: SupervisedAgent,
-    shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
+    shared_vars: Optional[Dict[str, Any]] = None,
     **kwargs
 ) -> Job:
     """Create a new job for external use.
@@ -216,9 +197,8 @@ def submit_new_job(
 
     Args:
         agent: The agent (must inherit from SupervisedAgent).
-        shared_vars: Variables to share with the job.  A dict maps
-            ``{var_name: object}``; a list derives names from each
-            object's type.
+        shared_vars: Optional ``{var_name: object}`` mapping of variables
+            to share with the job.
         kwargs: Agent-specific job parameters.
 
     Returns:
@@ -227,7 +207,8 @@ def submit_new_job(
     job_def = agent.create_job_def(shared_vars=shared_vars, **kwargs)
 
     env = PyEnv()
-    env.local_state.update(_resolve_shared_vars(shared_vars))
+    if shared_vars:
+        env.local_state.update(shared_vars)
 
     return Job(
         job_def=job_def,
@@ -240,7 +221,7 @@ def submit_new_job(
 
 def submit_new_jobs_batch(
     agent: SupervisedAgent,
-    shared_vars_batch: List[Optional[Union[List[Any], Dict[str, Any]]]],
+    shared_vars_batch: List[Optional[Dict[str, Any]]],
     **kwargs
 ) -> List[Job]:
     """Create multiple jobs with different shared variables in one call.
