@@ -1,14 +1,15 @@
 """Tests for Job class."""
 
+# pylint: disable=no-member
+
 import types
 from unittest.mock import patch, MagicMock
 import dbzero as db0
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import Job, JobDefError, JobStatus
-from statek.llm_api import (
-    ChatStepAssistantData, ChatStepUserData, LLM_Response, LLM_Stats
-)
-from statek.executors.chat_log_item import UserLogItem
+from statek.llm_api import LLM_Response, LLM_Stats
+from statek.chat_history import ChatRole, ContentSource
+from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle
 from statek.utils import CodeBlock, CallSpec
 
@@ -247,150 +248,145 @@ class TestJob:
 
 
 class TestJobGetChatHistory:
-    """Test cases for Job.get_chat_history method."""
+    """Test cases for Job.get_chat_history method.
+
+    ``get_chat_history`` yields conversational ``ChatHistoryItem`` objects
+    only; the agent system prompt is passed separately via
+    ``get_next_request``.
+    """
 
     def test_get_chat_history_empty_chat_log(self, job_factory):
-        """Test get_chat_history when chat_log is empty."""
+        """Empty chat_log: no conversational history is yielded."""
         job = job_factory()
-
-        # With empty chat_log, should yield nothing
         history = list(job.get_chat_history())
         assert not history
 
     def test_get_chat_history_single_chat_item(self, job_factory):
-        """Test get_chat_history with one chat log item."""
+        """Single LLM turn at console_pos=0 with subsequent console output."""
         job = job_factory()
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="LLM response 1"))
+        # Console output produced AFTER the LLM responded.
+        job.py_env.console = ["Output 1", "Output 2"]
 
-        # Setup console
-        job.py_env.console_append("Output 1")
-        job.py_env.console_append("Output 2")
-
-        # Add one chat log item
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="LLM response 1"))
-
-        # Get history
         history = list(job.get_chat_history())
 
-        # Should have 2 elements: [user_message, llm_response]
+        # [ASSISTANT(resp1), USER(console for resp1)]
         assert len(history) == 2
-        assert history[0] == "Test task\n> Output 1\n> Output 2"
-        assert history[1] == "LLM response 1"
+        assert history[0].role == ChatRole.ASSISTANT
+        assert history[0].content == "LLM response 1"
+        assert history[0].content_src == ContentSource.ASSISTANT
+        assert history[1].role == ChatRole.USER
+        assert history[1].content == "Output 1\nOutput 2"
+        assert history[1].content_src == ContentSource.CONSOLE
 
     def test_get_chat_history_multiple_chat_items(self, job_factory):
-        """Test get_chat_history with multiple chat log items."""
+        """Multiple LLM turns each followed by their own console slice."""
         job = job_factory()
-
-        # Setup console with multiple outputs
         job.py_env.console = ["Out1", "Out2", "Out3", "Out4", "Out5"]
+        # First turn at console_pos 0 (no prior output) — its execution
+        # produced Out1, Out2. Second turn starts at 2, produces Out3, Out4.
+        # Third turn starts at 4, produces Out5.
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp1"))
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp2"))
+        job.chat_log.append(create_chat_log_item(console_pos=4, llm_resp="resp3"))
 
-        # Add multiple chat log items
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
-        job.chat_log.append(create_chat_log_item(console_pos=4, llm_resp="resp2"))
-        job.chat_log.append(create_chat_log_item(console_pos=5, llm_resp="resp3"))
-
-        # Get history
         history = list(job.get_chat_history())
 
-        # Should have 6 elements alternating user/assistant messages
+        # [asst1, console1, asst2, console2, asst3, console3]
         assert len(history) == 6
+        assert history[0].content == "resp1"
+        assert history[1].content == "Out1\nOut2"
+        assert history[1].content_src == ContentSource.CONSOLE
+        assert history[2].content == "resp2"
+        assert history[3].content == "Out3\nOut4"
+        assert history[4].content == "resp3"
+        assert history[5].content == "Out5"
 
-        # First user message: initial prompt + console from 0 to 2
-        assert history[0] == "Test task\n> Out1\n> Out2"
-        # First assistant response
-        assert history[1] == "resp1"
-        # Second user message: console from 2 to 4
-        assert history[2] == "> Out3\n> Out4"
-        # Second assistant response
-        assert history[3] == "resp2"
-        # Third user message: console from 4 to 5
-        assert history[4] == "> Out5"
-        # Third assistant response
-        assert history[5] == "resp3"
+    def test_get_chat_history_initial_user_message_from_push_log(self, job_factory):
+        """A push_log entry at console position 0 becomes the initial USER item."""
+        job = job_factory()
+        job.py_env.push_log = {0: "Hello, please do X"}
+
+        history = list(job.get_chat_history())
+
+        assert len(history) == 1
+        assert history[0].role == ChatRole.USER
+        assert history[0].content == "Hello, please do X"
+        assert history[0].content_src == ContentSource.USER
+
+    def test_get_chat_history_initial_user_message_from_chat_log_str(self, job_factory):
+        """A leading str entry in chat_log feeds into the initial USER item."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        job.push_user_message("hi there")
+
+        history = list(job.get_chat_history())
+
+        assert len(history) == 1
+        assert history[0].role == ChatRole.USER
+        assert history[0].content == "hi there"
 
 
 class TestJobGetNextRequest:
-    """Test cases for Job.get_next_request method."""
+    """Test cases for Job.get_next_request method.
 
-    def test_get_next_request_first_request_no_history(self, job_factory):
-        """Test get_next_request for the first request with no chat history."""
+    ``get_next_request`` carries ``system_prompt`` separately from
+    conversational ``chat_history``.
+    """
+
+    def test_get_next_request_keys(self, job_factory):
+        """The request dict carries chat_history plus a dedicated system_prompt key."""
         job = job_factory()
-
-        # Add some console output
-        job.py_env.console_append("Output 1")
-        job.py_env.console_append("Output 2")
-
         request = job.get_next_request()
 
-        # Verify required keys are present (no 'prompt' key — it's in chat_history)
-        assert "prompt" not in request
         assert "chat_history" in request
-        assert "system_prompt" in request
-
-        # Verify chat_history contains only the current prompt (no prior history)
-        history = list(request["chat_history"])
-        expected = ChatStepAssistantData(
-            code="", console_output="Test task\n> Output 1\n> Output 2")
-        assert history == [expected]
-
-        # Verify system_prompt is from agent
         assert request["system_prompt"] == "Test agent"
+        assert "prompt" not in request
+        assert "metadata" in request
+        assert "available_tools" in request
+        assert "session_id" not in request  # not set
 
-        # Verify session_id is not included when None
-        assert "session_id" not in request
+    def test_get_next_request_chat_history_excludes_system(self, job_factory):
+        """The system prompt is not embedded in chat_history."""
+        job = job_factory()
+        history = list(job.get_next_request()["chat_history"])
+
+        assert not history
 
     def test_get_next_request_with_session_id(self, job_factory):
-        """Test get_next_request includes session_id when set."""
+        """get_next_request includes session_id when set."""
         job = job_factory()
         job.session_id = "test-session-123"
-
         request = job.get_next_request()
-
-        # Verify session_id is included
-        assert "session_id" in request
         assert request["session_id"] == "test-session-123"
 
     def test_get_next_request_with_chat_history(self, job_factory):
-        """Test get_next_request with existing chat history."""
+        """chat_history contains ChatHistoryItems for SYSTEM + each turn."""
         job = job_factory()
+        job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="Response 1"))
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="Response 2"))
 
-        # Setup console
-        job.py_env.console = ["Out1", "Out2", "Out3", "Out4"]
+        history = list(job.get_next_request()["chat_history"])
 
-        # Add chat log items
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="Response 1"))
-        job.chat_log.append(create_chat_log_item(console_pos=4, llm_resp="Response 2"))
-
-        request = job.get_next_request()
-
-        # Verify no separate 'prompt' key — it's the last element of chat_history
-        assert "prompt" not in request
-
-        # Verify chat_history contains ChatStepAssistantData objects ending with the current prompt
-        history = list(request["chat_history"])
+        # [asst1, console1, asst2] — asst2 has no following console output
         assert len(history) == 3
-        assert history[0] == ChatStepAssistantData(
-            code="", console_output="Test task\n> Out1\n> Out2")
-        assert history[1] == ChatStepAssistantData(
-            code="Response 1", console_output="> Out3\n> Out4")
-        assert history[2] == ChatStepAssistantData(
-            code="Response 2", console_output="")  # no new console
+        assert history[0].content == "Response 1"
+        assert history[1].content == "Out1\nOut2"
+        assert history[1].content_src == ContentSource.CONSOLE
+        assert history[2].content == "Response 2"
 
     def test_get_next_request_structure(self, job_factory):
-        """Test that get_next_request returns a proper dictionary structure."""
+        """get_next_request returns a dict whose chat_history is a lazy generator."""
         job = job_factory()
         job.session_id = "session-abc"
-
         request = job.get_next_request()
 
-        # Verify it's a dictionary with no separate 'prompt' key
         assert isinstance(request, dict)
         assert "prompt" not in request
-
-        # Verify types of values
+        assert request["system_prompt"] == "Test agent"
         assert isinstance(request["chat_history"], types.GeneratorType)
-        assert isinstance(request["system_prompt"], str)
         assert isinstance(request["session_id"], str)
-
 
     def test_get_next_request_no_chat_style_when_none(self, job_factory):
         """get_next_request omits CHAT_STYLE from metadata when chat_style is None."""
@@ -400,16 +396,10 @@ class TestJobGetNextRequest:
         assert "CHAT_STYLE" not in request["metadata"]
 
     def test_get_next_request_empty_console_no_history(self, job_factory):
-        """Test get_next_request with no console output and no history."""
+        """No console, no chat_log: chat_history is empty."""
         job = job_factory()
-
-        request = job.get_next_request()
-
-        # chat_history should contain only the current prompt (just the description)
-        assert "prompt" not in request
-        history = list(request["chat_history"])
-        assert history == [ChatStepAssistantData(code="", console_output="Test task")]
-        assert "session_id" not in request
+        history = list(job.get_next_request()["chat_history"])
+        assert not history
 
     def test_last_response_empty_chat_log(self, job_factory):
         """Test last_response returns None when chat_log is empty."""
@@ -558,103 +548,89 @@ class TestJobGetNextPromptWithWarmup:
 
 
 class TestJobGetChatHistoryWithWarmup:
-    """Test get_chat_history formats warmup as assistant/user message pairs."""
+    """Test get_chat_history yields warmup as ASSISTANT + USER (console) pairs."""
 
-    def test_warmup_no_chat_log_yields_history(self, job_factory):
-        """With warmup but empty chat_log, get_chat_history is non-empty."""
+    def test_warmup_no_chat_log_single_block(self, job_factory):
+        """One warmup block, no LLM turns: [SYSTEM, asst(code), user(console)]."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup output"]
         set_warmup_positions(job, [1])
 
         history = list(job.get_chat_history())
 
-        assert len(history) > 0
+        assert len(history) == 3
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[1].role == ChatRole.ASSISTANT
+        assert history[1].content == "x = 1"
+        assert history[1].content_src == ContentSource.SYSTEM
+        assert history[2].role == ChatRole.USER
+        assert history[2].content == "warmup output"
+        assert history[2].content_src == ContentSource.CONSOLE
 
-    def test_warmup_no_chat_log_single_block_structure(self, job_factory):
-        """Single warmup block, no chat_log: [template(user), warmup(asst)]."""
-        job = job_factory(warmup_code="x = 1")
-        job.py_env.console = ["warmup output", "remaining"]
-        set_warmup_positions(job, [1])
-
-        history = list(job.get_chat_history())
-
-        # Exactly 2 items: template (user) and warmup code (assistant)
-        assert len(history) == 2
-        assert history[0] == "Test task"     # user: template
-        assert "x = 1" in history[1]        # assistant: warmup code
-
-    def test_warmup_no_chat_log_two_blocks_structure(self, job_factory):
-        """Two warmup blocks, no chat_log: [template, w0, console0, w1]."""
-        job = job_factory(warmup_code=["block1", "block2"])
-        job.py_env.console = ["out1", "out2", "remaining"]
-        set_warmup_positions(job, [1, 2])
-
-        history = list(job.get_chat_history())
-
-        # 4 items: template, block1, console0, block2
-        assert len(history) == 4
-        assert history[0] == "Test task"      # user: template
-        assert "block1" in history[1]         # assistant: warmup block 0
-        assert "> out1" in history[2]         # user: console for block 0
-        assert "block2" in history[3]         # assistant: warmup block 1
-
-    def test_warmup_no_chat_log_last_item_is_assistant(self, job_factory):
-        """Last item in chat_history is always the last warmup block (assistant)."""
+    def test_warmup_no_chat_log_two_blocks(self, job_factory):
+        """Two warmup blocks: [SYSTEM, asst1, user1, asst2, user2]."""
         job = job_factory(warmup_code=["block1", "block2"])
         job.py_env.console = ["out1", "out2"]
         set_warmup_positions(job, [1, 2])
 
         history = list(job.get_chat_history())
 
-        assert "block2" in history[-1]
+        assert len(history) == 5
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[1].content == "block1"
+        assert history[1].content_src == ContentSource.SYSTEM
+        assert history[2].content == "out1"
+        assert history[2].content_src == ContentSource.CONSOLE
+        assert history[3].content == "block2"
+        assert history[4].content == "out2"
 
-    def test_warmup_with_chat_log_structure(self, job_factory):
-        """With warmup and chat_log: [template, warmup, merged_console, first_resp, …]."""
+    def test_warmup_with_chat_log(self, job_factory):
+        """Warmup followed by an LLM turn: [SYSTEM, asst_w, user_w, asst_llm, user_llm]."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup out", "post-warmup out"]
         set_warmup_positions(job, [1])
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp1"))
 
         history = list(job.get_chat_history())
 
-        # [template(user), warmup(asst), merged_console(user), resp1(asst)]
-        assert len(history) == 4
-        assert history[0] == "Test task"             # user: template
-        assert "x = 1" in history[1]                # assistant: warmup code
-        assert "> warmup out" in history[2]          # user: merged console (warmup + remaining)
-        assert "> post-warmup out" in history[2]     # user: merged console (both lines)
-        assert history[3] == "resp1"                 # assistant: first LLM response
+        assert len(history) == 5
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[1].content == "x = 1"        # warmup asst
+        assert history[2].content == "warmup out"   # warmup user
+        assert history[3].content == "resp1"        # llm asst
+        assert history[4].content == "post-warmup out"  # llm user
 
-    def test_warmup_with_chat_log_merged_console_covers_remaining(self, job_factory):
-        """The last warmup user message covers console up to the first LLM turn."""
-        job = job_factory(warmup_code="x = 1")
-        # warmup produced line 0, then extra line 1 before first LLM call
-        job.py_env.console = ["warmup out", "extra before llm", "after llm"]
-        set_warmup_positions(job, [1])   # warmup produced 1 line
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
-        job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
+    def test_tool_only_warmup_keeps_system_content_source(self, job_factory):
+        """Tool-only warmup assistant items should still be marked as SYSTEM."""
+        call_spec = CallSpec(id="T", func_name="docs", args=["topic"])
+        job = job_factory(warmup_code=CodeBlock(code=None, tool_calls=[call_spec]))
+        warmup_item = WarmupLogItem(console_pos=0, warmup_block_num=0, tool_log="tool result")
+        job.chat_log.append(warmup_item)
 
         history = list(job.get_chat_history())
 
-        # history[2] is the merged user message after warmup (covers console[0:2])
-        assert "> warmup out" in history[2]
-        assert "> extra before llm" in history[2]
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[1].role == ChatRole.ASSISTANT
+        assert history[1].content is None
+        assert history[1].content_src == ContentSource.SYSTEM
+        assert history[1].tool_calls == [call_spec]
+        assert history[2].role == ChatRole.TOOL
+        assert history[2].content == "tool result"
 
     def test_warmup_not_in_subsequent_messages(self, job_factory):
-        """Warmup code does not appear in subsequent user messages."""
+        """Warmup code does not appear in console items after the first LLM turn."""
         job = job_factory(warmup_code="x = 1")
-        job.py_env.console = ["warmup out", "post-warmup out", "after-first-llm"]
+        job.py_env.console = ["warmup out", "after-first-llm"]
         set_warmup_positions(job, [1])
-        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
-        job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp1"))
 
         history = list(job.get_chat_history())
 
-        # Structure: [template, warmup, merged(0:2), resp1, console(2:3), resp2]
-        # history[4] is the second user message (console after first LLM turn)
-        second_user_msg = history[4]
-        assert "x = 1" not in second_user_msg
-        assert "> after-first-llm" in second_user_msg
+        # Last user item is the console produced by the first LLM turn.
+        last_user = history[-1]
+        assert last_user.role == ChatRole.USER
+        assert last_user.content == "after-first-llm"
+        assert "x = 1" not in (last_user.content or "")
 
 
 class TestJobSetStatus:  # pylint: disable=too-few-public-methods
@@ -1089,88 +1065,83 @@ class TestUserLogItem:
 # ---------------------------------------------------------------------------
 
 class TestGetNextRequestUserMessages:
-    """Tests for _full_history yielding ChatStepUserData for user messages."""
+    """Tests for chat_history surfacing user messages from chat_log."""
 
-    def test_str_in_chat_log_not_yielded(self, job_factory):
-        """A str entry in chat_log (initial user message) is NOT yielded as
-        ChatStepUserData — its content is already in the warmup output."""
+    def test_str_in_chat_log_yields_initial_user_item(self, job_factory):
+        """A leading str entry in chat_log becomes the initial USER item."""
         job = job_factory()
         job.py_env.console = ["Out1", "Out2"]
         job.chat_log.append("initial user message")
         job.chat_log.append(
-            create_chat_log_item(console_pos=2, llm_resp="Response 1"))
+            create_chat_log_item(console_pos=0, llm_resp="Response 1"))
 
-        request = job.get_next_request()
-        history = list(request["chat_history"])
+        history = list(job.get_next_request()["chat_history"])
 
-        user_data_items = [
-            h for h in history if isinstance(h, ChatStepUserData)
-        ]
-        assert len(user_data_items) == 0
+        # [SYSTEM, USER(initial), ASSISTANT(resp), USER(console)]
+        assert history[1].role == ChatRole.USER
+        assert history[1].content == "initial user message"
+        assert history[1].content_src == ContentSource.USER
 
-    def test_user_log_item_in_chat_log_yields_user_data(self, job_factory):
-        """A UserLogItem in chat_log is yielded as ChatStepUserData."""
+    def test_user_log_item_in_chat_log_yields_user_item(self, job_factory):
+        """A UserLogItem in chat_log is yielded as a USER ChatHistoryItem."""
         job = job_factory()
         job.py_env.console = ["Out1", "Out2"]
         job.chat_log.append(
-            create_chat_log_item(console_pos=2, llm_resp="Response 1"))
+            create_chat_log_item(console_pos=0, llm_resp="Response 1"))
         job.chat_log.append(UserLogItem(message="user follow-up"))
 
-        request = job.get_next_request()
-        history = list(request["chat_history"])
+        history = list(job.get_next_request()["chat_history"])
 
-        assert history[-1] == ChatStepUserData(message="user follow-up")
+        assert history[-1].role == ChatRole.USER
+        assert history[-1].content == "user follow-up"
+        assert history[-1].content_src == ContentSource.USER
 
     def test_multiple_user_log_items_after_llm(self, job_factory):
         """Multiple UserLogItem follow-ups after LLM turns are all yielded."""
         job = job_factory()
         job.py_env.console = ["Out1"]
         job.chat_log.append(
-            create_chat_log_item(console_pos=1, llm_resp="R1"))
+            create_chat_log_item(console_pos=0, llm_resp="R1"))
         job.chat_log.append(UserLogItem(message="msg1"))
         job.chat_log.append(UserLogItem(message="msg2"))
 
-        request = job.get_next_request()
-        history = list(request["chat_history"])
+        history = list(job.get_next_request()["chat_history"])
 
-        user_data_items = [
-            h for h in history if isinstance(h, ChatStepUserData)
+        user_items = [
+            h for h in history
+            if h.role == ChatRole.USER and h.content_src == ContentSource.USER
         ]
-        assert len(user_data_items) == 2
-        assert user_data_items[0] == ChatStepUserData(message="msg1")
-        assert user_data_items[1] == ChatStepUserData(message="msg2")
+        assert len(user_items) == 2
+        assert user_items[0].content == "msg1"
+        assert user_items[1].content == "msg2"
 
     def test_user_messages_preserve_normal_history(self, job_factory):
-        """Normal assistant history is preserved when user messages exist."""
+        """Assistant history is preserved when user messages exist."""
         job = job_factory()
         job.py_env.console = ["Out1", "Out2"]
         job.chat_log.append(
-            create_chat_log_item(console_pos=2, llm_resp="Response 1"))
+            create_chat_log_item(console_pos=0, llm_resp="Response 1"))
         job.chat_log.append(UserLogItem(message="user msg"))
 
-        request = job.get_next_request()
-        history = list(request["chat_history"])
+        history = list(job.get_next_request()["chat_history"])
 
-        asst_items = [
-            h for h in history if isinstance(h, ChatStepAssistantData)
-        ]
-        # First: initial prompt, second: Response 1 + console
-        assert len(asst_items) >= 2
-        assert asst_items[0].console_output == "Test task\n> Out1\n> Out2"
-        assert asst_items[1].code == "Response 1"
+        asst_items = [h for h in history if h.role == ChatRole.ASSISTANT]
+        assert len(asst_items) == 1
+        assert asst_items[0].content == "Response 1"
 
     def test_empty_str_in_chat_log_skipped(self, job_factory):
-        """An empty string in chat_log is not yielded."""
+        """An empty leading string in chat_log produces no USER item."""
         job = job_factory()
         job.chat_log.append("")
 
-        request = job.get_next_request()
-        history = list(request["chat_history"])
+        history = list(job.get_next_request()["chat_history"])
 
-        user_data_items = [
-            h for h in history if isinstance(h, ChatStepUserData)
+        # Only the SYSTEM item — empty string contributes nothing.
+        user_items = [
+            h for h in history
+            if h.role == ChatRole.USER and h.content_src == ContentSource.USER
         ]
-        assert len(user_data_items) == 0
+        assert user_items == []
 
     def test_last_response_none_when_last_is_user_log_item(
             self, job_factory):

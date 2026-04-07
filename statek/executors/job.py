@@ -6,7 +6,8 @@ import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, WarmupLogItem, UserLogItem
-from statek.llm_api import ChatStepAssistantData, ChatStepUserData, LLM_Response, CallParams
+from statek.llm_api import LLM_Response, CallParams
+from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_markup,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
@@ -490,245 +491,216 @@ class Job:
             parts = [p for p in [console_part, push_part] if p]
             return "\n".join(parts)
 
-    def get_chat_history(self) -> Iterable[str]:
-        """
-        Generate chat history compatible with LLM_API.process_request method.
+    def get_chat_history(self) -> Iterable[ChatHistoryItem]:
+        """Yield the full LLM-facing chat history as ``ChatHistoryItem`` objects.
 
-        This method yields chat history elements in the format expected by the LLM API,
-        where messages alternate between user and assistant. The first element includes
-        the initial prompt plus console output from position 0. Subsequent elements
-        alternate between LLM responses and console fragments from processing those responses.
+        Lazy generator producing a normalised, provider-agnostic timeline:
+
+          1. Optional USER item with the initial user message — sourced from
+             ``chat_log[0]`` (str, set by ``push_user_message`` in
+             MD_DIALOG/DIRECT) and/or ``py_env.push_log[0]``.  When neither
+             exists this slot is omitted.
+          2. Warmup blocks as alternating ASSISTANT (code or tool-call request)
+             + USER/TOOL (console output / tool result) pairs, in
+             ``warmup_block_num`` order.
+          3. The same alternating pattern for LLM turns: ASSISTANT (LLM
+             response) + USER/TOOL (console / tool result), woven together
+             with any USER messages from ``UserLogItem`` entries and from
+             ``py_env.push_log`` keyed by console position.
+
+        ``CodeBlock`` responses with ``tool_calls`` produce an ASSISTANT item
+        with ``tool_calls`` set, followed by one TOOL item per call carrying
+        its captured result.  Plain code (no tool calls) becomes an
+        ASSISTANT item with ``content`` set.  Pending LLM turns (e.g.
+        ``llm_resp=None`` after a DONE→STARTED transition) emit no assistant
+        item but still surface any preceding push_log user messages.
 
         Yields:
-            str: Chat history elements alternating between user messages (prompt + console)
-                 and assistant messages (LLM responses)
-
-        Example:
-            For a job with chat_log containing 2 items (CONSOLE style):
-            - First yield: "initial_prompt\n> console_output_0\n> console_output_1"
-            - Second yield: "llm_response_1"
-            - Third yield: "> console_output_2\n> console_output_3"
-            - Fourth yield: "llm_response_2"
-
-            In MARKDOWN style, assistant messages (LLM code and warmup code) are wrapped
-            in ```python fences; warmup blocks appear as assistant turns before the first
-            LLM response.
+            ChatHistoryItem instances ready for ``format_chat_history_item``.
         """
-        chat_style = self.job_def.chat_style
-        xml_tags = get_statek_settings().get_xml_box_tags()
-
-        def _wrap_code(resp: Union[str, CodeBlock]) -> str:
-            code = resp.code if isinstance(resp, CodeBlock) else resp
-            if not code:
-                return ""
-            if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
-                return f"```python\n{code}\n```"
-            return code
-
+        push_log = self.py_env.push_log or {}
+        console = self.py_env.console or []
+        console_len = len(console)
         warmup = self.job_def.warmup_code
-        warmup_blocks = ([warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)) if warmup else []
+        warmup_blocks: List[Union[str, CodeBlock]] = (
+            [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
+        ) if warmup else []
 
-        # Filter chat_log to only LLM_LogItem entries for history building
-        llm_items = [item for item in self.chat_log if isinstance(item, LLM_LogItem)]
-        positions = self._warmup_end_positions()
+        # When warmup is present, the job prompt moves out of the current user
+        # message and needs to stay anchored at the head of the history.
+        if warmup_blocks:
+            prompt = self.job_def.prompt()
+            if prompt:
+                yield ChatHistoryItem(
+                    role=ChatRole.SYSTEM,
+                    content=prompt,
+                    content_src=ContentSource.SYSTEM,
+                )
 
-        if not llm_items:
-            if not warmup_blocks:
-                return  # No history
-
-            # First LLM call with warmup: yield template then warmup assistant/user pairs.
-            # The last warmup block (assistant) is the final item; remaining console goes in prompt.
-            yield self.job_def.prompt()  # user: template
-            prev_pos = 0
-            for i, block in enumerate(warmup_blocks):
-                block_code = block.code if isinstance(block, CodeBlock) else block
-                yield _wrap_code(block_code)  # assistant: warmup code
-                is_last = (i == len(warmup_blocks) - 1)
-                if not is_last:
-                    # Yield console between this block and the next as a user message
-                    block_end = (
-                        positions[i]
-                        if i < len(positions)
-                        else len(self.py_env.console) if self.py_env.console else 0
-                    )
-                    limit = block_end - prev_pos
-                    yield prompt_append_console(
-                        self.py_env.console, chat_style,
-                        from_pos=prev_pos, limit=limit if limit > 0 else 0,
-                        xml_tags=xml_tags
-                    ) if limit > 0 else ""  # user: console for this block
-                    prev_pos = block_end
-            return
-
-        # llm_items is non-empty
-        first_chat_item = llm_items[0]
-
-        if not warmup_blocks:
-            # No warmup: first user message = template + console up to first LLM turn
-            template = self.job_def.prompt()
-            console_part = prompt_append_console(
-                self.py_env.console, chat_style,
-                from_pos=0, limit=first_chat_item.console_pos,
-                xml_tags=xml_tags
-            ) if first_chat_item.console_pos > 0 else ""
-            yield f"{template}\n{console_part}" if console_part else template
-        else:
-            # With warmup: template, then warmup assistant/user pairs.
-            # The last warmup user message is extended to cover all console up to the first LLM turn.
-            yield self.job_def.prompt()  # user: template
-            prev_pos = 0
-            for i, block in enumerate(warmup_blocks):
-                block_code = block.code if isinstance(block, CodeBlock) else block
-                yield _wrap_code(block_code)  # assistant: warmup code
-                is_last = (i == len(warmup_blocks) - 1)
-                if is_last:
-                    block_end = first_chat_item.console_pos  # extend to cover remaining console
-                elif i < len(positions):
-                    block_end = positions[i]
-                else:
-                    block_end = len(self.py_env.console) if self.py_env.console else 0
-                limit = block_end - prev_pos
-                yield prompt_append_console(
-                    self.py_env.console, chat_style,
-                    from_pos=prev_pos, limit=limit if limit > 0 else 0,
-                    xml_tags=xml_tags
-                ) if limit > 0 else ""  # user: console for this block
-                prev_pos = block_end
-
-        # Yield first LLM response then remaining turns
-        yield _wrap_code(first_chat_item.llm_resp)
-
-        for i in range(1, len(llm_items)):
-            prev_chat_item = llm_items[i - 1]
-            current_chat_item = llm_items[i]
-
-            console_fragment = prompt_append_console(
-                self.py_env.console, chat_style,
-                from_pos=prev_chat_item.console_pos,
-                limit=current_chat_item.console_pos - prev_chat_item.console_pos,
-                xml_tags=xml_tags
+        # 1) Initial user message — chat_log[0] (str) and/or push_log[0].
+        initial_parts: List[str] = []
+        if (
+            self.chat_log
+            and isinstance(self.chat_log[0], str)
+            and self.chat_log[0]
+        ):
+            initial_parts.append(self.chat_log[0])
+        if 0 in push_log:
+            v = push_log[0]
+            if isinstance(v, list):
+                initial_parts.extend(s for s in v if s)
+            elif v:
+                initial_parts.append(v)
+        if initial_parts:
+            yield ChatHistoryItem(
+                role=ChatRole.USER,
+                content="\n".join(initial_parts),
+                content_src=ContentSource.USER,
             )
-            yield console_fragment
-            yield _wrap_code(current_chat_item.llm_resp)
+
+        # 2) Walk chat_log items in chronological order.
+        items = [it for it in self.chat_log if not isinstance(it, str)]
+
+        # Pre-compute the console end position for each ChatLogItem (the
+        # console_pos of the next ChatLogItem, or console_len for the last).
+        end_positions: Dict[int, int] = {}
+        for i, item in enumerate(items):
+            if isinstance(item, UserLogItem):
+                continue
+            next_pos = console_len
+            for j in range(i + 1, len(items)):
+                if isinstance(items[j], (WarmupLogItem, LLM_LogItem)):
+                    next_pos = items[j].console_pos
+                    break
+            end_positions[i] = next_pos
+
+        # Push log keys (excluding 0, already consumed as the initial user msg).
+        sorted_push_keys = sorted(k for k in push_log.keys() if k != 0)
+
+        def _yield_pushes(lo: int, hi: int) -> Iterable[ChatHistoryItem]:
+            """Yield USER items for push_log entries in (lo, hi]."""
+            for k in sorted_push_keys:
+                if lo < k <= hi:
+                    v = push_log[k]
+                    msgs = v if isinstance(v, list) else [v]
+                    for msg in msgs:
+                        yield ChatHistoryItem(
+                            role=ChatRole.USER,
+                            content=msg,
+                            content_src=ContentSource.USER,
+                        )
+
+        for idx, item in enumerate(items):
+            if isinstance(item, UserLogItem):
+                if item.message:
+                    yield ChatHistoryItem(
+                        role=ChatRole.USER,
+                        content=item.message,
+                        content_src=ContentSource.USER,
+                    )
+                continue
+
+            # Determine the source content of the assistant turn.
+            if isinstance(item, WarmupLogItem):
+                block_num = item.warmup_block_num
+                block = (
+                    warmup_blocks[block_num]
+                    if block_num < len(warmup_blocks) else None
+                )
+                asst_src = ContentSource.SYSTEM
+            elif isinstance(item, LLM_LogItem):
+                block = item.llm_resp
+                asst_src = ContentSource.ASSISTANT
+            else:
+                continue
+
+            # Yield the assistant turn (and any tool results).
+            if block is not None:
+                tool_calls = (
+                    list(block.tool_calls)
+                    if isinstance(block, CodeBlock) and block.tool_calls
+                    else None
+                )
+                block_code = block.code if isinstance(block, CodeBlock) else block
+                if tool_calls:
+                    yield ChatHistoryItem(
+                        role=ChatRole.ASSISTANT,
+                        content=block_code if block_code else None,
+                        content_src=asst_src,
+                        tool_calls=tool_calls,
+                    )
+                    for j, cs in enumerate(tool_calls):
+                        try:
+                            result = item.get_tool_result(j)
+                        except (KeyError, IndexError):
+                            result = ""
+                        yield ChatHistoryItem(
+                            role=ChatRole.TOOL,
+                            content=result,
+                            content_src=ContentSource.CONSOLE,
+                            tool_calls=cs,
+                        )
+                elif block_code:
+                    yield ChatHistoryItem(
+                        role=ChatRole.ASSISTANT,
+                        content=block_code,
+                        content_src=asst_src,
+                    )
+                # block_code empty + no tool_calls — nothing to yield.
+
+            # Console output produced by this block (USER + CONSOLE).
+            from_pos = item.console_pos
+            to_pos = end_positions[idx]
+            if to_pos > from_pos and console:
+                console_text = "\n".join(console[from_pos:to_pos])
+                yield ChatHistoryItem(
+                    role=ChatRole.USER,
+                    content=console_text,
+                    content_src=ContentSource.CONSOLE,
+                )
+
+            # Any push_log messages emitted while this block was running.
+            yield from _yield_pushes(from_pos, to_pos)
 
     def get_next_request(self) -> Dict[str, Any]:
-        """
-        Generate a complete set of parameters compatible with LLM_API.process_request method.
+        """Build the parameter dict consumed by ``LLM_API.process_request``.
 
-        This method creates a dictionary containing all necessary parameters for making
-        an LLM API request, including the full chat history (with the latest user message
-        as its final element), system prompt, and session ID.
+        ``chat_history`` is the lazy generator returned by
+        :meth:`get_chat_history` and contains only conversational turns.
+        The agent system prompt is passed separately via ``system_prompt``.
 
         Returns:
-            Dict[str, Any]: A dictionary with the following keys:
-                - chat_history (Iterable[ChatStepAssistantData]): Generator of ChatStepAssistantData objects
-                  where each step pairs the LLM code response with the resulting console output
-                - system_prompt (str): The agent's system prompt
-                - metadata (Dict[str, str]): The agent's metadata (may be None)
-                - session_id (str, optional): The session ID if available
-
-        Example:
-            {
-                "chat_history": <generator>,  # ends with the latest user prompt
-                "system_prompt": "You are a helpful assistant",
-                "metadata": {"MODEL": "gpt-4o"},
-                "session_id": "abc123"  # Only if session_id is not None
-            }
+            Dict[str, Any]: With keys ``chat_history`` (Iterable[ChatHistoryItem]),
+            ``system_prompt`` (str), ``metadata`` (dict), ``available_tools`` (list),
+            optionally ``chat_style`` and ``session_id``.
         """
-        def _full_history():
-            history_strings = list(self.get_chat_history())
-            current_prompt = self.get_next_prompt()
+        metadata = (
+            dict(self.job_def.agent._metadata)  # pylint: disable=protected-access
+            if self.job_def.agent._metadata else {}
+        )
+        system_prompt = (
+            self.job_def.agent.system_prompt(job_params=self.job_def.job_params)
+            if self.job_def.agent is not None else ""
+        )
 
-            warmup = self.job_def.warmup_code
-            warmup_blocks = (
-                [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
-            ) if warmup else []
-            num_warmup = len(warmup_blocks)
-
-            def _make_tool_calls(code_block, chat_log_item):
-                """Build Dict[CallParams, str] from a CodeBlock and its chat_log_item's tool_log."""
-                if not isinstance(code_block, CodeBlock) or not code_block.tool_calls:
-                    return None
-                if chat_log_item is None:
-                    return None
-                call_specs = list(code_block.tool_calls)
-                tool_calls_dict = {}
-                for i, cs in enumerate(call_specs):
-                    try:
-                        result = chat_log_item.get_tool_result(i)
-                    except KeyError:
-                        return None
-                    except IndexError:
-                        result = ""
-                    cp = CallParams(
-                        call_id=cs.id, name=cs.func_name,
-                        args=list(cs.args) if cs.args else [],
-                        kwargs=dict(cs.kwargs) if cs.kwargs else {}
+        def _request_chat_history() -> Iterable[ChatHistoryItem]:
+            history = list(self.get_chat_history())
+            if (
+                history
+                and history[0].role == ChatRole.USER
+            ):
+                prompt = self.job_def.prompt()
+                if prompt:
+                    yield ChatHistoryItem(
+                        role=ChatRole.SYSTEM,
+                        content=prompt,
+                        content_src=ContentSource.SYSTEM,
                     )
-                    tool_calls_dict[cp] = result
-                return tool_calls_dict if tool_calls_dict else None
+            yield from history
 
-            # Collect WarmupLogItems indexed by warmup_block_num
-            warmup_log_items = {
-                item.warmup_block_num: item
-                for item in self.chat_log if isinstance(item, WarmupLogItem)
-            }
-            # Collect LLM_LogItems in order
-            llm_items = [item for item in self.chat_log if isinstance(item, LLM_LogItem)]
-
-            def _get_step_tool_calls(k):
-                """Return tool_calls for the k-th ChatStepAssistantData (k=0 = first user-only step)."""
-                if k == 0:
-                    return None
-                if k <= num_warmup:
-                    block_idx = k - 1
-                    warmup_item = warmup_log_items.get(block_idx)
-                    return _make_tool_calls(warmup_blocks[block_idx], warmup_item)
-                turn_idx = k - num_warmup - 1
-                if turn_idx < len(llm_items):
-                    return _make_tool_calls(llm_items[turn_idx].llm_resp, llm_items[turn_idx])
-                return None
-
-            if not history_strings:
-                # No prior history: current prompt is the only message
-                yield ChatStepAssistantData(code="", console_output=current_prompt)
-                return
-
-            # First string is always a user message with no preceding assistant
-            yield ChatStepAssistantData(code="", console_output=history_strings[0])
-
-            # Pair up remaining (assistant, user) strings, skipping the last asst
-            i = 1
-            k = 1
-            while i < len(history_strings) - 1:
-                yield ChatStepAssistantData(
-                    code=history_strings[i], console_output=history_strings[i + 1],
-                    tool_calls=_get_step_tool_calls(k)
-                )
-                i += 2
-                k += 1
-
-            # Last string is always an assistant message; pair with current prompt
-            yield ChatStepAssistantData(
-                code=history_strings[-1], console_output=current_prompt,
-                tool_calls=_get_step_tool_calls(k)
-            )
-
-            # Yield follow-up user messages (UserLogItem only) from chat_log.
-            # The initial str entry (chat_log[0]) set by push_user_message is
-            # NOT yielded — its content is already communicated to the LLM via
-            # warmup code (e.g. print(message)).  Yielding it here would place
-            # it after the latest console output, making the LLM see the raw
-            # user text instead of the most recent execution result.
-            for item in self.chat_log:
-                if isinstance(item, UserLogItem) and item.message:
-                    yield ChatStepUserData(message=item.message)
-
-        metadata = dict(self.job_def.agent._metadata) if self.job_def.agent._metadata else {}  # pylint: disable=protected-access
-
-        request_params = {
-            "chat_history": _full_history(),
-            "system_prompt": self.job_def.agent.system_prompt(job_params=self.job_def.job_params),
+        request_params: Dict[str, Any] = {
+            "chat_history": _request_chat_history(),
+            "system_prompt": system_prompt,
             "metadata": metadata,
             "available_tools": self.job_def.agent.all_tools,
         }
@@ -737,7 +709,6 @@ class Job:
         if chat_style is not None:
             request_params["chat_style"] = chat_style
 
-        # Only include session_id if it's not None
         if self.session_id is not None:
             request_params["session_id"] = self.session_id
 

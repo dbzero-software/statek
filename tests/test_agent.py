@@ -301,6 +301,45 @@ class TestCreateJobDefWarmup:
         assert job_def.job_params == {"user_question": "hello"}
 
 
+class TestCreateJobDefSharedVars:
+    """Test cases for SupervisedAgent.create_job_def shared_vars integration."""
+
+    def test_no_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
+        """Without shared_vars, job_params has no 'shared_vars' key."""
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def()
+        assert job_def.job_params is None
+
+    def test_dict_shared_vars_populates_job_params(self, db0_fixture):  # pylint: disable=unused-argument
+        """Dict shared_vars: keys are recorded as 'shared_vars' in job_params."""
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def(shared_vars={"alpha": 1, "beta": 2})
+        assert job_def.job_params == {"shared_vars": ["alpha", "beta"]}
+
+    def test_empty_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
+        """Empty shared_vars: 'shared_vars' is not added to job_params."""
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def(shared_vars={})
+        assert job_def.job_params is None
+
+    def test_shared_vars_combined_with_kwargs(self, db0_fixture):  # pylint: disable=unused-argument
+        """shared_vars coexist with other kwargs in job_params."""
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def(
+            shared_vars={"alpha": 1}, user_question="hi"
+        )
+        assert job_def.job_params == {
+            "user_question": "hi",
+            "shared_vars": ["alpha"],
+        }
+
+    def test_shared_vars_does_not_affect_warmup_code(self, db0_fixture):  # pylint: disable=unused-argument
+        """shared_vars only reports names; it does not generate warmup_code."""
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def(shared_vars={"alpha": 1})
+        assert job_def.warmup_code is None
+
+
 class TestUpdateWarmupDefs:
     """Test cases for the update_warmup_defs function."""
 

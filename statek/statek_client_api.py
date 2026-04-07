@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 import dbzero as db0
 from .rpc_integration import rpc
 from .agents.agent import SupervisedAgent
@@ -15,16 +15,15 @@ class StatekClientAPI:
     def submit_new_job(
         self,
         agent: SupervisedAgent,
-        shared_vars: Optional[Union[List[Any], Dict[str, Any]]] = None,
+        shared_vars: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Job:
         """Create a new STATEK job for the given agent.
 
         Args:
             agent: The agent (must inherit from SupervisedAgent).
-            shared_vars: Variables to share with the job.  A dict maps
-                ``{var_name: object}``; a list derives names from each
-                object's type.
+            shared_vars: Optional ``{var_name: object}`` mapping of
+                variables to share with the job.
             kwargs: Agent-specific job parameters.
 
         Returns:
@@ -36,7 +35,7 @@ class StatekClientAPI:
     def submit_new_jobs_batch(
         self,
         agent: SupervisedAgent,
-        shared_vars_batch: List[Optional[Union[List[Any], Dict[str, Any]]]],
+        shared_vars_batch: List[Optional[Dict[str, Any]]],
         **kwargs
     ) -> List[Job]:
         """Create multiple STATEK jobs with different shared variables.

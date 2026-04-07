@@ -1,13 +1,15 @@
 """Job detail view for the Statek web UI."""
 
 import io
+from dataclasses import dataclass, field
 from typing import Optional
 
 import dbzero as db0
-from nicegui import ui
 
+from statek.chat_history import ChatRole, ContentSource
 from statek.utils import CodeBlock
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
+from web_ui.nicegui_compat import ui
 from web_ui.components.status_badge import create_status_badge
 
 
@@ -152,6 +154,135 @@ def _get_tool_data_for_block(code_block, chat_log_item) -> list:
             tool_result = ''
         result.append((cs, tool_result))
     return result
+
+
+@dataclass
+class _HistoryMessage:
+    """A normalized message displayed inside or outside an assistant section."""
+
+    title: str
+    content: str
+    content_src: Optional[ContentSource] = None
+
+
+@dataclass
+class _HistorySection:
+    """A normalized job-detail section derived from ``Job.get_chat_history()``."""
+
+    kind: str
+    title: str
+    content: str = ''
+    content_src: Optional[ContentSource] = None
+    tool_data: list = field(default_factory=list)
+    followups: list[_HistoryMessage] = field(default_factory=list)
+    warmup_num: Optional[int] = None
+    warmup_total: Optional[int] = None
+
+
+def _get_history_items(job) -> list:
+    """Return normalized chat history items for job details."""
+    getter = getattr(job, 'get_chat_history', None)
+    if not callable(getter):
+        return []
+    try:
+        return [item for item in getter() if item is not None]
+    except Exception:  # pylint: disable=broad-except
+        return []
+
+
+def _message_title(item, has_assistant_section: bool) -> str:
+    """Return a display label for a non-assistant chat history item."""
+    if item.role == ChatRole.SYSTEM:
+        return 'Initial Prompt'
+    if item.role == ChatRole.TOOL:
+        return 'Tool Result'
+    if item.content_src == ContentSource.CONSOLE:
+        return 'Console Output'
+    if has_assistant_section:
+        return 'User Message'
+    return 'Initial User Message'
+
+
+def _build_history_sections(job) -> list[_HistorySection]:
+    """Group ``Job.get_chat_history()`` into job-detail display sections."""
+    sections: list[_HistorySection] = []
+    current: Optional[_HistorySection] = None
+    expected_warmups = len(_get_warmup_blocks(job))
+    warmup_num = 0
+    turn_num = 0
+
+    def _flush_current() -> None:
+        nonlocal current
+        if current is not None:
+            sections.append(current)
+            current = None
+
+    for item in _get_history_items(job):
+        if item.role == ChatRole.ASSISTANT:
+            _flush_current()
+            is_warmup = (
+                item.content_src == ContentSource.SYSTEM
+                or (item.content_src is None and warmup_num < expected_warmups)
+            )
+            if is_warmup:
+                warmup_num += 1
+                title = f'Warmup Code {warmup_num}'
+                content_src = ContentSource.SYSTEM
+            else:
+                turn_num += 1
+                title = f'Turn {turn_num}'
+                content_src = item.content_src
+            tool_data = []
+            if item.tool_calls:
+                tool_data = [(cs, '') for cs in list(item.tool_calls)]
+            current = _HistorySection(
+                kind='assistant',
+                title=title,
+                content=item.content or '',
+                content_src=content_src,
+                tool_data=tool_data,
+                warmup_num=warmup_num if is_warmup else None,
+                warmup_total=expected_warmups if is_warmup else None,
+            )
+            continue
+
+        target = current.followups if current is not None else None
+
+        if item.role == ChatRole.TOOL and current is not None and current.tool_data:
+            next_idx = next(
+                (idx for idx, (_, result) in enumerate(current.tool_data) if result == ''),
+                None,
+            )
+            if next_idx is not None:
+                cs, _ = current.tool_data[next_idx]
+                current.tool_data[next_idx] = (cs, item.content or '')
+                continue
+
+        message = _HistoryMessage(
+            title=_message_title(item, current is not None),
+            content=item.content or '',
+            content_src=item.content_src,
+        )
+        if target is not None:
+            target.append(message)
+        else:
+            sections.append(
+                _HistorySection(
+                    kind='message',
+                    title=message.title,
+                    content=message.content,
+                    content_src=message.content_src,
+                )
+            )
+
+    _flush_current()
+    return sections
+
+
+def _get_exception_messages(job) -> list[str]:
+    """Return all recorded exception messages in console order."""
+    exceptions = getattr(getattr(job, 'py_env', None), 'exceptions', None) or {}
+    return [str(msg) for _, msg in sorted(exceptions.items()) if msg]
 
 
 # ---------------------------------------------------------------------------
@@ -412,14 +543,12 @@ def _build_md_content(
     exception_count: int,
     chat_style: str,
     system_prompt: str,
-    initial_prompt: str,
     job,
-    warmup_blocks: list,
-    warmup_ranges: list[tuple[int, int]],
-    turn_ranges: list[tuple[int, int]],
 ) -> str:
     """Build a markdown document representing the full job execution log."""
     parts: list[str] = []
+    sections = _build_history_sections(job)
+    errors = _get_exception_messages(job)
 
     # ── Header ──────────────────────────────────────────────────────────────
     parts.append('# Job Detail\n')
@@ -444,67 +573,41 @@ def _build_md_content(
         parts.append(_md_code_fence(system_prompt))
         parts.append('')
 
-    # ── Initial Prompt ───────────────────────────────────────────────────────
-    if initial_prompt:
+    # ── History ──────────────────────────────────────────────────────────────
+    if sections:
         parts.append('---\n')
-        parts.append('## Initial Prompt\n')
-        parts.append(initial_prompt)
-        parts.append('')
-
-    # ── Warmup Blocks ────────────────────────────────────────────────────────
-    warmup_items = _get_warmup_log_items(job)
-    if warmup_blocks:
-        parts.append('---\n')
-        parts.append('## Warmup\n')
-        for i, (block, (from_pos, to_pos)) in enumerate(zip(warmup_blocks, warmup_ranges)):
-            label = f'Warmup Code {i + 1}/{len(warmup_blocks)}' if len(warmup_blocks) > 1 else 'Warmup Code'
-            parts.append(f'### {label}\n')
-            code = _get_code_str(block)
-            if code.strip():
-                parts.append(_md_code_fence(code, 'python'))
-            tool_data = _get_tool_data_for_block(block, warmup_items.get(i))
-            if tool_data:
-                parts.append('\n**Tool Calls**\n')
-                for cs, result in tool_data:
-                    parts.append(f'- **`{cs.format()}`**')
-                    if result:
-                        parts.append(_md_code_fence(str(result).strip()))
-            console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
-            if console_out.strip():
-                parts.append('\n**Console Output**\n')
-                parts.append(_md_code_fence(console_out.rstrip()))
+        parts.append('## History\n')
+        for section in sections:
+            parts.append(f'### {section.title}\n')
+            if section.kind == 'assistant':
+                parts.append(_md_code_fence(section.content or '(empty)', 'python'))
+                if section.tool_data:
+                    parts.append(f'\n**Tool Call{"s" if len(section.tool_data) != 1 else ""}**\n')
+                    for cs, result in section.tool_data:
+                        parts.append(f'- **`{cs.format()}`**')
+                        if result:
+                            parts.append(_md_code_fence(str(result).strip()))
+                for message in section.followups:
+                    if not message.content.strip():
+                        continue
+                    parts.append(f'\n**{message.title}**\n')
+                    if message.content_src == ContentSource.CONSOLE:
+                        parts.append(_md_code_fence(message.content.rstrip()))
+                    else:
+                        parts.append(message.content)
+            elif section.content.strip():
+                if section.content_src == ContentSource.CONSOLE:
+                    parts.append(_md_code_fence(section.content.rstrip()))
+                else:
+                    parts.append(section.content)
             parts.append('')
 
-    # ── LLM Turns ────────────────────────────────────────────────────────────
-    llm_items = _get_llm_items(job)
-    if llm_items:
+    if errors:
         parts.append('---\n')
-        exceptions = getattr(job.py_env, 'exceptions', None) or {}
-        for i, (chat_item, (from_pos, to_pos)) in enumerate(zip(llm_items, turn_ranges)):
-            ts = getattr(chat_item, 'timestamp', None)
-            ts_str = f' — {ts.strftime("%H:%M:%S")}' if ts else ''
-            parts.append(f'## Turn {i + 1}{ts_str}\n')
-
-            code = _get_code_str(chat_item.llm_resp)
-            parts.append(_md_code_fence(code or '(empty)', 'python'))
-
-            tool_data = _get_tool_data_for_block(chat_item.llm_resp, chat_item)
-            if tool_data:
-                parts.append(f'\n### Tool Call{"s" if len(tool_data) != 1 else ""}\n')
-                for cs, result in tool_data:
-                    parts.append(f'**`{cs.format()}`**\n')
-                    if result:
-                        parts.append(_md_code_fence(str(result).strip()))
-
-            if chat_item.console_pos in exceptions:
-                parts.append(f'\n> **Error:** `{exceptions[chat_item.console_pos]}`\n')
-
-            console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
-            if console_out.strip():
-                parts.append('\n**Console Output**\n')
-                parts.append(_md_code_fence(console_out.rstrip()))
-
-            parts.append('\n---\n')
+        parts.append('## Errors\n')
+        for error in errors:
+            parts.append(f'- `{_escape_md(error)}`')
+        parts.append('')
 
     return '\n'.join(parts)
 
@@ -645,6 +748,75 @@ def _render_tool_calls(tool_data: list) -> None:
                         ui.label('(no result)').classes('text-xs text-gray-400 italic px-2')
 
 
+def _render_history_message(message: _HistoryMessage) -> None:
+    """Render a normalized non-assistant message."""
+    if not message.content.strip():
+        return
+    if message.content_src == ContentSource.CONSOLE:
+        with ui.expansion(message.title, icon='terminal').props('dense').classes(
+            'w-full rounded border border-gray-200'
+        ):
+            _render_console_output(message.content)
+        return
+
+    icon = 'chat' if message.content_src == ContentSource.USER else 'description'
+    bg = '#f1f8e9' if message.content_src == ContentSource.USER else '#f5f5f5'
+    border = '#c5e1a5' if message.content_src == ContentSource.USER else '#e0e0e0'
+    text = '#33691e' if message.content_src == ContentSource.USER else '#455a64'
+    with ui.column().classes('w-full gap-1'):
+        with ui.row().classes('items-center gap-2 px-3 py-2 rounded-lg').style(
+            f'background: {bg}; border: 1px solid {border}'
+        ):
+            ui.icon(icon).classes('text-sm')
+            ui.label(message.title).classes('text-sm font-bold')
+        ui.label(message.content).classes(
+            'text-sm whitespace-pre-wrap w-full rounded p-3'
+        ).style(f'background: {bg}; border: 1px solid {border}; color: {text}')
+
+
+def _render_history_section(section: _HistorySection) -> None:
+    """Render one normalized job-detail section."""
+    if section.kind != 'assistant':
+        _render_history_message(
+            _HistoryMessage(
+                title=section.title,
+                content=section.content,
+                content_src=section.content_src,
+            )
+        )
+        return
+
+    code_bg = _CODE_WARMUP_BG if section.content_src == ContentSource.SYSTEM else _CODE_LLM_BG
+    if section.content_src == ContentSource.SYSTEM:
+        if section.warmup_num is not None and (section.warmup_total or 0) > 1:
+            code_label = f'warmup code {section.warmup_num} / {section.warmup_total}'
+        else:
+            code_label = 'warmup code'
+    else:
+        code_label = 'LLM submitted code'
+
+    with ui.column().classes('w-full gap-2'):
+        if section.content_src != ContentSource.SYSTEM:
+            with ui.row().classes('w-full items-center gap-3 px-3 py-2 rounded-lg').style(
+                _LLM_HEADER_BG + '; border: 1px solid #c5cae9'
+            ):
+                ui.icon('smart_toy').classes('text-indigo-600')
+                ui.label(section.title).classes('text-sm font-bold text-indigo-800 flex-1')
+                if section.tool_data:
+                    ui.icon('build').classes('text-orange-500 text-sm')
+                    ui.label(
+                        f'{len(section.tool_data)} tool call{"s" if len(section.tool_data) != 1 else ""}'
+                    ).classes('text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700')
+
+        _render_code_block(section.content, code_bg, code_label)
+
+        if section.tool_data:
+            _render_tool_calls(section.tool_data)
+
+        for message in section.followups:
+            _render_history_message(message)
+
+
 def _render_warmup_section(job, blocks: list, ranges: list[tuple[int, int]]) -> None:
     """Render all warmup blocks with their console output."""
     warmup_items = _get_warmup_log_items(job)
@@ -717,25 +889,20 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
             _render_console_output(console_out, has_error=has_error)
 
 
-def _get_system_prompt(job) -> tuple[str, Optional[str]]:
-    """Return (prompt_text, error_message) for a job's system prompt.
-
-    Tries to return the fully formatted prompt. On formatting failure, falls back
-    to the raw template and sets error_message to describe what went wrong.
-    Returns ('', None) if no system prompt is available.
-    """
+def _get_system_prompt(job) -> str:
+    """Return the formatted system prompt, or the raw template on render failure."""
     try:
         if not job.job_def or not job.job_def.agent:
-            return '', None
+            return ''
         try:
             return job.job_def.agent.system_prompt(
                 job_params=job.job_def.job_params
-            ) or '', None
-        except Exception as exc:  # pylint: disable=broad-except
+            ) or ''
+        except Exception:  # pylint: disable=broad-except
             raw = job.job_def.agent._system_prompt or ''  # pylint: disable=protected-access
-            return raw, f'{type(exc).__name__}: {exc}'
+            return raw
     except Exception:  # pylint: disable=broad-except
-        return '', None
+        return ''
 
 
 def create_job_detail_dialog(job) -> None:
@@ -768,16 +935,9 @@ def create_job_detail_dialog(job) -> None:
     except Exception:  # pylint: disable=broad-except
         pass
 
-    system_prompt, system_prompt_error = _get_system_prompt(job)
-    initial_prompt = ''
-    try:
-        initial_prompt = job.job_def.prompt() or ''
-    except Exception:  # pylint: disable=broad-except
-        pass
-
-    warmup_blocks = _get_warmup_blocks(job)
-    warmup_ranges = _get_warmup_console_ranges(job)
-    turn_ranges = _get_turn_console_ranges(job)
+    system_prompt = _get_system_prompt(job)
+    history_sections = _build_history_sections(job)
+    exception_messages = _get_exception_messages(job)
 
     with ui.dialog().props('maximized') as dlg:
         with ui.card().classes('w-full h-full rounded-none overflow-auto').style('max-height: 100vh'):
@@ -821,16 +981,13 @@ def create_job_detail_dialog(job) -> None:
                         _uuid=uuid_str, _status=status_str, _agent=agent_role,
                         _model=model, _cost=total_cost, _turns=num_turns,
                         _errors=exception_count, _chat_style=chat_style_str,
-                        _sys=system_prompt, _init=initial_prompt,
-                        _job=job, _wb=warmup_blocks, _wr=warmup_ranges, _tr=turn_ranges,
+                        _sys=system_prompt, _job=job,
                     ):
                         md = _build_md_content(
                             uuid_str=_uuid, status_str=_status, agent_role=_agent,
                             model=_model, total_cost=_cost, num_turns=_turns,
                             exception_count=_errors, chat_style=_chat_style,
-                            system_prompt=_sys,
-                            initial_prompt=_init, job=_job,
-                            warmup_blocks=_wb, warmup_ranges=_wr, turn_ranges=_tr,
+                            system_prompt=_sys, job=_job,
                         )
                         ui.download(md.encode(), filename=f'job_{_uuid}.md', media_type='text/markdown')
 
@@ -838,53 +995,17 @@ def create_job_detail_dialog(job) -> None:
                         _uuid=uuid_str, _status=status_str, _agent=agent_role,
                         _model=model, _cost=total_cost, _turns=num_turns,
                         _errors=exception_count, _chat_style=chat_style_str,
-                        _sys=system_prompt, _init=initial_prompt,
-                        _job=job, _wb=warmup_blocks, _wr=warmup_ranges, _tr=turn_ranges,
+                        _sys=system_prompt, _job=job,
                     ):
                         md = _build_md_content(
                             uuid_str=_uuid, status_str=_status, agent_role=_agent,
                             model=_model, total_cost=_cost, num_turns=_turns,
                             exception_count=_errors, chat_style=_chat_style,
-                            system_prompt=_sys,
-                            initial_prompt=_init, job=_job,
-                            warmup_blocks=_wb, warmup_ranges=_wr, turn_ranges=_tr,
+                            system_prompt=_sys, job=_job,
                         )
                         pdf = _build_pdf_bytes(md)
                         ui.download(pdf, filename=f'job_{_uuid}.pdf', media_type='application/pdf')
 
-                    if system_prompt:
-                        def _show_system_prompt(_sp=system_prompt, _err=system_prompt_error):
-                            with ui.dialog() as sp_dlg:
-                                with ui.card().classes('w-full max-w-5xl'):
-                                    with ui.row().classes('w-full items-center justify-between mb-2'):
-                                        with ui.row().classes('items-center gap-2'):
-                                            ui.icon('description').classes('text-gray-600')
-                                            ui.label('System Prompt').classes(
-                                                'text-lg font-bold text-gray-800'
-                                            )
-                                        ui.button(
-                                            icon='close', on_click=sp_dlg.close
-                                        ).props('flat round dense')
-                                    ui.separator().classes('mb-2')
-                                    ui.label(_sp).classes(
-                                        'text-sm text-gray-700 whitespace-pre-wrap w-full rounded p-3'
-                                    ).style(
-                                        'font-family: "JetBrains Mono", monospace;'
-                                        ' background: #fdf6e3; max-height: 70vh; overflow-y: auto'
-                                    )
-                                    if _err:
-                                        with ui.row().classes('items-center gap-2 mt-3 px-3 py-2 rounded').style(
-                                            'background: #fff0f0; border: 1px solid #ffcdd2'
-                                        ):
-                                            ui.icon('warning').classes('text-amber-600 text-sm')
-                                            ui.label(
-                                                f'Showing raw template — rendering failed: {_err}'
-                                            ).classes('text-xs text-red-700 font-mono')
-                            sp_dlg.open()
-
-                        ui.button('System Prompt', icon='description', on_click=_show_system_prompt).props(
-                            'flat dense no-caps'
-                        ).classes('text-xs text-gray-600').tooltip('View system prompt')
                     ui.button('MD', icon='download', on_click=_download_md).props(
                         'flat dense no-caps'
                     ).classes('text-xs text-indigo-600').tooltip('Download as Markdown')
@@ -914,37 +1035,24 @@ def create_job_detail_dialog(job) -> None:
                                 'text-xs text-gray-700 whitespace-pre-wrap w-full rounded p-3'
                             ).style('font-family: "JetBrains Mono", monospace; background: #fdf6e3')
 
-                    # ── Initial Prompt ───────────────────────────────────────
-                    if initial_prompt:
-                        with ui.column().classes('w-full gap-1 mb-4'):
-                            with ui.row().classes('items-center gap-2 px-3 py-2 rounded-lg').style(
-                                'background: #e8f5e9; border: 1px solid #a5d6a7'
-                            ):
-                                ui.icon('chat').classes('text-green-700')
-                                ui.label('Initial Prompt').classes('text-sm font-bold text-green-800')
+                    if exception_messages:
+                        with ui.expansion('Errors', icon='error_outline').props('dense').classes(
+                            'w-full rounded border border-red-200 mb-4'
+                        ):
+                            for error in exception_messages:
+                                with ui.row().classes('items-center gap-2 px-3 py-2'):
+                                    ui.icon('error').classes('text-red-500 text-sm')
+                                    ui.label(error).classes('text-xs text-red-700 font-mono break-all')
 
-                            ui.label(initial_prompt).classes(
-                                'text-sm text-gray-700 whitespace-pre-wrap w-full rounded p-3'
-                            ).style('background: #f1f8e9; border: 1px solid #c5e1a5')
-
-                    # ── Warmup Blocks ────────────────────────────────────────
-                    if warmup_blocks:
-                        with ui.column().classes('w-full gap-3 mb-4'):
-                            _render_warmup_section(job, warmup_blocks, warmup_ranges)
-
-                    # ── LLM Turns ────────────────────────────────────────────
-                    llm_items_ui = _get_llm_items(job)
-                    if llm_items_ui:
+                    if history_sections:
                         with ui.column().classes('w-full gap-3'):
-                            for i, (chat_item, (from_pos, to_pos)) in enumerate(
-                                zip(llm_items_ui, turn_ranges)
-                            ):
-                                _render_turn_section(job, i, chat_item, from_pos, to_pos)
+                            for section in history_sections:
+                                _render_history_section(section)
 
-                    if not warmup_blocks and not llm_items_ui:
+                    if not history_sections:
                         with ui.column().classes('items-center justify-center gap-3 mt-8'):
                             ui.icon('hourglass_empty').classes('text-4xl text-gray-300')
-                            ui.label('No execution history yet.').classes('text-gray-400 italic')
+                            ui.label('No chat history yet.').classes('text-gray-400 italic')
 
                 # ── Raw tab ──────────────────────────────────────────────────
                 with ui.tab_panel(tab_raw).classes('px-0'):

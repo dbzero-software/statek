@@ -1,16 +1,20 @@
 """LLM API abstraction layer for Statek."""
 
+# pylint: disable=no-member
+
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional, Iterable, Sequence, List, Dict, Callable, Union
+from typing import Optional, Iterable, Sequence, List, Dict, Callable
 import json
 import httpx
 
 from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
 from .exceptions import InvalidFormat
 from .utils import strip_markup
+from .chat_history import (
+    ChatHistoryItem, ChatRole, ContentSource, format_chat_history_item,
+)
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -54,32 +58,6 @@ class CallParams:
             f"CallParams(id={self.id!r}, name={self.name!r},"
             f" args={self.args!r}, kwargs={self.kwargs!r})"
         )
-
-
-@dataclass
-class ChatStepAssistantData:
-    """Represents a single completed assistant step in the LLM conversation history.
-
-    Each step captures the LLM's code response and the subsequent console
-    output produced by executing that code. Tool calls made during the step
-    are stored in tool_calls.
-    """
-    code: str
-    """Code requested for execution in this step (LLM assistant response)."""
-    console_output: str
-    """The console output from code execution (user feedback message)."""
-    tool_calls: Optional[Dict] = None
-    """Tool call requests and their results: Dict[CallParams, str]."""
-
-
-@dataclass
-class ChatStepUserData:
-    """Represents a single user message step in the LLM conversation history."""
-    message: str
-    """Message sent by the user."""
-
-
-ChatStepData = Union[ChatStepAssistantData, ChatStepUserData]
 
 
 def extract_call_params(tool_call_req: Dict) -> CallParams:
@@ -195,43 +173,38 @@ class LLM_API(ABC):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         available_tools: Optional[Sequence[Callable]] = None,
-        chat_history: Optional[Iterable[ChatStepData]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         session_id: Optional[str] = None,
         chat_style=None
     ) -> LLM_Response:
         """Process a request to the LLM API.
 
-        Logs metadata before the call and the response text after. Delegates
-        the actual provider interaction to _process_request.
+        ``chat_history`` is the canonical conversation input — a stream of
+        :class:`ChatHistoryItem` objects representing the user/assistant/tool
+        turns. The system prompt is supplied separately via ``system_prompt``.
+        The provider-specific ``_process_request`` is responsible for
+        converting those inputs into the wire format expected by the API.
 
         When metadata contains ``"LLM_TOOLS_SCOPE"``, the tools from
         ``available_tools`` are filtered by that scope (via ``select_tools``)
-        and forwarded to the provider as a formal tools parameter.  When
-        ``chat_style`` is also provided, tools are additionally filtered by
-        their target chat style.
+        and forwarded to the provider as a formal tools parameter.
 
         Args:
-            system_prompt: Optional system prompt to guide the LLM behavior
-            metadata: Optional metadata key/value pairs. If the ``"MODEL"`` key
-                     is present it overrides the class-level default model for
-                     this request. If ``"LLM_TOOLS_SCOPE"`` is present, tools
-                     from ``available_tools`` matching that scope are sent to
-                     the provider.
+            system_prompt: Optional system prompt to pass separately from the
+                conversational history.
+            metadata: Optional metadata key/value pairs. ``"MODEL"`` overrides
+                the default model. ``"LLM_TOOLS_SCOPE"`` selects tools from
+                ``available_tools`` to send to the provider.
             available_tools: All tools available in the agent's local context.
-                     Only used when ``"LLM_TOOLS_SCOPE"`` is set in metadata.
-            chat_history: Conversation history including the latest user message as the
-                         final element. Depending on the provider, if session is not managed
-                         on the provider side, this history needs to be included in the
-                         message sent to the LLM API
-            session_id: Provider-specific session ID (if request is a continuation)
-            chat_style: Optional ChatStyle to filter tools by their target chat
-                     style. Only applied when ``"LLM_TOOLS_SCOPE"`` is set.
+                Only used when ``"LLM_TOOLS_SCOPE"`` is set in metadata.
+            chat_history: Conversation history as ``ChatHistoryItem`` objects.
+            session_id: Provider-specific session ID (if continuation).
+            chat_style: Optional ChatStyle. Threaded through for tool selection
+                and message formatting; in DIRECT mode the history is rewritten
+                so assistant code becomes ``python_cli`` tool calls.
 
         Returns:
-            LLM_Response containing the response text, optional session_id, and stats
-
-        Raises:
-            Exception: If the API request fails or model cannot be determined
+            LLM_Response containing the response text, optional session_id, and stats.
         """
         from .system import select_tools, find_tools  # pylint: disable=import-outside-toplevel
 
@@ -245,8 +218,6 @@ class LLM_API(ABC):
         tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
         if tools_scope and available_tools:
             tools = select_tools(available_tools, tools_scope, chat_style=chat_style)
-            # Merge system tools from the global registry that aren't already
-            # in the agent's tool list (e.g. python_cli).
             if tools_scope in ("SYSTEM", "ALL", None):
                 existing = {t.__name__ for t in tools}
                 for rt in find_tools("SYSTEM", chat_style=chat_style):
@@ -266,7 +237,8 @@ class LLM_API(ABC):
             metadata=metadata,
             tools=tools,
             chat_history=chat_history,
-            session_id=session_id
+            session_id=session_id,
+            chat_style=chat_style,
         )
         STATEK_LOGGER.debug("%s response: %s", self.__class__.__name__, response.text)
         if response.call_requests:
@@ -279,45 +251,65 @@ class LLM_API(ABC):
 
     @staticmethod
     def _wrap_direct_chat_history(
-        chat_history: Iterable["ChatStepData"],
-    ) -> Iterable["ChatStepData"]:
-        """Rewrite chat history for DIRECT chat style.
+        chat_history: Iterable["ChatHistoryItem"],
+    ) -> Iterable["ChatHistoryItem"]:
+        """Rewrite the history stream for DIRECT chat style.
 
         In DIRECT mode the LLM executes code exclusively via ``python_cli``
-        tool calls.  Any ``ChatStepAssistantData`` step that carries ``code``
-        is rewritten so the code appears as a ``python_cli`` tool call with
-        the ``console_output`` as its result.  When the step already has
-        ``tool_calls``, the new ``python_cli`` call is merged into them.
-        This keeps the conversation history consistent with the actual chat
-        style the LLM operates in.
+        tool calls.  Any ASSISTANT item carrying ``content`` (Python code,
+        possibly fenced) and no ``tool_calls`` is rewritten so the code is
+        attached as a ``python_cli`` tool call.  The next CONSOLE-sourced
+        USER item that pairs with it is rewritten as a TOOL item carrying
+        the resulting tool_call_id, so the conversation history matches the
+        chat style the LLM actually operates in.
 
-        Steps without ``code`` or ``ChatStepUserData`` are yielded unchanged.
+        Items unrelated to the rewrite (SYSTEM, plain USER, ASSISTANT items
+        that already carry tool_calls, etc.) are yielded untouched.
         """
+        from statek.utils import CallSpec  # pylint: disable=import-outside-toplevel
         counter = 0
-        for step in chat_history:
-            if not isinstance(step, ChatStepAssistantData):
-                yield step
+        pending_call: Optional[CallSpec] = None
+        for item in chat_history:
+            # An ASSISTANT item with content but no tool_calls = python code
+            # to be wrapped.
+            if (
+                item.role == ChatRole.ASSISTANT
+                and item.content
+                and not item.tool_calls
+            ):
+                code = strip_markup(item.content, strict=True)
+                counter += 1
+                pending_call = CallSpec(
+                    id=f"STATEK-W-{counter:03d}",
+                    func_name="python_cli",
+                    args=[],
+                    kwargs={"code": code},
+                )
+                yield ChatHistoryItem(
+                    role=ChatRole.ASSISTANT,
+                    tool_calls=pending_call,
+                )
                 continue
-            if not step.code:
-                yield step
+
+            # The next USER + CONSOLE item belongs to the pending tool call.
+            if (
+                pending_call is not None
+                and item.role == ChatRole.USER
+                and item.content_src == ContentSource.CONSOLE
+            ):
+                yield ChatHistoryItem(
+                    role=ChatRole.TOOL,
+                    content=item.content or "",
+                    content_src=ContentSource.CONSOLE,
+                    tool_calls=pending_call,
+                )
+                pending_call = None
                 continue
-            # Strip markdown code fences (e.g. ```python\n...\n```)
-            code = strip_markup(step.code, strict=True)
-            # Wrap code as a python_cli tool call
-            counter += 1
-            cp = CallParams(
-                call_id=f"STATEK-W-{counter:03d}",
-                name="python_cli",
-                args=[],
-                kwargs={"code": code},
-            )
-            tool_calls = dict(step.tool_calls) if step.tool_calls else {}
-            tool_calls[cp] = step.console_output
-            yield ChatStepAssistantData(
-                code="",
-                console_output="",
-                tool_calls=tool_calls,
-            )
+
+            # Anything else: clear any pending call (no console followed) and pass through.
+            if pending_call is not None and item.role != ChatRole.USER:
+                pending_call = None
+            yield item
 
     @abstractmethod
     async def _process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -325,8 +317,9 @@ class LLM_API(ABC):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
-        chat_history: Optional[Iterable[ChatStepData]] = None,
-        session_id: Optional[str] = None
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        session_id: Optional[str] = None,
+        chat_style=None,
     ) -> LLM_Response:
         """Provider-specific request implementation. Called by process_request."""
 
@@ -397,56 +390,30 @@ class OpenRouter_API(LLM_API):
     def build_messages(
         self,
         system_prompt: Optional[str] = None,
-        chat_history: Optional[Iterable[ChatStepData]] = None
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
     ) -> List[Dict[str, str]]:
-        """Build the messages list for the OpenRouter API request.
+        """Build the OpenRouter messages list from a ``ChatHistoryItem`` stream.
 
-        Each ChatStepData expands to an optional assistant message (code) followed
-        by an optional user message (console_output). When the step has tool_calls,
-        the assistant message uses the OpenAI tool_calls format and each tool result
-        is emitted as a separate ``role: tool`` message before the user message.
-
-        Args:
-            system_prompt: Optional system prompt
-            chat_history: Conversation history as ChatStepData objects. The final
-                         element's console_output is the current user message.
-
-        Returns:
-            List of message dictionaries with 'role' and 'content' fields
+        Delegates per-item formatting to :func:`format_chat_history_item`,
+        which produces dicts in the OpenAI / OpenRouter chat-completions
+        schema.  ``chat_style`` defaults to the global StatekSettings value
+        when not supplied.
         """
+        if chat_style is None:
+            from .settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+            chat_style = get_statek_settings().chat_style
+        from .settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+        settings = get_statek_settings()
         messages = []
-
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-
-        if chat_history:
-            for step in chat_history:
-                if isinstance(step, ChatStepUserData):
-                    if step.message:
-                        messages.append({"role": "user", "content": step.message})
-                    continue
-                if step.tool_calls:
-                    tool_call_list = [
-                        {
-                            "id": cp.id,
-                            "type": "function",
-                            "function": {
-                                "name": cp.name,
-                                "arguments": json.dumps(cp.kwargs or {})
-                            }
-                        }
-                        for cp in step.tool_calls
-                    ]
-                    asst_msg = {"role": "assistant", "tool_calls": tool_call_list,
-                                "content": step.code or None}
-                    messages.append(asst_msg)
-                    for cp, result in step.tool_calls.items():
-                        messages.append({"role": "tool", "tool_call_id": cp.id, "content": result})
-                elif step.code:
-                    messages.append({"role": "assistant", "content": step.code})
-                if step.console_output:
-                    messages.append({"role": "user", "content": step.console_output})
-
+        if not chat_history:
+            return messages
+        messages.extend(
+            format_chat_history_item(item, chat_style, settings)
+            for item in chat_history
+        )
         return messages
 
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
@@ -454,8 +421,9 @@ class OpenRouter_API(LLM_API):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
-        chat_history: Optional[Iterable[ChatStepData]] = None,
-        session_id: Optional[str] = None
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        session_id: Optional[str] = None,
+        chat_style=None,
     ) -> LLM_Response:
         """Process a request to the OpenRouter API.
 
@@ -478,7 +446,11 @@ class OpenRouter_API(LLM_API):
         """
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
-        messages = self.build_messages(system_prompt, chat_history)
+        messages = self.build_messages(
+            system_prompt=system_prompt,
+            chat_history=chat_history,
+            chat_style=chat_style,
+        )
         model = metadata.get('MODEL', self.model) if metadata else self.model
 
         # Prepare the request payload
@@ -593,87 +565,149 @@ class Claude_API(LLM_API):
             )
         self.api_key = settings.api_key
 
-    def _step_with_tool_calls(self, step: "ChatStepAssistantData", is_last: bool) -> List[Dict]:
-        """Return the (assistant, user) message pair for a step that has tool calls."""
-        asst_content = []
-        if step.code:
-            text_block = {"type": "text", "text": step.code}
-            if self.use_prompt_caching and is_last:
-                text_block["cache_control"] = {"type": "ephemeral"}
-            asst_content.append(text_block)
-        for cp in step.tool_calls:
-            asst_content.append({
-                "type": "tool_use", "id": cp.id,
-                "name": cp.name, "input": dict(cp.kwargs) if cp.kwargs else {}
-            })
+    @staticmethod
+    def _content_text_for_item(item: "ChatHistoryItem", chat_style, settings) -> str:
+        """Return the text content for ``item`` after applying chat-style wrapping.
 
-        user_content = [
-            {"type": "tool_result", "tool_use_id": cp.id, "content": result}
-            for cp, result in step.tool_calls.items()
-        ]
-        if step.console_output:
-            user_content.append({"type": "text", "text": step.console_output})
-
-        msgs = [{"role": "assistant", "content": asst_content}]
-        if user_content:
-            msgs.append({"role": "user", "content": user_content})
-        return msgs
-
-    def _step_without_tool_calls(self, step: "ChatStepAssistantData", is_last: bool) -> List[Dict]:
-        """Return the (assistant, user) message pair for a plain code step."""
-        msgs = []
-        if step.code:
-            if self.use_prompt_caching and is_last:
-                content = [{"type": "text", "text": step.code,
-                            "cache_control": {"type": "ephemeral"}}]
-            else:
-                content = step.code
-            msgs.append({"role": "assistant", "content": content})
-        if step.console_output:
-            msgs.append({"role": "user", "content": step.console_output})
-        return msgs
-
-    def build_messages(
-        self,
-        system_prompt: Optional[str] = None,
-        chat_history: Optional[Iterable[ChatStepData]] = None
-    ) -> List[Dict]:
-        """Build the messages list for the Claude API request.
-
-        Each ChatStepData expands to an optional assistant message (code) followed
-        by an optional user message (console_output). When prompt caching is enabled,
-        cache_control is added to the last step's assistant message. When the step
-        has tool_calls the messages use Anthropic's tool_use / tool_result format.
-
-        Args:
-            system_prompt: Optional system prompt (included for display/logging only;
-                          the actual API call passes it as a top-level 'system' field)
-            chat_history: Conversation history as ChatStepData objects. The final
-                         element's console_output is the current user message.
-
-        Returns:
-            List of message dictionaries with 'role' and 'content' fields
+        Reuses ``format_chat_history_item`` for consistent formatting and
+        extracts the resulting ``content`` string.
         """
-        messages = []
+        formatted = format_chat_history_item(item, chat_style, settings)
+        content = formatted.get("content")
+        return content if isinstance(content, str) else ""
 
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+    def build_messages(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        self,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+    ) -> List[Dict]:
+        """Build the Claude messages list from a ``ChatHistoryItem`` stream.
+
+        SYSTEM items are skipped here — :meth:`extract_system_prompt` already
+        consumed the first SYSTEM item to populate the top-level Claude
+        ``system`` field.  Remaining items are emitted as Anthropic messages
+        using ``tool_use`` / ``tool_result`` blocks where applicable.
+
+        Consecutive TOOL items, optionally followed by a USER item, are
+        merged into a single ``role: user`` message containing all of their
+        ``tool_result`` blocks plus an optional trailing text block — the
+        format Anthropic expects when reporting tool outputs.
+        """
+        from .settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+        if chat_style is None:
+            chat_style = get_statek_settings().chat_style
+        settings = get_statek_settings()
 
         if not chat_history:
-            return messages
+            return []
 
-        history_list = list(chat_history)
-        for i, step in enumerate(history_list):
-            is_last = i == len(history_list) - 1
-            if isinstance(step, ChatStepUserData):
-                if step.message:
-                    messages.append({"role": "user", "content": step.message})
-            elif step.tool_calls:
-                messages.extend(self._step_with_tool_calls(step, is_last))
-            else:
-                messages.extend(self._step_without_tool_calls(step, is_last))
+        history_list = [
+            item for item in chat_history if item.role != ChatRole.SYSTEM
+        ]
+
+        # Locate the index of the last assistant text item — used to mark
+        # cache_control when prompt caching is enabled.
+        last_asst_idx = -1
+        for i, item in enumerate(history_list):
+            if item.role == ChatRole.ASSISTANT and item.content:
+                last_asst_idx = i
+
+        messages: List[Dict] = []
+        i = 0
+        while i < len(history_list):
+            item = history_list[i]
+
+            if item.role == ChatRole.USER:
+                content = self._content_text_for_item(item, chat_style, settings)
+                if content:
+                    messages.append({"role": "user", "content": content})
+                i += 1
+                continue
+
+            if item.role == ChatRole.TOOL:
+                # Batch this and any following TOOL items + a trailing USER
+                # item into one Anthropic user message.
+                user_blocks: List[Dict] = []
+                while i < len(history_list) and history_list[i].role == ChatRole.TOOL:
+                    tool_item = history_list[i]
+                    tcs = tool_item.tool_calls
+                    tool_call_id = ""
+                    if tcs is not None:
+                        cs = tcs if not isinstance(tcs, list) else (tcs[0] if tcs else None)
+                        if cs is not None:
+                            tool_call_id = cs.id
+                    user_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": tool_item.content or "",
+                    })
+                    i += 1
+                if i < len(history_list) and history_list[i].role == ChatRole.USER:
+                    text = self._content_text_for_item(
+                        history_list[i], chat_style, settings)
+                    if text:
+                        user_blocks.append({"type": "text", "text": text})
+                    i += 1
+                if user_blocks:
+                    messages.append({"role": "user", "content": user_blocks})
+                continue
+
+            if item.role == ChatRole.ASSISTANT:
+                is_last_asst = i == last_asst_idx
+                if item.tool_calls:
+                    asst_content: List[Dict] = []
+                    if item.content:
+                        text_block = {"type": "text", "text": item.content}
+                        if self.use_prompt_caching and is_last_asst:
+                            text_block["cache_control"] = {"type": "ephemeral"}
+                        asst_content.append(text_block)
+                    tcs = item.tool_calls
+                    if not isinstance(tcs, list):
+                        tcs = [tcs]
+                    for cs in tcs:
+                        asst_content.append({
+                            "type": "tool_use",
+                            "id": cs.id,
+                            "name": cs.func_name,
+                            "input": dict(cs.kwargs) if cs.kwargs else {},
+                        })
+                    messages.append({"role": "assistant", "content": asst_content})
+                elif item.content:
+                    text = self._content_text_for_item(item, chat_style, settings)
+                    if self.use_prompt_caching and is_last_asst:
+                        content = [{
+                            "type": "text", "text": text,
+                            "cache_control": {"type": "ephemeral"},
+                        }]
+                    else:
+                        content = text
+                    messages.append({"role": "assistant", "content": content})
+                i += 1
+                continue
+
+            # Unknown role — skip.
+            i += 1
 
         return messages
+
+    @staticmethod
+    def extract_system_prompt(
+        chat_history: Optional[Iterable["ChatHistoryItem"]],
+    ) -> tuple:
+        """Pull the leading SYSTEM item out of ``chat_history``.
+
+        Returns ``(system_text, remaining_iterable)``: ``system_text`` is the
+        content of the first SYSTEM item if it appears at the head of the
+        stream (otherwise ``None``), and ``remaining_iterable`` is the rest
+        of the items in original order.  Materialises the iterable into a
+        list — Claude needs random access to compute prompt caching anyway.
+        """
+        if chat_history is None:
+            return None, None
+        items = list(chat_history)
+        if items and items[0].role == ChatRole.SYSTEM:
+            return items[0].content or "", items[1:]
+        return None, items
 
     def _build_system_prompt(self, system_prompt: str) -> List[Dict]:
         """Build the system prompt with optional cache control.
@@ -716,31 +750,14 @@ class Claude_API(LLM_API):
         system_prompt: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
-        chat_history: Optional[Iterable[ChatStepData]] = None,
-        session_id: Optional[str] = None
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        session_id: Optional[str] = None,
+        chat_style=None,
     ) -> LLM_Response:
-        """Process a request to the Claude API using the Messages API.
-
-        Args:
-            system_prompt: Optional system prompt
-            metadata: Optional metadata. If it contains the "MODEL" key it overrides
-                     the instance-level default model for this request.
-            tools: Optional list of tool callables to include as formal tool definitions
-                   in Anthropic's tool format.
-            chat_history: Conversation history including the latest user message as
-                         the final element
-            session_id: Not used (Claude Messages API is stateless)
-
-        Returns:
-            LLM_Response with the generated text and None for session_id
-
-        Raises:
-            httpx.HTTPError: If the API request fails
-            KeyError: If the response format is unexpected
-        """
+        """Process a request to the Claude API using the Messages API."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
-        messages = self.build_messages(chat_history=chat_history)
+        messages = self.build_messages(chat_history, chat_style=chat_style)
         model = metadata.get('MODEL', self.model) if metadata else self.model
 
         # Prepare the request payload

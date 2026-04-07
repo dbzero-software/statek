@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
-from typing import List, Callable, Dict, Optional, Sequence, Union
+from typing import Any, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
 from statek.utils import block_comment, get_current_agent, _get_class_name
 from statek.system import tool
@@ -385,6 +385,7 @@ class SupervisedAgent(Agent):
         self,
         tools: Optional[List[Callable]] = None,
         warmup_code: Optional[Union[str, Sequence[str]]] = None,
+        shared_vars: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -394,13 +395,23 @@ class SupervisedAgent(Agent):
         Args:
             tools: agent's tools additional tools (currently not used)
             warmup_code: optional initialization code (single block or sequence of blocks)
+            shared_vars: optional ``{var_name: value}`` mapping of variables
+                additionally shared by the parent job. Its keys are reported
+                as a ``shared_vars`` entry in ``job_params`` so they can be
+                referenced from the agent's system prompt template.
             kwargs: job specific parameters for prompt formatting (i.e. job_params)
 
         Returns:
             A new job definition object with specific job_params
         """
         # kwargs become job_params
-        job_params = kwargs if kwargs else None
+        job_params = dict(kwargs) if kwargs else {}
+
+        if shared_vars:
+            job_params["shared_vars"] = list(shared_vars.keys())
+
+        if not job_params:
+            job_params = None
 
         combined = self._combine_warmup_code(warmup_code)
 
