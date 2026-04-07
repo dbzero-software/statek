@@ -4,9 +4,9 @@ import traceback
 from typing import Callable, Optional
 
 import dbzero as db0
-from nicegui import ui
 
 from statek.agents.agent import SupervisedAgent
+from web_ui.nicegui_compat import ui
 from web_ui.model_bindings import get_all_agents
 
 

@@ -1,8 +1,8 @@
 """All Jobs list page for the Statek web UI."""
 
 import dbzero as db0
-from nicegui import ui
 
+from web_ui.nicegui_compat import ui
 from web_ui.components.status_badge import create_status_badge
 from web_ui.model_bindings import get_all_jobs
 from web_ui.pages.job_detail import create_job_detail_dialog

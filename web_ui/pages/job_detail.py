@@ -4,10 +4,10 @@ import io
 from typing import Optional
 
 import dbzero as db0
-from nicegui import ui
 
 from statek.utils import CodeBlock
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
+from web_ui.nicegui_compat import ui
 from web_ui.components.status_badge import create_status_badge
 
 

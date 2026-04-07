@@ -33,7 +33,7 @@ for _ext_path in _EXTERNAL_PATHS.split(':'):
         sys.path.insert(0, _ext_path)
         log.debug('Added external path to sys.path: %s', _ext_path)
 
-from nicegui import ui, app
+from web_ui.nicegui_compat import app, ui
 import dbzero as db0
 
 

@@ -1,12 +1,12 @@
 """Tests for Job CodeBlock handling."""
 
-from unittest.mock import patch, MagicMock
+# pylint: disable=no-member
 
 from tests.conftest import create_chat_log_item
 from statek.executors.chat_log_item import LLM_LogItem
+from statek.chat_history import ChatRole
 from statek.llm_api import LLM_Response, LLM_Stats, CallParams
 from statek.utils import CodeBlock, CallSpec
-from statek.settings import ChatStyle
 
 
 class TestChatLogItemCodeBlock:
@@ -38,44 +38,44 @@ class TestGetChatHistoryCodeBlock:
 
         history = list(job.get_chat_history())
 
-        assert len(history) == 2
-        assert "x = 1" in history[1]
+        # ASSISTANT items with tool_calls carry the code in .content.
+        asst = [h for h in history
+                if h.role == ChatRole.ASSISTANT and h.tool_calls is not None]
+        assert len(asst) == 1
+        assert asst[0].content == "x = 1"
 
-    def test_code_block_tool_calls_not_in_history(self, job_factory):
-        """Tool call specs from CodeBlock do not appear in chat history text."""
+    def test_code_block_tool_calls_not_in_assistant_content(self, job_factory):
+        """Tool call specs do not appear in the assistant content text."""
         job = job_factory()
         call_spec = CallSpec(id="T-001", func_name="my_tool", args=[], kwargs={})
         block = CodeBlock(code="x = 1", tool_calls=[call_spec])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
 
         history = list(job.get_chat_history())
+        asst = next(h for h in history
+                    if h.role == ChatRole.ASSISTANT and h.tool_calls is not None)
+        assert "my_tool" not in (asst.content or "")
 
-        assert "my_tool" not in history[1]
+    def test_code_block_none_code_yields_no_assistant_content(self, job_factory):
+        """When CodeBlock.code is None, the assistant item has no text content."""
+        job = job_factory()
+        call_spec = CallSpec(id="T-001", func_name="my_tool", args=[], kwargs={})
+        block = CodeBlock(code=None, tool_calls=[call_spec])
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
 
-    def test_code_block_none_code_yields_empty(self, job_factory):
-        """When CodeBlock.code is None, chat history yields empty string."""
+        history = list(job.get_chat_history())
+        asst = next(h for h in history
+                    if h.role == ChatRole.ASSISTANT and h.tool_calls is not None)
+        assert not asst.content
+
+    def test_code_block_none_code_no_assistant_when_no_tool_calls(self, job_factory):
+        """CodeBlock.code=None and no tool_calls produces no assistant item."""
         job = job_factory()
         block = CodeBlock(code=None, tool_calls=[])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
 
         history = list(job.get_chat_history())
-
-        assert history[1] == ""
-
-    def test_code_block_none_code_yields_empty_in_markdown_mode(self, job_factory):
-        """In MARKDOWN mode, CodeBlock.code=None yields '' not an empty fence."""
-        job = job_factory()
-        block = CodeBlock(code=None, tool_calls=[])
-        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=block))
-
-        mock_settings = MagicMock()
-        mock_settings.chat_style = ChatStyle.MARKDOWN  # pylint: disable=no-member
-        mock_settings.get_xml_box_tags.return_value = None
-
-        with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
-            history = list(job.get_chat_history())
-
-        assert history[1] == ""
+        assert [h for h in history if h.role == ChatRole.ASSISTANT] == []
 
 
 class TestAppendChatLogCodeBlock:
