@@ -3,6 +3,7 @@
 
 from unittest.mock import MagicMock, PropertyMock
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
+from statek.chat_style import ChatStyle
 from statek.pyenv import PyEnv
 from statek.utils import CodeBlock, CallSpec
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
@@ -84,10 +85,12 @@ def _make_job(
     warmup_console_positions=None,
     chat_log=None,
     console=None,
+    chat_style=None,
 ):
     job = MagicMock()
     job_def = MagicMock()
     job_def.warmup_code = warmup_code
+    job_def.chat_style = chat_style
     job.job_def = job_def
     positions = warmup_console_positions or []
     job._warmup_end_positions = MagicMock(return_value=positions)  # pylint: disable=protected-access
@@ -347,8 +350,9 @@ def _make_job_for_md(  # pylint: disable=too-many-arguments,too-many-positional-
     chat_log=None,
     console=None,
     exceptions=None,
+    chat_style=None,
 ):
-    job = _make_job(warmup_code, warmup_console_positions, chat_log, console)
+    job = _make_job(warmup_code, warmup_console_positions, chat_log, console, chat_style)
     job.py_env = PyEnv(console=console, exceptions=exceptions or {})
     return job
 
@@ -369,7 +373,7 @@ def _call_build_md(job, **kwargs):
     )
 
 
-class TestBuildMdContent:
+class TestBuildMdContentSummary:
     def test_includes_title(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job)
@@ -525,6 +529,35 @@ class TestBuildMdContent:
         assert 'search' in md
         assert 'result text' in md
 
+    def test_direct_llm_text_not_wrapped_as_python_code_block(self, db0_fixture):
+        job = _make_job_for_md(chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.ASSISTANT,
+                content='Oto Twoj grafik na kwiecien 2026 roku.',
+                content_src=ContentSource.ASSISTANT,
+            ),
+        ]
+        md = _call_build_md(job, chat_style='DIRECT')
+        assert 'Oto Twoj grafik na kwiecien 2026 roku.' in md
+        assert '```python\nOto Twoj grafik na kwiecien 2026 roku.\n```' not in md
+
+    def test_direct_warmup_code_still_uses_python_code_block(self, db0_fixture):
+        job = _make_job_for_md(
+            warmup_code='x = 1',
+            warmup_console_positions=[0],
+            chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
+        )
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.ASSISTANT,
+                content='x = 1',
+                content_src=ContentSource.SYSTEM,
+            ),
+        ]
+        md = _call_build_md(job, chat_style='DIRECT')
+        assert '```python\nx = 1\n```' in md
+
     def test_includes_error_indicator_in_turn(self, db0_fixture):
         chat_item = _make_chat_log_item(console_pos=0, llm_resp='bad code')
         job = _make_job_for_md(chat_log=[chat_item], exceptions={0: 'NameError: x'})
@@ -575,6 +608,9 @@ class TestBuildMdContent:
         md = _call_build_md(job)
         assert isinstance(md, str)
         assert len(md) > 0
+
+
+class TestBuildMdContentHistory:
 
     def test_warmup_tool_calls_use_correct_key_per_block(self, db0_fixture):  # pylint: disable=too-many-locals
         """Each warmup block should look up tool results from its WarmupLogItem."""
@@ -815,6 +851,42 @@ class TestBuildHistorySections:
         assert [
             (section.warmup_num, section.warmup_total) for section in sections
         ] == [(1, 2), (2, 2)]
+
+    def test_direct_llm_assistant_section_marked_as_text(self, db0_fixture):
+        job = _make_job(chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.ASSISTANT,
+                content='Oto Twoj grafik na kwiecien 2026 roku.',
+                content_src=ContentSource.ASSISTANT,
+            ),
+        ]
+
+        sections = _build_history_sections(job)
+
+        assert len(sections) == 1
+        assert sections[0].title == 'Turn 1'
+        assert sections[0].content == 'Oto Twoj grafik na kwiecien 2026 roku.'
+        assert sections[0].render_as_code is False
+
+    def test_direct_warmup_section_still_marked_as_code(self, db0_fixture):
+        job = _make_job(
+            warmup_code=['x = 1'],
+            chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
+        )
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.ASSISTANT,
+                content='x = 1',
+                content_src=ContentSource.SYSTEM,
+            ),
+        ]
+
+        sections = _build_history_sections(job)
+
+        assert len(sections) == 1
+        assert sections[0].title == 'Warmup Code 1'
+        assert sections[0].render_as_code is True
 
 
 class _StubPyEnv:  # pylint: disable=too-few-public-methods

@@ -9,6 +9,7 @@ from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, WarmupLogIt
 from statek.llm_api import LLM_Response, CallParams
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_markup,
+                          extract_dialog,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
 from statek.settings import get_statek_settings, ChatStyle, statek_log
@@ -730,14 +731,13 @@ class Job:
         The console_pos is set to len(console), marking the position past the end
         of the current console output.
         """
-        chat_style = get_statek_settings().chat_style
+        chat_style = self.job_def.chat_style
         is_md_style = chat_style in (  # pylint: disable=no-member
-            ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT)
-        response_code = strip_markup(llm_resp.text, strict=is_md_style)
-
-        # DIRECT: ignore code blocks from LLM response
+            ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)
         if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-            response_code = None
+            response_code = extract_dialog(llm_resp.text or "")
+        else:
+            response_code = strip_markup(llm_resp.text, strict=is_md_style)
 
         if llm_resp.call_requests:
             tool_calls = [

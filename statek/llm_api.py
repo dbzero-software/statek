@@ -12,7 +12,7 @@ import httpx
 from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
 from .exceptions import InvalidFormat
 from .chat_history import (
-    ChatHistoryItem, ChatRole, ContentSource, format_chat_history_item,
+    ChatHistoryItem, ChatRole, format_chat_history_item,
 )
 
 STATEK_LOGGER = get_statek_logger()
