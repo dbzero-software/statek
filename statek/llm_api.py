@@ -2,6 +2,7 @@
 
 # pylint: disable=no-member
 
+import ast
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from functools import lru_cache
@@ -250,6 +251,39 @@ class LLM_API(ABC):
         return response
 
     @staticmethod
+    def _contains_executable_python(text: str) -> bool:
+        """Return True when ``text`` parses as non-empty Python code."""
+        if not text or not text.strip():
+            return False
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return False
+        for node in tree.body:
+            if not (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _direct_assistant_code(cls, item: "ChatHistoryItem") -> Optional[str]:
+        """Extract executable code from an assistant item in DIRECT mode."""
+        if item.role != ChatRole.ASSISTANT or not item.content or item.tool_calls:
+            return None
+
+        if "```" in item.content:
+            if "```python" not in item.content:
+                return None
+            code = strip_markup(item.content, strict=True)
+        else:
+            code = item.content
+
+        return code if cls._contains_executable_python(code) else None
+
+    @staticmethod
     def _wrap_direct_chat_history(
         chat_history: Iterable["ChatHistoryItem"],
     ) -> Iterable["ChatHistoryItem"]:
@@ -270,14 +304,11 @@ class LLM_API(ABC):
         counter = 0
         pending_call: Optional[CallSpec] = None
         for item in chat_history:
-            # An ASSISTANT item with content but no tool_calls = python code
-            # to be wrapped.
-            if (
-                item.role == ChatRole.ASSISTANT
-                and item.content
-                and not item.tool_calls
-            ):
-                code = strip_markup(item.content, strict=True)
+            # Assistant turns carrying executable Python are rewritten into
+            # synthetic python_cli tool calls. Plain text assistant replies
+            # must stay as assistant content in DIRECT mode.
+            code = LLM_API._direct_assistant_code(item)
+            if code is not None:
                 counter += 1
                 pending_call = CallSpec(
                     id=f"STATEK-W-{counter:03d}",

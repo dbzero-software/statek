@@ -1279,6 +1279,20 @@ class TestWrapDirectChatHistory:
         result = list(OpenRouter_API._wrap_direct_chat_history(history))
         assert result[0].tool_calls.args == []
 
+    def test_plain_assistant_text_not_wrapped(self, db0_fixture):
+        history = [_asst_code("Oto Twoj grafik na kwiecien 2026 roku.")]
+        result = list(OpenRouter_API._wrap_direct_chat_history(history))
+        assert len(result) == 1
+        assert result[0] is history[0]
+        assert result[0].tool_calls is None
+
+    def test_plain_assistant_string_literal_not_wrapped(self, db0_fixture):
+        history = [_asst_code('"hello"')]
+        result = list(OpenRouter_API._wrap_direct_chat_history(history))
+        assert len(result) == 1
+        assert result[0] is history[0]
+        assert result[0].tool_calls is None
+
 
 # ---------------------------------------------------------------------------
 # process_request: chat_style DIRECT triggers wrapping
@@ -1343,6 +1357,34 @@ class TestProcessRequestDirectChatStyle:
 
         items = captured["chat_history"]
         assert items[0].role == ChatRole.ASSISTANT
+
+    @pytest.mark.asyncio
+    async def test_direct_style_preserves_plain_assistant_text(
+        self, openrouter_api, db0_fixture
+    ):
+        from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        captured = {}
+
+        async def fake_process_request(self, **kwargs):
+            captured["chat_history"] = list(kwargs.get("chat_history", []))
+            return LLM_Response(
+                text="ok", session_id=None, stats=_make_stats(), call_requests=None)
+
+        history = [
+            _user("prompt"),
+            _asst_code("Oto Twoj grafik na kwiecien 2026 roku."),
+        ]
+
+        with patch.object(OpenRouter_API, "_process_request", fake_process_request):
+            await openrouter_api.process_request(
+                chat_history=iter(history),
+                chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
+            )
+
+        items = captured["chat_history"]
+        assert len(items) == 2
+        assert items[1].role == ChatRole.ASSISTANT
+        assert items[1].content == "Oto Twoj grafik na kwiecien 2026 roku."
+        assert items[1].tool_calls is None
         assert items[0].tool_calls is None
-        assert items[1].role == ChatRole.USER
-        assert items[1].content_src == ContentSource.CONSOLE
