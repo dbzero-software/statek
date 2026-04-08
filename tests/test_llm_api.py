@@ -1227,68 +1227,14 @@ class TestClaudeBuildMessages:
 
 
 # ---------------------------------------------------------------------------
-# _wrap_direct_chat_history with ChatHistoryItem
-# ---------------------------------------------------------------------------
-
-class TestWrapDirectChatHistory:
-    """Tests for LLM_API._wrap_direct_chat_history."""
-
-    def test_plain_assistant_code_wrapped_as_python_cli(self, db0_fixture):
-        history = [_asst_code("```python\nx = 1\n```"), _console("> 1")]
-        result = list(OpenRouter_API._wrap_direct_chat_history(history))
-        assert result[0].role == ChatRole.ASSISTANT
-        assert result[0].tool_calls is not None
-        cs = result[0].tool_calls
-        assert cs.func_name == "python_cli"
-        assert cs.kwargs == {"code": "x = 1"}
-        assert result[1].role == ChatRole.TOOL
-        assert result[1].content == "> 1"
-        assert result[1].tool_calls is cs
-
-    def test_assistant_with_existing_tool_calls_unchanged(self, db0_fixture):
-        cs = CallSpec(id="call_1", func_name="my_tool", args=[], kwargs={"a": 1})
-        history = [_asst_tools(cs), _tool_result("done", cs)]
-        result = list(OpenRouter_API._wrap_direct_chat_history(history))
-        assert len(result) == 2
-        assert result[0] is history[0]
-        assert result[1] is history[1]
-
-    def test_user_message_passes_through(self, db0_fixture):
-        history = [_user("hello")]
-        result = list(OpenRouter_API._wrap_direct_chat_history(history))
-        assert result[0] is history[0]
-
-    def test_system_passes_through(self, db0_fixture):
-        history = [_sys("sys")]
-        result = list(OpenRouter_API._wrap_direct_chat_history(history))
-        assert result[0] is history[0]
-
-    def test_multiple_plain_assistant_get_sequential_ids(self, db0_fixture):
-        history = [
-            _asst_code("```python\na = 1\n```"),
-            _console("> ok1"),
-            _asst_code("```python\nb = 2\n```"),
-            _console("> ok2"),
-        ]
-        result = list(OpenRouter_API._wrap_direct_chat_history(history))
-        ids = [r.tool_calls.id for r in result if r.role == ChatRole.ASSISTANT]
-        assert ids == ["STATEK-W-001", "STATEK-W-002"]
-
-    def test_wrapped_call_spec_args_empty(self, db0_fixture):
-        history = [_asst_code("```python\nx = 1\n```"), _console("> ok")]
-        result = list(OpenRouter_API._wrap_direct_chat_history(history))
-        assert result[0].tool_calls.args == []
-
-
-# ---------------------------------------------------------------------------
-# process_request: chat_style DIRECT triggers wrapping
+# process_request: DIRECT preserves assistant content
 # ---------------------------------------------------------------------------
 
 class TestProcessRequestDirectChatStyle:
-    """Tests that process_request applies _wrap_direct_chat_history for DIRECT style."""
+    """Tests that process_request preserves assistant content in DIRECT style."""
 
     @pytest.mark.asyncio
-    async def test_direct_style_wraps_assistant_code(self, openrouter_api, db0_fixture):
+    async def test_direct_style_preserves_assistant_content(self, openrouter_api, db0_fixture):
         from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
 
         captured = {}
@@ -1313,13 +1259,10 @@ class TestProcessRequestDirectChatStyle:
         items = captured["chat_history"]
         assert len(items) == 3
         assert items[0].role == ChatRole.USER
-        # Assistant code wrapped as python_cli tool call
         assert items[1].role == ChatRole.ASSISTANT
-        assert items[1].tool_calls is not None
-        assert items[1].tool_calls.func_name == "python_cli"
-        assert items[1].tool_calls.kwargs == {"code": "warmup_code()"}
-        # Console output rewritten as TOOL item
-        assert items[2].role == ChatRole.TOOL
+        assert items[1].content == "```python\nwarmup_code()\n```"
+        assert items[1].tool_calls is None
+        assert items[2].role == ChatRole.USER
         assert items[2].content == "> result"
 
     @pytest.mark.asyncio
@@ -1343,6 +1286,34 @@ class TestProcessRequestDirectChatStyle:
 
         items = captured["chat_history"]
         assert items[0].role == ChatRole.ASSISTANT
+
+    @pytest.mark.asyncio
+    async def test_direct_style_preserves_plain_assistant_text(
+        self, openrouter_api, db0_fixture
+    ):
+        from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        captured = {}
+
+        async def fake_process_request(self, **kwargs):
+            captured["chat_history"] = list(kwargs.get("chat_history", []))
+            return LLM_Response(
+                text="ok", session_id=None, stats=_make_stats(), call_requests=None)
+
+        history = [
+            _user("prompt"),
+            _asst_code("Oto Twoj grafik na kwiecien 2026 roku."),
+        ]
+
+        with patch.object(OpenRouter_API, "_process_request", fake_process_request):
+            await openrouter_api.process_request(
+                chat_history=iter(history),
+                chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
+            )
+
+        items = captured["chat_history"]
+        assert len(items) == 2
+        assert items[1].role == ChatRole.ASSISTANT
+        assert items[1].content == "Oto Twoj grafik na kwiecien 2026 roku."
+        assert items[1].tool_calls is None
         assert items[0].tool_calls is None
-        assert items[1].role == ChatRole.USER
-        assert items[1].content_src == ContentSource.CONSOLE

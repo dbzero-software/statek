@@ -737,8 +737,30 @@ class TestJobAppendChatLog:
 class TestAppendChatLogDirect:
     """Tests for append_chat_log with ChatStyle.DIRECT."""
 
+    def test_direct_job_override_wins_over_global_chat_style(self, job_factory):
+        """Job chat_style override must control append_chat_log formatting."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.MARKDOWN  # pylint: disable=no-member
+
+        request = job.get_next_request()
+        llm_resp = LLM_Response(
+            text="Oto Twoj grafik na kwiecien 2026 roku.",
+            session_id=None,
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        )
+        with patch(
+            'statek.executors.job.get_statek_settings',
+            return_value=mock_settings
+        ):
+            job.append_chat_log(request, llm_resp)
+
+        assert job.chat_log[0].llm_resp == "Oto Twoj grafik na kwiecien 2026 roku."
+
     def test_direct_discards_code_from_response(self, job_factory):
-        """DIRECT style: code blocks in LLM response are ignored."""
+        """DIRECT style: keep only dialog text, ignoring fenced code blocks."""
         job = job_factory()
         mock_settings = MagicMock()
         mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
@@ -756,7 +778,7 @@ class TestAppendChatLogDirect:
         ):
             job.append_chat_log(request, llm_resp)
 
-        assert job.chat_log[0].llm_resp is None
+        assert job.chat_log[0].llm_resp == "Hello user!"
 
     def test_direct_preserves_tool_calls(self, job_factory):
         """DIRECT style: tool calls are preserved even though code is discarded."""
@@ -785,7 +807,7 @@ class TestAppendChatLogDirect:
         assert len(stored.tool_calls) == 1
 
     def test_direct_plain_text_response_stored_as_none(self, job_factory):
-        """DIRECT style: plain text response (no fences) stored as None."""
+        """DIRECT style: plain text response is preserved in chat_log."""
         job = job_factory()
         mock_settings = MagicMock()
         mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
@@ -803,7 +825,7 @@ class TestAppendChatLogDirect:
         ):
             job.append_chat_log(request, llm_resp)
 
-        assert job.chat_log[0].llm_resp is None
+        assert job.chat_log[0].llm_resp == "Hello, how can I help?"
 
 
 class TestPushUserMessageDirect:

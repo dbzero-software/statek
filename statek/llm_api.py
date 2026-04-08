@@ -11,9 +11,8 @@ import httpx
 
 from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
 from .exceptions import InvalidFormat
-from .utils import strip_markup
 from .chat_history import (
-    ChatHistoryItem, ChatRole, ContentSource, format_chat_history_item,
+    ChatHistoryItem, ChatRole, format_chat_history_item,
 )
 
 STATEK_LOGGER = get_statek_logger()
@@ -227,11 +226,6 @@ class LLM_API(ABC):
         else:
             tools = None
 
-        if chat_history is not None and chat_style is not None:
-            from .chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
-            if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-                chat_history = self._wrap_direct_chat_history(chat_history)
-
         response = await self._process_request(
             system_prompt=system_prompt,
             metadata=metadata,
@@ -248,68 +242,6 @@ class LLM_API(ABC):
                 [cp.name for cp in response.call_requests]
             )
         return response
-
-    @staticmethod
-    def _wrap_direct_chat_history(
-        chat_history: Iterable["ChatHistoryItem"],
-    ) -> Iterable["ChatHistoryItem"]:
-        """Rewrite the history stream for DIRECT chat style.
-
-        In DIRECT mode the LLM executes code exclusively via ``python_cli``
-        tool calls.  Any ASSISTANT item carrying ``content`` (Python code,
-        possibly fenced) and no ``tool_calls`` is rewritten so the code is
-        attached as a ``python_cli`` tool call.  The next CONSOLE-sourced
-        USER item that pairs with it is rewritten as a TOOL item carrying
-        the resulting tool_call_id, so the conversation history matches the
-        chat style the LLM actually operates in.
-
-        Items unrelated to the rewrite (SYSTEM, plain USER, ASSISTANT items
-        that already carry tool_calls, etc.) are yielded untouched.
-        """
-        from statek.utils import CallSpec  # pylint: disable=import-outside-toplevel
-        counter = 0
-        pending_call: Optional[CallSpec] = None
-        for item in chat_history:
-            # An ASSISTANT item with content but no tool_calls = python code
-            # to be wrapped.
-            if (
-                item.role == ChatRole.ASSISTANT
-                and item.content
-                and not item.tool_calls
-            ):
-                code = strip_markup(item.content, strict=True)
-                counter += 1
-                pending_call = CallSpec(
-                    id=f"STATEK-W-{counter:03d}",
-                    func_name="python_cli",
-                    args=[],
-                    kwargs={"code": code},
-                )
-                yield ChatHistoryItem(
-                    role=ChatRole.ASSISTANT,
-                    tool_calls=pending_call,
-                )
-                continue
-
-            # The next USER + CONSOLE item belongs to the pending tool call.
-            if (
-                pending_call is not None
-                and item.role == ChatRole.USER
-                and item.content_src == ContentSource.CONSOLE
-            ):
-                yield ChatHistoryItem(
-                    role=ChatRole.TOOL,
-                    content=item.content or "",
-                    content_src=ContentSource.CONSOLE,
-                    tool_calls=pending_call,
-                )
-                pending_call = None
-                continue
-
-            # Anything else: clear any pending call (no console followed) and pass through.
-            if pending_call is not None and item.role != ChatRole.USER:
-                pending_call = None
-            yield item
 
     @abstractmethod
     async def _process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments

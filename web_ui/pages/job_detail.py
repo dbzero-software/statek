@@ -7,6 +7,7 @@ from typing import Optional
 import dbzero as db0
 
 from statek.chat_history import ChatRole, ContentSource
+from statek.chat_style import ChatStyle
 from statek.utils import CodeBlock
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 from web_ui.nicegui_compat import ui
@@ -173,6 +174,7 @@ class _HistorySection:
     title: str
     content: str = ''
     content_src: Optional[ContentSource] = None
+    render_as_code: bool = False
     tool_data: list = field(default_factory=list)
     followups: list[_HistoryMessage] = field(default_factory=list)
     warmup_num: Optional[int] = None
@@ -210,6 +212,8 @@ def _build_history_sections(job) -> list[_HistorySection]:
     expected_warmups = len(_get_warmup_blocks(job))
     warmup_num = 0
     turn_num = 0
+    chat_style = getattr(getattr(job, 'job_def', None), 'chat_style', None)
+    is_direct = chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
 
     def _flush_current() -> None:
         nonlocal current
@@ -228,10 +232,12 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 warmup_num += 1
                 title = f'Warmup Code {warmup_num}'
                 content_src = ContentSource.SYSTEM
+                render_as_code = True
             else:
                 turn_num += 1
                 title = f'Turn {turn_num}'
                 content_src = item.content_src
+                render_as_code = not is_direct
             tool_data = []
             if item.tool_calls:
                 tool_data = [(cs, '') for cs in list(item.tool_calls)]
@@ -240,6 +246,7 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 title=title,
                 content=item.content or '',
                 content_src=content_src,
+                render_as_code=render_as_code,
                 tool_data=tool_data,
                 warmup_num=warmup_num if is_warmup else None,
                 warmup_total=expected_warmups if is_warmup else None,
@@ -580,7 +587,12 @@ def _build_md_content(
         for section in sections:
             parts.append(f'### {section.title}\n')
             if section.kind == 'assistant':
-                parts.append(_md_code_fence(section.content or '(empty)', 'python'))
+                if section.render_as_code:
+                    parts.append(_md_code_fence(section.content or '(empty)', 'python'))
+                elif section.content.strip():
+                    parts.append(section.content)
+                else:
+                    parts.append('(empty)')
                 if section.tool_data:
                     parts.append(f'\n**Tool Call{"s" if len(section.tool_data) != 1 else ""}**\n')
                     for cs, result in section.tool_data:
@@ -793,7 +805,7 @@ def _render_history_section(section: _HistorySection) -> None:
         else:
             code_label = 'warmup code'
     else:
-        code_label = 'LLM submitted code'
+        code_label = 'LLM submitted code' if section.render_as_code else 'LLM response'
 
     with ui.column().classes('w-full gap-2'):
         if section.content_src != ContentSource.SYSTEM:
@@ -808,7 +820,16 @@ def _render_history_section(section: _HistorySection) -> None:
                         f'{len(section.tool_data)} tool call{"s" if len(section.tool_data) != 1 else ""}'
                     ).classes('text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700')
 
-        _render_code_block(section.content, code_bg, code_label)
+        if section.render_as_code:
+            _render_code_block(section.content, code_bg, code_label)
+        else:
+            _render_history_message(
+                _HistoryMessage(
+                    title=code_label,
+                    content=section.content or '(empty)',
+                    content_src=section.content_src,
+                )
+            )
 
         if section.tool_data:
             _render_tool_calls(section.tool_data)
