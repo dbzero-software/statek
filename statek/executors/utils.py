@@ -748,6 +748,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
         last_chat_log_item = job.chat_log[-1] if job.chat_log else None
+
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
             regular_calls = code.get_regular_tool_calls()
             if regular_calls:
@@ -800,8 +801,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             cli_calls = code_block.get_cli_tool_calls()
             if cli_calls and last_chat_log_item is not None:
                 for cli_idx in range(len(cli_calls)):
-                    last_chat_log_item.push_tool_result(
-                        "\n".join(cli_outputs.get(cli_idx, [])))
+                    joined = "\n".join(cli_outputs.get(cli_idx, []))
+                    last_chat_log_item.push_tool_result(joined)
 
 
         # Step 6 & 7: Check if code has finished (exit_status not None)

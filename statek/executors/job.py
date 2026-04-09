@@ -734,19 +734,37 @@ class Job:
         chat_style = self.job_def.chat_style
         is_md_style = chat_style in (  # pylint: disable=no-member
             ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)
-        if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-            response_code = extract_dialog(llm_resp.text or "")
-        else:
-            response_code = strip_markup(llm_resp.text, strict=is_md_style)
+        is_direct = chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
 
         if llm_resp.call_requests:
+            # When tool calls are present we build a CodeBlock and need to
+            # decide what (if anything) goes into its `code` field — i.e.
+            # what will later be exec'd as Python.
+            #   - DIRECT: response is NEVER code (only dialog + tool calls),
+            #     so leave it as None to avoid passing prose to ast.parse.
+            #   - MARKDOWN/MD_DIALOG: code MUST be inside ```python fences,
+            #     so extract only those; never feed surrounding prose to
+            #     ast.parse.
+            #   - other styles: pass the response through as-is.
+            if is_direct:
+                response_code = None
+            elif is_md_style:
+                response_code = strip_markup(llm_resp.text, strict=True)
+            else:
+                response_code = llm_resp.text
             tool_calls = [
                 CallSpec(id=cp.id, func_name=cp.name, args=cp.args or [], kwargs=cp.kwargs or {})
                 for cp in llm_resp.call_requests
             ]
             stored_resp = CodeBlock(code=response_code or None, tool_calls=tool_calls)
         else:
-            stored_resp = response_code
+            # No tool calls — store the response so it appears in chat
+            # history. DIRECT keeps only the dialog text; markdown styles
+            # keep the cleaned-up form; other styles store as-is.
+            if is_direct:
+                stored_resp = extract_dialog(llm_resp.text or "")
+            else:
+                stored_resp = strip_markup(llm_resp.text, strict=is_md_style)
 
         chat_item = LLM_LogItem(
             console_pos=len(self.py_env.console) if self.py_env.console else 0,
