@@ -806,6 +806,41 @@ class TestAppendChatLogDirect:
         assert stored.code is None
         assert len(stored.tool_calls) == 1
 
+    def test_direct_prose_with_tool_calls_discards_prose_as_code(self, job_factory):
+        """DIRECT: prose response with tool calls must NOT be stored as code.
+
+        Reproduces the bug where the LLM responds with English prose (no
+        fences) plus a python_cli tool call. ``extract_dialog`` returned the
+        prose, which was then stored as ``CodeBlock.code`` and later passed
+        to ``ast.parse`` — raising SyntaxError, swallowing the exception,
+        and losing the python_cli output entirely.
+        """
+        from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
+        job = job_factory()
+        mock_settings = MagicMock()
+        mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
+
+        request = job.get_next_request()
+        call = CallParams(call_id="c1", name="python_cli", args=[],
+                          kwargs={"code": "x=1"})
+        llm_resp = LLM_Response(
+            text="You have 3 preference points remaining for April.",
+            session_id=None,
+            stats=LLM_Stats(0, 0, None),
+            call_requests=[call],
+        )
+        with patch(
+            'statek.executors.job.get_statek_settings',
+            return_value=mock_settings
+        ):
+            job.append_chat_log(request, llm_resp)
+
+        stored = job.chat_log[0].llm_resp
+        assert isinstance(stored, CodeBlock)
+        # The prose must NOT be stored as executable code.
+        assert stored.code is None
+        assert len(stored.tool_calls) == 1
+
     def test_direct_plain_text_response_stored_as_none(self, job_factory):
         """DIRECT style: plain text response is preserved in chat_log."""
         job = job_factory()

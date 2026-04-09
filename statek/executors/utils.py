@@ -330,9 +330,25 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                         compile(ast.Expression(body=node.value),
                                 filename="<string>", mode="eval"),
                         global_context, sync_local)
+                    # FIXME: remove temporary log — per-stmt expr echo trace {{{
+                    _will_echo = result is not None or idx not in print_call_exprs
+                    STATEK_LOGGER.info(
+                        "[TOOL_RESULT_DEBUG] _exec_code_body expr idx=%d "
+                        "result_type=%s is_print=%s will_echo=%s value[:200]=%r",
+                        idx, type(result).__name__,
+                        idx in print_call_exprs, _will_echo,
+                        (repr(result)[:200] if result is not None else None),
+                    )
+                    # FIXME: remove temporary log — }}} per-stmt expr echo trace
                     if result is not None or idx not in print_call_exprs:
                         output_fn(format_default_llm_repr(result))
                 else:
+                    # FIXME: remove temporary log — non-expr stmt trace {{{
+                    STATEK_LOGGER.info(
+                        "[TOOL_RESULT_DEBUG] _exec_code_body stmt idx=%d type=%s",
+                        idx, type(node).__name__,
+                    )
+                    # FIXME: remove temporary log — }}} non-expr stmt trace
                     exec(code_obj, global_context, sync_local)
 
                 local_context.update(sync_local)
@@ -431,20 +447,59 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
     if local_context is None:
         local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
 
+    # FIXME: remove temporary log — exec_cli_step chunk tracing {{{
+    _dbg_chunks = []
+
+    def _dbg_console_append(text):
+        _dbg_chunks.append(text)
+        console_append(text)
+
+    STATEK_LOGGER.info(
+        "[TOOL_RESULT_DEBUG] exec_cli_step START instr_num=%r code_len=%d code[:300]=%r",
+        instr_num, len(code_str) if code_str else 0, (code_str or "")[:300],
+    )
+    # FIXME: remove temporary log — }}} exec_cli_step chunk tracing
+
     def cli_print(*args, sep=' ', end='\n', **kwargs):
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
-        console_append(output.rstrip('\n'))
+        # FIXME: remove temporary log — route print through debug wrapper {{{
+        _dbg_console_append(output.rstrip('\n'))
+        # FIXME: remove temporary log — }}} route print through debug wrapper
 
     try:
         _exec_code_body(
             code_str, job, global_context, local_context,
-            output_fn=console_append,
-            error_fn=console_append,
+            # FIXME: remove temporary log — swap output_fn/error_fn for wrappers {{{
+            output_fn=_dbg_console_append,
+            error_fn=_dbg_console_append,
+            # FIXME: remove temporary log — }}} swap output_fn/error_fn for wrappers
             print_fn=cli_print,
             instr_num=instr_num,
         )
+    # FIXME: remove temporary log — exec_cli_step exception tracing {{{
+    except FutureError as _fe:
+        STATEK_LOGGER.info(
+            "[TOOL_RESULT_DEBUG] exec_cli_step FutureError chunks_so_far=%d "
+            "chunks[:3]=%r",
+            len(_dbg_chunks), _dbg_chunks[:3],
+        )
+        raise
+    except Exception as _e:  # pylint: disable=broad-exception-caught
+        STATEK_LOGGER.info(
+            "[TOOL_RESULT_DEBUG] exec_cli_step raised %s: %s — chunks_so_far=%d "
+            "chunks[:3]=%r",
+            type(_e).__name__, _e, len(_dbg_chunks), _dbg_chunks[:3],
+        )
+        raise
+    # FIXME: remove temporary log — }}} exec_cli_step exception tracing
     finally:
         job.py_env.local_state = local_context
+        # FIXME: remove temporary log — exec_cli_step END summary {{{
+        STATEK_LOGGER.info(
+            "[TOOL_RESULT_DEBUG] exec_cli_step END chunks_total=%d chunks[:5]=%r",
+            len(_dbg_chunks), _dbg_chunks[:5],
+        )
+        # FIXME: remove temporary log — }}} exec_cli_step END summary
 
     return job.py_env.exit_status is not None
 
@@ -748,13 +803,30 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
         last_chat_log_item = job.chat_log[-1] if job.chat_log else None
+
+        # FIXME: remove temporary log — dump tool_calls layout {{{
+        if isinstance(code, CodeBlock) and code.tool_calls:
+            layout = [(i, cs.func_name, cs.id) for i, cs in enumerate(code.tool_calls)]
+            STATEK_LOGGER.info(
+                "[TOOL_RESULT_DEBUG] _run_code_block tool_calls layout: %s", layout)
+        # FIXME: remove temporary log — }}} dump tool_calls layout
+
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
             regular_calls = code.get_regular_tool_calls()
             if regular_calls:
                 for call_spec in regular_calls:
                     result = await exec_tool(call_spec, job, local_context=dict(local_context))
                     if last_chat_log_item is not None:
-                        last_chat_log_item.push_tool_result(result)
+                        pushed_idx = last_chat_log_item.push_tool_result(result)
+                        # FIXME: remove temporary log — regular tool push {{{
+                        STATEK_LOGGER.info(
+                            "[TOOL_RESULT_DEBUG] pushed REGULAR tool_result "
+                            "func=%s id=%s -> tool_log_idx=%s len=%r content[:120]=%r",
+                            call_spec.func_name, call_spec.id, pushed_idx,
+                            (len(result) if isinstance(result, str) else None),
+                            (result[:120] if isinstance(result, str) else result),
+                        )
+                        # FIXME: remove temporary log — }}} regular tool push
                     job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
 
         # Step 6: Execute code and CLI tool calls using exec_all_steps
@@ -800,8 +872,19 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             cli_calls = code_block.get_cli_tool_calls()
             if cli_calls and last_chat_log_item is not None:
                 for cli_idx in range(len(cli_calls)):
-                    last_chat_log_item.push_tool_result(
-                        "\n".join(cli_outputs.get(cli_idx, [])))
+                    joined = "\n".join(cli_outputs.get(cli_idx, []))
+                    pushed_idx = last_chat_log_item.push_tool_result(joined)
+                    # FIXME: remove temporary log — CLI tool push {{{
+                    cli_call_spec = cli_calls[cli_idx]
+                    STATEK_LOGGER.info(
+                        "[TOOL_RESULT_DEBUG] pushed CLI tool_result "
+                        "func=%s id=%s cli_idx=%s -> tool_log_idx=%s "
+                        "lines_collected=%d joined_len=%d joined[:200]=%r",
+                        cli_call_spec.func_name, cli_call_spec.id, cli_idx,
+                        pushed_idx, len(cli_outputs.get(cli_idx, [])),
+                        len(joined), joined[:200],
+                    )
+                    # FIXME: remove temporary log — }}} CLI tool push
 
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
