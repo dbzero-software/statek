@@ -198,6 +198,10 @@ def find_document(key: Union[int, str], agent_name: str,
     """
     accessible = [d for d in topic.documents if d.match_audience(agent_name)]
 
+    # Accept numeric strings as document IDs (e.g. key="0").
+    if isinstance(key, str) and key.lstrip("-").isdigit():
+        key = int(key)
+
     if isinstance(key, int):
         for doc in accessible:
             if doc.document_metadata["ord_no"] == key:

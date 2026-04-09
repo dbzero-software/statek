@@ -45,6 +45,15 @@ def test_show_document_by_id(docs_dir, capsys):
     assert "Line 0" in out
 
 
+def test_show_document_by_string_id(docs_dir, capsys):
+    """A numeric string key should be accepted as a document ID."""
+    _STATEK_CTX = {}  # noqa: F841
+    show_document("agent_a", docs_dir, key="0", topic="Guide")
+    out = capsys.readouterr().out
+    assert "Line 0" in out
+    assert "not found" not in out
+
+
 def test_show_document_by_title_fragment(docs_dir, capsys):
     _STATEK_CTX = {}  # noqa: F841
     show_document("agent_a", docs_dir, key="Full", topic="Guide")
