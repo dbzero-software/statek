@@ -93,13 +93,20 @@ class DialogAgent(SupervisedAgent):
     ):
         """Create a JobDef with a dialog chat style.
 
+        The chat style is resolved in priority order:
+        1. Explicit ``chat_style`` argument (caller override)
+        2. ``CHAT_STYLE`` key in the agent's prompt metadata
+        3. Default: ``MD_DIALOG``
+
         Args:
             tools: additional tools for this job
             warmup_code: optional initialization code
             shared_vars: optional shared variables (forwarded to the parent)
-            chat_style: chat style override; defaults to MD_DIALOG
+            chat_style: chat style override; if omitted, falls back to prompt metadata
             **kwargs: job-specific parameters forwarded to the parent
         """
+        if chat_style is None and self._metadata and 'CHAT_STYLE' in self._metadata:
+            chat_style = ChatStyle[self._metadata['CHAT_STYLE']]  # pylint: disable=no-member
         job_def = super().create_job_def(
             tools=tools, warmup_code=warmup_code, shared_vars=shared_vars, **kwargs
         )
