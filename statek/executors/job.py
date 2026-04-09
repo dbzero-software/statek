@@ -12,11 +12,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_mark
                           extract_dialog,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
-from statek.settings import get_statek_settings, ChatStyle, statek_log, get_statek_logger
-
-# FIXME: remove temporary log — module-level debug logger {{{
-_TOOL_RESULT_DEBUG_LOGGER = get_statek_logger()
-# FIXME: remove temporary log — }}} module-level debug logger
+from statek.settings import get_statek_settings, ChatStyle, statek_log
 
 """
 READY: a fresh job instance ready for execution
@@ -639,15 +635,6 @@ class Job:
                             result = item.get_tool_result(j)
                         except (KeyError, IndexError):
                             result = ""
-                        # FIXME: remove temporary log — j→tool mapping trace {{{
-                        _TOOL_RESULT_DEBUG_LOGGER.info(
-                            "[TOOL_RESULT_DEBUG] get_tool_result j=%s func=%s id=%s "
-                            "content_len=%d content[:200]=%r",
-                            j, cs.func_name, cs.id,
-                            len(result) if isinstance(result, str) else -1,
-                            result[:200] if isinstance(result, str) else result,
-                        )
-                        # FIXME: remove temporary log — }}} j→tool mapping trace
                         yield ChatHistoryItem(
                             role=ChatRole.TOOL,
                             content=result,
