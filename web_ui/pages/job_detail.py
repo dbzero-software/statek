@@ -868,8 +868,6 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
     ts = getattr(chat_item, 'timestamp', None)
     ts_str = ts.strftime('%H:%M:%S') if ts else ''
 
-    exceptions = getattr(job.py_env, 'exceptions', None) or {}
-    has_error = chat_item.console_pos in exceptions
     tool_data = _get_tool_data_for_block(chat_item.llm_resp, chat_item)
 
     with ui.column().classes('w-full gap-2'):
@@ -884,8 +882,6 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
                 ui.label(f'{len(tool_data)} tool call{"s" if len(tool_data) != 1 else ""}').classes(
                     'text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700'
                 )
-            if has_error:
-                ui.icon('error_outline').classes('text-red-500 text-sm')
             if ts_str:
                 ui.label(ts_str).classes('text-xs text-indigo-500 font-mono')
             ui.label('LLM CODE').classes(
@@ -897,17 +893,10 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
         if tool_data:
             _render_tool_calls(tool_data)
 
-        if has_error:
-            with ui.row().classes('items-center gap-2 px-3 py-2 rounded').style(
-                'background: #fff0f0; border: 1px solid #ffcdd2'
-            ):
-                ui.icon('error').classes('text-red-500 text-sm')
-                ui.label(exceptions[chat_item.console_pos]).classes('text-xs text-red-700 font-mono break-all')
-
         with ui.expansion('Console Output', icon='terminal').props('dense').classes(
             'w-full rounded border border-gray-200'
         ):
-            _render_console_output(console_out, has_error=has_error)
+            _render_console_output(console_out)
 
 
 def _get_system_prompt(job) -> str:
@@ -1056,19 +1045,19 @@ def create_job_detail_dialog(job) -> None:
                                 'text-xs text-gray-700 whitespace-pre-wrap w-full rounded p-3'
                             ).style('font-family: "JetBrains Mono", monospace; background: #fdf6e3')
 
+                    if history_sections:
+                        with ui.column().classes('w-full gap-3'):
+                            for section in history_sections:
+                                _render_history_section(section)
+
                     if exception_messages:
                         with ui.expansion('Errors', icon='error_outline').props('dense').classes(
-                            'w-full rounded border border-red-200 mb-4'
+                            'w-full rounded border border-red-200 mt-4'
                         ):
                             for error in exception_messages:
                                 with ui.row().classes('items-center gap-2 px-3 py-2'):
                                     ui.icon('error').classes('text-red-500 text-sm')
                                     ui.label(error).classes('text-xs text-red-700 font-mono break-all')
-
-                    if history_sections:
-                        with ui.column().classes('w-full gap-3'):
-                            for section in history_sections:
-                                _render_history_section(section)
 
                     if not history_sections:
                         with ui.column().classes('items-center justify-center gap-3 mt-8'):
