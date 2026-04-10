@@ -402,6 +402,58 @@ class TestJobGetNextRequest:
         history = list(job.get_next_request()["chat_history"])
         assert not history
 
+    def test_get_next_request_appends_language_rule_for_non_en(self, job_def_factory):
+        """System prompt includes language rule when locale has non-EN language."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        request = job.get_next_request()
+        assert request["system_prompt"].startswith("Test agent")
+        assert "Test agent" in request["system_prompt"]
+        # The language rule should be appended after the base prompt
+        assert len(request["system_prompt"]) > len("Test agent")
+
+    def test_get_next_request_no_language_rule_for_en(self, job_def_factory):
+        """System prompt is unchanged when locale language is EN."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.US,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        request = job.get_next_request()
+        assert request["system_prompt"] == "Test agent"
+
+    def test_get_next_request_no_language_rule_when_no_locale(self, job_factory):
+        """System prompt is unchanged when no locale is set."""
+        job = job_factory()
+        request = job.get_next_request()
+        assert request["system_prompt"] == "Test agent"
+
+    def test_get_next_request_no_language_rule_when_disabled(self, job_def_factory):
+        """AUTO_LANG_RULE: False in metadata disables the language rule."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job_def.agent.update_metadata({"AUTO_LANG_RULE": "False"})
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        request = job.get_next_request()
+        assert request["system_prompt"] == "Test agent"
+
     def test_last_response_empty_chat_log(self, job_factory):
         """Test last_response returns None when chat_log is empty."""
         job = job_factory()

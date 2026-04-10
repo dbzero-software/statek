@@ -115,6 +115,67 @@ class StatekCountryCode:
     """ISO 3166-1 alpha-2 country codes supported by Statek."""
 
 
+# Language rules keyed by language code value.
+# Each rule instructs the LLM to respond exclusively in the target language.
+LANGUAGE_RULES = {
+    "PL": (
+        "KRYTYCZNA ZASADA JĘZYKOWA: "
+        "1. Nigdy nie używaj angielskich nazw narzędzi ani parametrów "
+        "w rozmowie z użytkownikiem (np. nie pisz 'status to success', "
+        "tylko 'operacja zakończona sukcesem'). "
+        "2. Nawet jeśli dane z narzędzia są po angielsku, przetłumacz je "
+        "przed wyświetleniem. "
+        "3. Jesteś polskim asystentem i udajesz, że nie znasz angielskiego."
+    ),
+    "DE": (
+        "KRITISCHE SPRACHREGEL: "
+        "1. Verwende niemals englische Werkzeug- oder Parameternamen "
+        "im Gespräch mit dem Benutzer (z.B. schreibe nicht 'status is success', "
+        "sondern 'Vorgang erfolgreich abgeschlossen'). "
+        "2. Selbst wenn Werkzeugdaten auf Englisch sind, übersetze sie "
+        "vor der Anzeige. "
+        "3. Du bist ein deutschsprachiger Assistent und tust so, "
+        "als würdest du kein Englisch verstehen."
+    ),
+    "FR": (
+        "RÈGLE LINGUISTIQUE CRITIQUE : "
+        "1. N'utilisez jamais de noms d'outils ou de paramètres en anglais "
+        "dans la conversation avec l'utilisateur (par ex. n'écrivez pas "
+        "'status is success', mais 'opération terminée avec succès'). "
+        "2. Même si les données d'un outil sont en anglais, traduisez-les "
+        "avant de les afficher. "
+        "3. Vous êtes un assistant francophone et vous faites semblant "
+        "de ne pas connaître l'anglais."
+    ),
+    "ES": (
+        "REGLA LINGÜÍSTICA CRÍTICA: "
+        "1. Nunca uses nombres de herramientas o parámetros en inglés "
+        "en la conversación con el usuario (por ejemplo, no escribas "
+        "'status is success', sino 'operación completada con éxito'). "
+        "2. Aunque los datos de una herramienta estén en inglés, tradúcelos "
+        "antes de mostrarlos. "
+        "3. Eres un asistente en español y finges no conocer el inglés."
+    ),
+    "IT": (
+        "REGOLA LINGUISTICA CRITICA: "
+        "1. Non usare mai nomi di strumenti o parametri in inglese "
+        "nella conversazione con l'utente (ad es. non scrivere "
+        "'status is success', ma 'operazione completata con successo'). "
+        "2. Anche se i dati di uno strumento sono in inglese, traducili "
+        "prima di visualizzarli. "
+        "3. Sei un assistente italiano e fingi di non conoscere l'inglese."
+    ),
+}
+
+
+def get_language_rule(lang_code: "StatekLangCode"):
+    """Return the language rule for the given language code, or None.
+
+    Returns None for English and for languages without an explicit rule.
+    """
+    return LANGUAGE_RULES.get(str(lang_code))
+
+
 @db0.memo(no_default_tags=True)
 @dataclass
 class StatekLocale:

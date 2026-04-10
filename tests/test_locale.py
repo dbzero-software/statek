@@ -4,7 +4,9 @@
 
 import dbzero as db0
 
-from statek.locale import StatekLangCode, StatekCountryCode, StatekLocale
+from statek.locale import (
+    StatekLangCode, StatekCountryCode, StatekLocale, get_language_rule,
+)
 
 
 class TestStatekLangCode:
@@ -75,3 +77,31 @@ class TestStatekLocale:
             country_code=StatekCountryCode.US,
         )
         assert db0.uuid(locale) is not None
+
+
+class TestGetLanguageRule:
+    """Tests for the get_language_rule helper."""
+
+    def test_returns_none_for_english(self):
+        """English should not have a language rule."""
+        assert get_language_rule(StatekLangCode.EN) is None
+
+    def test_returns_rule_for_polish(self):
+        """Polish must have a hardcoded language rule."""
+        rule = get_language_rule(StatekLangCode.PL)
+        assert rule is not None
+        assert len(rule) > 0
+
+    def test_returns_rule_for_popular_languages(self):
+        """A few popular non-EN languages should have rules."""
+        for code in (StatekLangCode.DE, StatekLangCode.FR,
+                     StatekLangCode.ES, StatekLangCode.IT):
+            rule = get_language_rule(code)
+            assert rule is not None, f"Missing language rule for {code}"
+            assert len(rule) > 0
+
+    def test_returns_none_for_unsupported_language(self):
+        """Languages without an explicit rule return None."""
+        # Pick a language unlikely to have a hardcoded rule
+        rule = get_language_rule(StatekLangCode.ET)
+        assert rule is None

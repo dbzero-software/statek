@@ -12,6 +12,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_mark
                           extract_dialog,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
+from statek.locale import get_language_rule
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 
 """
@@ -689,6 +690,16 @@ class Job:
             self.job_def.agent.system_prompt(job_params=self.job_def.job_params)
             if self.job_def.agent is not None else ""
         )
+
+        # Append language rule when locale specifies a non-EN language
+        # and AUTO_LANG_RULE is not explicitly disabled in metadata.
+        if (
+            self.job_def.locale is not None
+            and metadata.get("AUTO_LANG_RULE", "").upper() != "FALSE"
+        ):
+            lang_rule = get_language_rule(self.job_def.locale.lang_code)
+            if lang_rule:
+                system_prompt = f"{system_prompt}\n\n{lang_rule}"
 
         def _request_chat_history() -> Iterable[ChatHistoryItem]:
             history = list(self.get_chat_history())
