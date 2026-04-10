@@ -446,6 +446,46 @@ class TestJobGetChatHistory:
         assert history[0].role == ChatRole.USER
         assert history[0].content == "hi there"
 
+    def test_get_chat_history_initial_chat_log_str_has_language_hint(self, job_def_factory):
+        """Leading chat_log str gets the language hint when locale is non-EN."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        job.push_user_message("Podaj grafik")
+
+        history = list(job.get_chat_history())
+
+        assert len(history) == 1
+        assert history[0].role == ChatRole.USER
+        assert "Podaj grafik (PAMIĘTAJ:" in history[0].content
+
+    def test_get_chat_history_initial_chat_log_str_no_hint_when_disabled(self, job_def_factory):
+        """AUTO_LANG_HINT disables the hint for a leading chat_log str."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job_def.agent.update_metadata({"AUTO_LANG_HINT": "False"})
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        job.push_user_message("Podaj grafik")
+
+        history = list(job.get_chat_history())
+
+        assert len(history) == 1
+        assert history[0].content == "Podaj grafik"
+
 
 class TestJobGetNextRequest:
     """Test cases for Job.get_next_request method.
@@ -1330,6 +1370,27 @@ class TestGetNextRequestUserMessages:
         assert history[1].content == "initial user message"
         assert history[1].content_src == ContentSource.USER
 
+    def test_str_in_chat_log_yields_initial_user_item_with_hint(self, job_def_factory):
+        """Leading chat_log str in request history gets the language hint."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append("initial user message")
+        job.chat_log.append(
+            create_chat_log_item(console_pos=0, llm_resp="Response 1"))
+
+        history = list(job.get_next_request()["chat_history"])
+
+        assert history[1].role == ChatRole.USER
+        assert "initial user message (PAMIĘTAJ:" in history[1].content
+
     def test_user_log_item_in_chat_log_yields_user_item(self, job_factory):
         """A UserLogItem in chat_log is yielded as a USER ChatHistoryItem."""
         job = job_factory()
@@ -1342,6 +1403,28 @@ class TestGetNextRequestUserMessages:
 
         assert history[-1].role == ChatRole.USER
         assert history[-1].content == "user follow-up"
+        assert history[-1].content_src == ContentSource.USER
+
+    def test_user_log_item_in_chat_log_yields_user_item_with_hint(self, job_def_factory):
+        """UserLogItem follow-ups get the language hint in chat history."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append(
+            create_chat_log_item(console_pos=0, llm_resp="Response 1"))
+        job.chat_log.append(UserLogItem(message="user follow-up"))
+
+        history = list(job.get_chat_history())
+
+        assert history[-1].role == ChatRole.USER
+        assert "user follow-up (PAMIĘTAJ:" in history[-1].content
         assert history[-1].content_src == ContentSource.USER
 
     def test_multiple_user_log_items_after_llm(self, job_factory):
@@ -1376,6 +1459,30 @@ class TestGetNextRequestUserMessages:
         asst_items = [h for h in history if h.role == ChatRole.ASSISTANT]
         assert len(asst_items) == 1
         assert asst_items[0].content == "Response 1"
+
+    def test_user_log_item_in_request_history_gets_hint(self, job_def_factory):
+        """UserLogItem follow-ups get the language hint in request history."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.py_env.console = ["Out1", "Out2"]
+        job.chat_log.append(
+            create_chat_log_item(console_pos=0, llm_resp="Response 1"))
+        job.chat_log.append(UserLogItem(message="user follow-up"))
+
+        history = list(job.get_next_request()["chat_history"])
+        user_items = [
+            h for h in history
+            if h.role == ChatRole.USER and h.content_src == ContentSource.USER
+        ]
+
+        assert any("user follow-up (PAMIĘTAJ:" in h.content for h in user_items)
 
     def test_empty_str_in_chat_log_skipped(self, job_factory):
         """An empty leading string in chat_log produces no USER item."""

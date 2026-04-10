@@ -423,6 +423,12 @@ class Job:
             return f" ({hint})"
         return ""
 
+    def _with_language_hint(self, message: str) -> str:
+        """Append the locale language hint to a real user message when enabled."""
+        if not message:
+            return message
+        return f"{message}{self._language_hint_suffix()}"
+
     def _collect_push_log(self, from_pos: int) -> str:
         """Return push_log messages with key >= from_pos as a newline-joined string.
 
@@ -562,22 +568,21 @@ class Job:
                 )
 
         # 1) Initial user message — chat_log[0] (str) and/or push_log[0].
-        hint_suffix = self._language_hint_suffix()
         initial_parts: List[str] = []
         if (
             self.chat_log
             and isinstance(self.chat_log[0], str)
             and self.chat_log[0]
         ):
-            initial_parts.append(self.chat_log[0])
+            initial_parts.append(self._with_language_hint(self.chat_log[0]))
         if 0 in push_log:
             v = push_log[0]
             if isinstance(v, list):
                 initial_parts.extend(
-                    f"{s}{hint_suffix}" for s in v if s
+                    self._with_language_hint(s) for s in v if s
                 )
             elif v:
-                initial_parts.append(f"{v}{hint_suffix}")
+                initial_parts.append(self._with_language_hint(v))
         if initial_parts:
             yield ChatHistoryItem(
                 role=ChatRole.USER,
@@ -613,7 +618,7 @@ class Job:
                     for msg in msgs:
                         yield ChatHistoryItem(
                             role=ChatRole.USER,
-                            content=f"{msg}{hint_suffix}",
+                            content=self._with_language_hint(msg),
                             content_src=ContentSource.USER,
                         )
 
@@ -622,7 +627,7 @@ class Job:
                 if item.message:
                     yield ChatHistoryItem(
                         role=ChatRole.USER,
-                        content=item.message,
+                        content=self._with_language_hint(item.message),
                         content_src=ContentSource.USER,
                     )
                 continue
