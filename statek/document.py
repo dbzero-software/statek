@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Dict, List, Optional, Union
 
@@ -216,14 +217,27 @@ def find_document(key: Union[int, str], agent_name: str,
 
     if len(matches) == 1:
         return matches[0]
-    if not matches:
-        return None
+    if len(matches) > 1:
+        listing = ", ".join(
+            f"{d.document_metadata['title']} (#{d.document_metadata['ord_no']})"
+            for d in matches
+        )
+        raise ValueError(f"Ambiguous document '{key}', matches: {listing}")
 
-    listing = ", ".join(
-        f"{d.document_metadata['title']} (#{d.document_metadata['ord_no']})"
-        for d in matches
-    )
-    raise ValueError(f"Ambiguous document '{key}', matches: {listing}")
+    # Fuzzy match: pick the highest-similarity title above 90%
+    best_doc = None
+    best_ratio = 0.0
+    for doc in accessible:
+        ratio = SequenceMatcher(
+            None, key_lower, doc.document_metadata["title"].lower()
+        ).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_doc = doc
+
+    if best_ratio >= 0.9:
+        return best_doc
+    return None
 
 
 def _parse_metadata_value(key: str, value: str):

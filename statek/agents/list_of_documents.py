@@ -14,7 +14,7 @@ from typing import Optional, Union
 from statek.document import load_documents, find_topic, find_document
 from statek.settings import get_statek_settings
 from statek.system import tool
-from statek.utils import statek_ctx_set, statek_ctx_get
+from statek.utils import perm_ctx_set, perm_ctx_get
 
 log = logging.getLogger('statek')
 
@@ -72,7 +72,7 @@ def _list_documents(topic_key, agent_name, all_topics, start_index, limit):
         print(f"# Topic '{topic_key}' not found")
         return
 
-    statek_ctx_set(last_topic_id=matched.ord_no)
+    perm_ctx_set(last_topic_id=matched.ord_no)
 
     docs = [d for d in matched.documents if d.match_audience(agent_name)]
     total = len(docs)
@@ -88,14 +88,14 @@ def _resolve_topic(topic_key, agent_name, all_topics):
         ValueError: if topic_key is None and no last_topic_id exists.
     """
     if topic_key is None:
-        topic_key = statek_ctx_get("last_topic_id", None)
+        topic_key = perm_ctx_get("last_topic_id", None)
         if topic_key is None:
             raise ValueError(
                 "No topic specified and no last_topic_id in context"
             )
     matched = find_topic(topic_key, agent_name, all_topics)
     if matched is not None:
-        statek_ctx_set(last_topic_id=matched.ord_no)
+        perm_ctx_set(last_topic_id=matched.ord_no)
     return matched
 
 
