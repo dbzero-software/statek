@@ -94,6 +94,8 @@ class JobDef:
     warmup_code: Optional[Union[str, CodeBlock, Sequence[Union[str, CodeBlock]]]] = None
     # Optional job-level chat style override (falls back to StatekSettings.chat_style)
     _chat_style: Optional[ChatStyle] = None
+    # Optional locale for language-specific behaviour
+    locale: Optional["StatekLocale"] = None
 
     def __post_init__(self):
         if self.agent is not None:

@@ -386,6 +386,7 @@ class SupervisedAgent(Agent):
         tools: Optional[List[Callable]] = None,
         warmup_code: Optional[Union[str, Sequence[str]]] = None,
         shared_vars: Optional[Dict[str, Any]] = None,
+        locale=None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -399,6 +400,7 @@ class SupervisedAgent(Agent):
                 additionally shared by the parent job. Its keys are reported
                 as a ``shared_vars`` entry in ``job_params`` so they can be
                 referenced from the agent's system prompt template.
+            locale: optional locale for job execution
             kwargs: job specific parameters for prompt formatting (i.e. job_params)
 
         Returns:
@@ -418,7 +420,8 @@ class SupervisedAgent(Agent):
         return JobDef(
             agent=self,
             job_params=job_params,
-            warmup_code=combined
+            warmup_code=combined,
+            locale=locale
         )
 
     def _combine_warmup_code(self, warmup_code):

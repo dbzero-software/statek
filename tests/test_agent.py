@@ -1,9 +1,12 @@
 """Tests for Agent class."""
 
+# pylint: disable=no-member
+
 import os
 from pathlib import Path
 from unittest.mock import patch
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
+from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from tests.conftest import clock, docs, exit_tool
 
 
@@ -338,6 +341,46 @@ class TestCreateJobDefSharedVars:
         agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
         job_def = agent.create_job_def(shared_vars={"alpha": 1})
         assert job_def.warmup_code is None
+
+
+class TestCreateJobDefLocale:
+    """Test cases for SupervisedAgent.create_job_def locale parameter."""
+
+    def test_no_locale_defaults_to_none(self, db0_fixture):  # pylint: disable=unused-argument
+        """Without locale, JobDef.locale is None."""
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def()
+        assert job_def.locale is None
+
+    def test_locale_forwarded_to_job_def(self, db0_fixture):  # pylint: disable=unused-argument
+        """Explicit locale is stored on the resulting JobDef."""
+
+        locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.US,
+        )
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def(locale=locale)
+        assert job_def.locale is locale
+
+    def test_locale_combined_with_other_params(self, db0_fixture):  # pylint: disable=unused-argument
+        """locale coexists with warmup_code, shared_vars, and kwargs."""
+
+        locale = StatekLocale(
+            lang_code=StatekLangCode.DE,
+            country_code=StatekCountryCode.DE,
+        )
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        job_def = agent.create_job_def(
+            warmup_code="x = 1",
+            shared_vars={"alpha": 1},
+            locale=locale,
+            user_question="hi",
+        )
+        assert job_def.locale is locale
+        assert job_def.warmup_code == "x = 1"
+        assert job_def.job_params["shared_vars"] == ["alpha"]
+        assert job_def.job_params["user_question"] == "hi"
 
 
 class TestUpdateWarmupDefs:

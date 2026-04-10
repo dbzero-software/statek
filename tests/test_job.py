@@ -11,6 +11,7 @@ from statek.llm_api import LLM_Response, LLM_Stats
 from statek.chat_history import ChatRole, ContentSource
 from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle
+from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -1092,6 +1093,25 @@ class TestJobDefChatStyle:
         mock_settings.chat_style = None
         with patch('statek.executors.job.get_statek_settings', return_value=mock_settings):
             assert job_def.chat_style is None
+
+
+class TestJobDefLocale:
+    """Tests for JobDef.locale field."""
+
+    def test_locale_defaults_to_none(self, job_def_factory):
+        """locale is None by default."""
+        job_def = job_def_factory()
+        assert job_def.locale is None
+
+    def test_locale_set_at_construction(self, job_def_factory):
+        """locale can be set at construction time."""
+
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        assert job_def.locale is locale
 
 
 # ---------------------------------------------------------------------------
