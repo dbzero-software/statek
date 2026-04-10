@@ -176,6 +176,25 @@ def get_language_rule(lang_code: "StatekLangCode"):
     return LANGUAGE_RULES.get(str(lang_code))
 
 
+# Language hints keyed by language code value.
+# Each hint is a short reminder appended in round brackets to user messages.
+LANGUAGE_HINTS = {
+    "PL": "PAMIĘTAJ: Odpowiedz wyłącznie po polsku",
+    "DE": "ERINNERUNG: Antworte ausschließlich auf Deutsch",
+    "FR": "RAPPEL : Réponds uniquement en français",
+    "ES": "RECUERDA: Responde exclusivamente en español",
+    "IT": "RICORDA: Rispondi esclusivamente in italiano",
+}
+
+
+def get_language_hint(lang_code: "StatekLangCode"):
+    """Return the language hint for the given language code, or None.
+
+    Returns None for English and for languages without an explicit hint.
+    """
+    return LANGUAGE_HINTS.get(str(lang_code))
+
+
 @db0.memo(no_default_tags=True)
 @dataclass
 class StatekLocale:

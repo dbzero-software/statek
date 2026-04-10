@@ -247,6 +247,72 @@ class TestJob:
         assert "msg1" in result
         assert "msg2" in result
 
+    def test_get_next_prompt_push_log_has_language_hint(self, job_def_factory):
+        """push_log messages include language hint when locale is non-EN."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.push_user_message("Podaj grafik")
+        result = job.get_next_prompt()
+        assert "Podaj grafik (PAMIĘTAJ:" in result
+
+    def test_get_next_prompt_push_log_no_hint_for_en(self, job_def_factory):
+        """push_log messages have no hint when locale language is EN."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.US,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.push_user_message("Show schedule")
+        result = job.get_next_prompt()
+        assert "Show schedule" in result
+        assert "(PAMIĘTAJ:" not in result
+        assert "(ERINNERUNG:" not in result
+
+    def test_get_next_prompt_push_log_no_hint_when_disabled(self, job_def_factory):
+        """AUTO_LANG_HINT: False disables language hint on push_log messages."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job_def.agent.update_metadata({"AUTO_LANG_HINT": "False"})
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.push_user_message("Podaj grafik")
+        result = job.get_next_prompt()
+        assert "Podaj grafik" in result
+        assert "(PAMIĘTAJ:" not in result
+
+    def test_get_next_prompt_push_log_list_has_hint_on_each(self, job_def_factory):
+        """Each message in a multi-push list gets the language hint."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.push_user_message("msg1")
+        job.push_user_message("msg2")
+        result = job.get_next_prompt()
+        assert "msg1 (PAMIĘTAJ:" in result
+        assert "msg2 (PAMIĘTAJ:" in result
+
 
 class TestJobGetChatHistory:
     """Test cases for Job.get_chat_history method.
@@ -314,6 +380,59 @@ class TestJobGetChatHistory:
         assert history[0].role == ChatRole.USER
         assert history[0].content == "Hello, please do X"
         assert history[0].content_src == ContentSource.USER
+
+    def test_get_chat_history_push_log_initial_has_language_hint(self, job_def_factory):
+        """push_log[0] in chat_history gets the language hint appended."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.py_env.push_log = {0: "Podaj grafik"}
+
+        history = list(job.get_chat_history())
+        assert len(history) == 1
+        assert "Podaj grafik (PAMIĘTAJ:" in history[0].content
+
+    def test_get_chat_history_push_log_yields_has_language_hint(self, job_def_factory):
+        """push_log entries in _yield_pushes get the language hint appended."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.py_env.console = ["c1", "c2"]
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp"))
+        job.py_env.push_log = {1: "Follow-up question"}
+
+        history = list(job.get_chat_history())
+        push_items = [h for h in history if h.content_src == ContentSource.USER]
+        assert any("Follow-up question (PAMIĘTAJ:" in h.content for h in push_items)
+
+    def test_get_chat_history_push_log_no_hint_when_disabled(self, job_def_factory):
+        """AUTO_LANG_HINT: False disables hint in chat_history push_log items."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        job_def = job_def_factory(locale=locale)
+        job_def.agent.update_metadata({"AUTO_LANG_HINT": "False"})
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+        job.py_env.push_log = {0: "Podaj grafik"}
+
+        history = list(job.get_chat_history())
+        assert history[0].content == "Podaj grafik"
 
     def test_get_chat_history_initial_user_message_from_chat_log_str(self, job_factory):
         """A leading str entry in chat_log feeds into the initial USER item."""

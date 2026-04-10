@@ -5,7 +5,8 @@
 import dbzero as db0
 
 from statek.locale import (
-    StatekLangCode, StatekCountryCode, StatekLocale, get_language_rule,
+    StatekLangCode, StatekCountryCode, StatekLocale,
+    get_language_rule, get_language_hint,
 )
 
 
@@ -105,3 +106,30 @@ class TestGetLanguageRule:
         # Pick a language unlikely to have a hardcoded rule
         rule = get_language_rule(StatekLangCode.ET)
         assert rule is None
+
+
+class TestGetLanguageHint:
+    """Tests for the get_language_hint helper."""
+
+    def test_returns_none_for_english(self):
+        """English should not have a language hint."""
+        assert get_language_hint(StatekLangCode.EN) is None
+
+    def test_returns_hint_for_polish(self):
+        """Polish must have a hardcoded language hint."""
+        hint = get_language_hint(StatekLangCode.PL)
+        assert hint is not None
+        assert len(hint) > 0
+
+    def test_returns_hint_for_popular_languages(self):
+        """A few popular non-EN languages should have hints."""
+        for code in (StatekLangCode.DE, StatekLangCode.FR,
+                     StatekLangCode.ES, StatekLangCode.IT):
+            hint = get_language_hint(code)
+            assert hint is not None, f"Missing language hint for {code}"
+            assert len(hint) > 0
+
+    def test_returns_none_for_unsupported_language(self):
+        """Languages without an explicit hint return None."""
+        hint = get_language_hint(StatekLangCode.ET)
+        assert hint is None

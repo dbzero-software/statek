@@ -12,7 +12,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_mark
                           extract_dialog,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
-from statek.locale import get_language_rule
+from statek.locale import get_language_rule, get_language_hint
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 
 """
@@ -406,6 +406,23 @@ class Job:
         db0.tags(self).add(new_status)
         self.__job_status = new_status
 
+    def _language_hint_suffix(self) -> str:
+        """Return the language hint suffix for push_log messages, or empty string.
+
+        Returns a string like ``' (PAMIĘTAJ: ...)'`` when the job's locale
+        specifies a non-EN language and AUTO_LANG_HINT is not disabled.
+        """
+        locale = self.job_def.locale
+        if locale is None:
+            return ""
+        metadata = self.job_def.agent._metadata or {}  # pylint: disable=protected-access
+        if metadata.get("AUTO_LANG_HINT", "").upper() == "FALSE":
+            return ""
+        hint = get_language_hint(locale.lang_code)
+        if hint:
+            return f" ({hint})"
+        return ""
+
     def _collect_push_log(self, from_pos: int) -> str:
         """Return push_log messages with key >= from_pos as a newline-joined string.
 
@@ -417,14 +434,15 @@ class Job:
         """
         if not self.py_env.push_log:
             return ""
+        hint_suffix = self._language_hint_suffix()
         parts = []
         for key in sorted(self.py_env.push_log.keys()):
             if key >= from_pos:
                 value = self.py_env.push_log[key]
                 if not isinstance(value, str):
-                    parts.extend(value)
+                    parts.extend(f"{v}{hint_suffix}" for v in value)
                 else:
-                    parts.append(value)
+                    parts.append(f"{value}{hint_suffix}")
         return "\n".join(parts)
 
     def get_next_prompt(self) -> str:
@@ -544,6 +562,7 @@ class Job:
                 )
 
         # 1) Initial user message — chat_log[0] (str) and/or push_log[0].
+        hint_suffix = self._language_hint_suffix()
         initial_parts: List[str] = []
         if (
             self.chat_log
@@ -554,9 +573,11 @@ class Job:
         if 0 in push_log:
             v = push_log[0]
             if isinstance(v, list):
-                initial_parts.extend(s for s in v if s)
+                initial_parts.extend(
+                    f"{s}{hint_suffix}" for s in v if s
+                )
             elif v:
-                initial_parts.append(v)
+                initial_parts.append(f"{v}{hint_suffix}")
         if initial_parts:
             yield ChatHistoryItem(
                 role=ChatRole.USER,
@@ -592,7 +613,7 @@ class Job:
                     for msg in msgs:
                         yield ChatHistoryItem(
                             role=ChatRole.USER,
-                            content=msg,
+                            content=f"{msg}{hint_suffix}",
                             content_src=ContentSource.USER,
                         )
 
