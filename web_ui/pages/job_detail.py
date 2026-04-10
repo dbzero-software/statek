@@ -9,7 +9,7 @@ import dbzero as db0
 from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.utils import CodeBlock
-from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
+from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from web_ui.nicegui_compat import ui
 from web_ui.components.status_badge import create_status_badge
 
@@ -131,14 +131,15 @@ def _get_code_str(llm_resp) -> str:
 
 
 def _get_tool_data_for_block(code_block, chat_log_item) -> list:
-    """Return [(call_spec, result_str), ...] for a code block's tool calls.
+    """Return [(call_spec, result_str, error_str|None), ...] for a code block's tool calls.
 
     Args:
         code_block: str or CodeBlock-like; tool calls come from code_block.tool_calls
         chat_log_item: ChatLogItem instance (or duck-typed equivalent) with get_tool_result()
 
     Returns:
-        List of (call_spec, result_str) pairs. Empty if no tool calls or no log entry.
+        List of (call_spec, result_str, error_or_none) triples. Empty if no tool calls
+        or no log entry.
     """
     if not hasattr(code_block, 'tool_calls') or not code_block.tool_calls:
         return []
@@ -148,12 +149,15 @@ def _get_tool_data_for_block(code_block, chat_log_item) -> list:
     result = []
     for i, cs in enumerate(call_specs):
         try:
-            tool_result = chat_log_item.get_tool_result(i)
+            entry = chat_log_item.get_tool_result(i)
         except (KeyError, AttributeError):
             return []
         except IndexError:
-            tool_result = ''
-        result.append((cs, tool_result))
+            entry = ''
+        if isinstance(entry, ToolError):
+            result.append((cs, '', entry.err_message))
+        else:
+            result.append((cs, entry, None))
     return result
 
 
@@ -240,7 +244,7 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 render_as_code = not is_direct
             tool_data = []
             if item.tool_calls:
-                tool_data = [(cs, '') for cs in list(item.tool_calls)]
+                tool_data = [(cs, '', None) for cs in list(item.tool_calls)]
             current = _HistorySection(
                 kind='assistant',
                 title=title,
@@ -257,12 +261,12 @@ def _build_history_sections(job) -> list[_HistorySection]:
 
         if item.role == ChatRole.TOOL and current is not None and current.tool_data:
             next_idx = next(
-                (idx for idx, (_, result) in enumerate(current.tool_data) if result == ''),
+                (idx for idx, (_, result, _err) in enumerate(current.tool_data) if result == ''),
                 None,
             )
             if next_idx is not None:
-                cs, _ = current.tool_data[next_idx]
-                current.tool_data[next_idx] = (cs, item.content or '')
+                cs, _, err = current.tool_data[next_idx]
+                current.tool_data[next_idx] = (cs, item.content or '', err)
                 continue
 
         message = _HistoryMessage(
@@ -287,7 +291,7 @@ def _build_history_sections(job) -> list[_HistorySection]:
 
 
 def _get_exception_messages(job) -> list[str]:
-    """Return all recorded exception messages in console order."""
+    """Return code-execution exception messages only (py_env.exceptions)."""
     exceptions = getattr(getattr(job, 'py_env', None), 'exceptions', None) or {}
     return [str(msg) for _, msg in sorted(exceptions.items()) if msg]
 
@@ -595,8 +599,12 @@ def _build_md_content(
                     parts.append('(empty)')
                 if section.tool_data:
                     parts.append(f'\n**Tool Call{"s" if len(section.tool_data) != 1 else ""}**\n')
-                    for cs, result in section.tool_data:
+                    for entry in section.tool_data:
+                        cs, result = entry[0], entry[1]
+                        error = entry[2] if len(entry) > 2 else None
                         parts.append(f'- **`{cs.format()}`**')
+                        if error:
+                            parts.append(f'  **Error:** `{_escape_md(str(error).strip())}`')
                         if result:
                             parts.append(_md_code_fence(str(result).strip()))
                 for message in section.followups:
@@ -733,7 +741,9 @@ def _render_tool_calls(tool_data: list) -> None:
             f'border: 1px solid {_TOOL_BORDER}; border-top: none; border-radius: 0 0 6px 6px;'
             f'padding: 10px; background: {_TOOL_RESULT_BG}'
         ):
-            for i, (cs, result) in enumerate(tool_data):
+            for i, entry in enumerate(tool_data):
+                cs, result = entry[0], entry[1]
+                error = entry[2] if len(entry) > 2 else None
                 if i > 0:
                     ui.separator().classes('my-1')
                 with ui.column().classes('w-full gap-1'):
@@ -743,6 +753,19 @@ def _render_tool_calls(tool_data: list) -> None:
                     ):
                         ui.icon('call_made').classes('text-xs text-orange-700')
                         ui.label(cs.format()).classes('text-xs font-mono font-semibold text-orange-900 break-all')
+                    # Error
+                    if error:
+                        error_str = str(error).strip()
+                        ui.html(
+                            f'<pre style="'
+                            f'white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word;'
+                            f'font-family: \'JetBrains Mono\', monospace;'
+                            f'font-size: 0.72rem; line-height: 1.5;'
+                            f'color: #b71c1c; background: #fbe9e7;'
+                            f'border: 1px solid #ef9a9a; border-radius: 4px;'
+                            f'padding: 8px; margin: 0; width: 100%; box-sizing: border-box;'
+                            f'">{_esc(error_str)}</pre>'
+                        ).classes('w-full')
                     # Result
                     result_str = str(result).strip() if result else ''
                     if result_str:
@@ -754,9 +777,9 @@ def _render_tool_calls(tool_data: list) -> None:
                             f'color: #4e342e; background: #fff8f0;'
                             f'border: 1px solid {_TOOL_BORDER}; border-radius: 4px;'
                             f'padding: 8px; margin: 0; width: 100%; box-sizing: border-box;'
-                            f'">{result_str.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</pre>'
+                            f'">{_esc(result_str)}</pre>'
                         ).classes('w-full')
-                    else:
+                    elif not error:
                         ui.label('(no result)').classes('text-xs text-gray-400 italic px-2')
 
 

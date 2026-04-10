@@ -1,10 +1,10 @@
-"""Tests that warmup code blocks are excluded from LM_Harness counting."""
+"""Tests for harness counting: warmup exclusions and tool-exception inclusion."""
 # pylint: disable=no-member,redefined-outer-name
 
 import pytest
 
 from statek.executors.job import Job, JobStatus
-from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
+from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 
 
 @pytest.fixture
@@ -138,3 +138,94 @@ class TestMaxConsecutiveExceptionsExcludesWarmup:
         # Exceptions keyed by console_pos of warmup items
         job = make_job(items, exceptions={0: "e1", 1: "e2"})
         assert job.max_consecutive_exceptions == 0
+
+
+class TestExceptionCountIncludesToolExceptions:
+    """exception_count should include tool-call exceptions from ChatLogItem.tool_exceptions."""
+
+    def test_tool_exception_on_llm_item_counted(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """A tool exception on an LLM turn counts toward exception_count."""
+        llm_item = LLM_LogItem(console_pos=0)
+        llm_item.push_tool_result(ToolError(err_message="ValueError: boom"))
+        job = make_job([llm_item])
+        assert job.exception_count == 1
+
+    def test_tool_exception_on_warmup_not_counted(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """A tool exception on a warmup item does NOT count toward exception_count."""
+        warmup = WarmupLogItem(console_pos=0, warmup_block_num=0)
+        warmup.push_tool_result(ToolError(err_message="RuntimeError: warmup err"))
+        llm_item = LLM_LogItem(console_pos=1)
+        job = make_job([warmup, llm_item])
+        assert job.exception_count == 0
+
+    def test_code_and_tool_exceptions_both_counted(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """A turn with both a code exception and a tool exception counts as 2."""
+        llm_item = LLM_LogItem(console_pos=5)
+        llm_item.push_tool_result(ToolError(err_message="ValueError: tool err"))
+        job = make_job([llm_item], exceptions={5: "code err"})
+        assert job.exception_count == 2
+
+    def test_tool_exception_only_no_code_exception(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """A turn with only a tool exception (no code exception) is still counted."""
+        llm_item = LLM_LogItem(console_pos=5)
+        llm_item.push_tool_result(ToolError(err_message="NameError: missing"))
+        job = make_job([llm_item])
+        # No py_env.exceptions at all, but tool_exceptions present
+        assert job.exception_count == 1
+
+    def test_multiple_tool_exceptions_on_single_turn(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """A turn with 3 tool exceptions counts as 3."""
+        llm_item = LLM_LogItem(console_pos=0)
+        llm_item.push_tool_result(ToolError(err_message="err1"))
+        llm_item.push_tool_result(ToolError(err_message="err2"))
+        llm_item.push_tool_result(ToolError(err_message="err3"))
+        job = make_job([llm_item])
+        assert job.exception_count == 3
+
+    def test_mixed_turns_some_with_tool_exceptions(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """Only turns that have exceptions (code or tool) are counted."""
+        items = [
+            LLM_LogItem(console_pos=0),  # no exception
+            LLM_LogItem(console_pos=1),  # tool exception only
+            LLM_LogItem(console_pos=2),  # no exception
+        ]
+        items[1].push_tool_result(ToolError(err_message="err"))
+        job = make_job(items)
+        assert job.exception_count == 1
+
+
+class TestMaxConsecutiveIncludesToolExceptions:
+    """max_consecutive_exceptions should include tool-call exceptions."""
+
+    def test_consecutive_tool_exceptions(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        items = [
+            LLM_LogItem(console_pos=0),
+            LLM_LogItem(console_pos=1),
+            LLM_LogItem(console_pos=2),
+        ]
+        items[0].push_tool_result(ToolError(err_message="e1"))
+        items[1].push_tool_result(ToolError(err_message="e2"))
+        job = make_job(items)
+        assert job.max_consecutive_exceptions == 2
+
+    def test_tool_exception_breaks_clean_streak(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """A tool exception between clean turns resets the streak."""
+        items = [
+            LLM_LogItem(console_pos=0),  # clean
+            LLM_LogItem(console_pos=1),  # tool exception
+            LLM_LogItem(console_pos=2),  # clean
+        ]
+        items[1].push_tool_result(ToolError(err_message="err"))
+        job = make_job(items)
+        assert job.max_consecutive_exceptions == 1
+
+    def test_code_and_tool_exception_mix(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        """Code exception followed by tool exception counts as 2 consecutive."""
+        items = [
+            LLM_LogItem(console_pos=0),  # code exception
+            LLM_LogItem(console_pos=1),  # tool exception
+            LLM_LogItem(console_pos=2),  # clean
+        ]
+        items[1].push_tool_result(ToolError(err_message="tool err"))
+        job = make_job(items, exceptions={0: "code err"})
+        assert job.max_consecutive_exceptions == 2

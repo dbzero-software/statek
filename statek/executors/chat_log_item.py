@@ -8,19 +8,26 @@ from statek.utils import CodeBlock
 
 @db0.memo(no_default_tags=True)
 @dataclass
+class ToolError:
+    """Represents a tool-call exception stored positionally in tool_log."""
+    err_message: str
+
+
+@db0.memo(no_default_tags=True)
+@dataclass
 class ChatLogItem:
     # The console's position before execution of this item's code
     console_pos: int
-    # Optional log of tool results (single string or list of strings)
-    tool_log: Optional[Union[str, List[str]]] = None
+    # Log of tool results/errors — str for success, ToolError for failure
+    tool_log: Optional[Union[str, ToolError, List[Union[str, ToolError]]]] = None
     # Date and time of generating this log item
     timestamp: datetime = field(default_factory=datetime.now)
 
-    def push_tool_result(self, tool_result: str) -> int:
-        """Append a tool result to tool_log and return its index.
+    def push_tool_result(self, tool_result: Union[str, ToolError]) -> int:
+        """Append a tool result or error to tool_log and return its index.
 
         Args:
-            tool_result: the tool-generated result string
+            tool_result: the tool-generated result string, or ToolError on failure
 
         Returns:
             The index of the appended result within tool_log.
@@ -28,20 +35,20 @@ class ChatLogItem:
         if self.tool_log is None:
             self.tool_log = tool_result
             return 0
-        if isinstance(self.tool_log, str):
+        if isinstance(self.tool_log, str) or isinstance(self.tool_log, ToolError):
             self.tool_log = [self.tool_log, tool_result]
             return 1
         self.tool_log.append(tool_result)
         return len(self.tool_log) - 1
 
-    def get_tool_result(self, tool_call_id: int) -> str:
+    def get_tool_result(self, tool_call_id: int) -> Union[str, ToolError]:
         """Retrieve a tool result by index.
 
         Args:
             tool_call_id: the index of the tool call within tool_log
 
         Returns:
-            The tool result string.
+            The tool result string or ToolError.
 
         Raises:
             KeyError: if tool_log is None
@@ -49,7 +56,7 @@ class ChatLogItem:
         """
         if self.tool_log is None:
             raise KeyError(tool_call_id)
-        if isinstance(self.tool_log, str):
+        if isinstance(self.tool_log, (str, ToolError)):
             if tool_call_id != 0:
                 raise IndexError(
                     f"tool_call_id {tool_call_id} out of range for single result")

@@ -88,7 +88,7 @@ class TestExecTool:
             return a + b
 
         job = _make_job("role_return", context_extras={"add": add})
-        result = await exec_tool(_call_spec("add", kwargs={"a": 3, "b": 4}), job)
+        result, _ = await exec_tool(_call_spec("add", kwargs={"a": 3, "b": 4}), job)
 
         assert "7" in result
         assert job.py_env.console is None
@@ -100,7 +100,7 @@ class TestExecTool:
             return [_LLMReprToolObject("anna"), _LLMReprToolObject("jan")]
 
         job = _make_job("role_return_list", context_extras={"list_staff": list_staff})
-        result = await exec_tool(_call_spec("list_staff"), job)
+        result, _ = await exec_tool(_call_spec("list_staff"), job)
 
         assert result == "[custom:anna,custom:jan]"
         assert "object at" not in result
@@ -112,7 +112,7 @@ class TestExecTool:
             return None
 
         job = _make_job("role_none_ret", context_extras={"noop": noop})
-        result = await exec_tool(_call_spec("noop"), job)
+        result, _ = await exec_tool(_call_spec("noop"), job)
 
         assert result == ""
 
@@ -120,7 +120,7 @@ class TestExecTool:
     async def test_tool_not_found_returns_error(self, db0_fixture):  # pylint: disable=unused-argument
         """Unknown func_name yields a NameError description in the output."""
         job = _make_job("role_notfound")
-        result = await exec_tool(_call_spec("nonexistent_func"), job)
+        result, _ = await exec_tool(_call_spec("nonexistent_func"), job)
 
         assert "NameError" in result
         assert "nonexistent_func" in result
@@ -133,7 +133,7 @@ class TestExecTool:
             raise ValueError("something went wrong")
 
         job = _make_job("role_exc", context_extras={"failing": failing})
-        result = await exec_tool(_call_spec("failing"), job)
+        result, _ = await exec_tool(_call_spec("failing"), job)
 
         assert "ValueError" in result
         assert "something went wrong" in result
@@ -146,7 +146,7 @@ class TestExecTool:
             pass
 
         job = _make_job("role_silent", context_extras={"silent": silent})
-        result = await exec_tool(_call_spec("silent"), job)
+        result, _ = await exec_tool(_call_spec("silent"), job)
 
         assert result == ""
 
@@ -157,7 +157,7 @@ class TestExecTool:
             return x * y
 
         job = _make_job("role_args", context_extras={"multiply": multiply})
-        result = await exec_tool(_call_spec("multiply", args=[3, 5]), job)
+        result, _ = await exec_tool(_call_spec("multiply", args=[3, 5]), job)
 
         assert "15" in result
 
@@ -168,7 +168,7 @@ class TestExecTool:
             return f"{greeting}, {name}!"
 
         job = _make_job("role_kwargs", context_extras={"greet": greet})
-        result = await exec_tool(
+        result, _ = await exec_tool(
             _call_spec("greet", kwargs={"name": "World", "greeting": "Hi"}), job
         )
 
@@ -178,7 +178,7 @@ class TestExecTool:
     async def test_tool_found_in_agent_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Tool callable stored in agent._tools is found and invoked."""
         job = _make_job("role_agent_tools", tools=[_module_agent_tool])
-        result = await exec_tool(
+        result, _ = await exec_tool(
             _call_spec("_module_agent_tool", kwargs={"value": "ok"}), job
         )
 
@@ -217,7 +217,7 @@ class TestExecTool:
             return x * 2
 
         job = _make_job("role_async", context_extras={"async_double": async_double})
-        result = await exec_tool(_call_spec("async_double", args=[21]), job)
+        result, _ = await exec_tool(_call_spec("async_double", args=[21]), job)
 
         assert "42" in result
         assert job.py_env.console is None
@@ -229,7 +229,7 @@ class TestExecTool:
             raise RuntimeError("async error")
 
         job = _make_job("role_async_exc", context_extras={"async_fail": async_fail})
-        result = await exec_tool(_call_spec("async_fail"), job)
+        result, _ = await exec_tool(_call_spec("async_fail"), job)
 
         assert "RuntimeError" in result
         assert "async error" in result
@@ -244,7 +244,7 @@ class TestExecTool:
         type(what)=str.
         """
         job = _make_job("role_resolve", tools=[_resolver_tool, _lookup_target])
-        result = await exec_tool(
+        result, _ = await exec_tool(
             _call_spec("_resolver_tool", kwargs={"what": "_lookup_target"}), job
         )
         assert "resolved:" in result
@@ -259,7 +259,7 @@ class TestExecTool:
         asyncio.iscoroutine branch is NOT exercised here.
         """
         job = _make_job("role_async_agent_tool", tools=[_async_agent_tool])
-        result = await exec_tool(
+        result, _ = await exec_tool(
             _call_spec("_async_agent_tool", kwargs={"value": "ok"}), job
         )
 
@@ -270,7 +270,7 @@ class TestExecTool:
     async def test_async_agent_tool_exception_captured(self, db0_fixture):  # pylint: disable=unused-argument
         """Exception from async @tool in agent._tools is caught and returned as a string."""
         job = _make_job("role_async_agent_tool_err", tools=[_async_agent_tool_error])
-        result = await exec_tool(_call_spec("_async_agent_tool_error"), job)
+        result, _ = await exec_tool(_call_spec("_async_agent_tool_error"), job)
 
         assert "ValueError" in result
         assert "async agent tool error" in result
@@ -300,7 +300,7 @@ class TestExecToolStatekCtx:  # pylint: disable=too-few-public-methods
             job_status=JobStatus.READY,  # pylint: disable=no-member
         )
 
-        result = await exec_tool(_call_spec("_ctx_checker_tool"), job)
+        result, _ = await exec_tool(_call_spec("_ctx_checker_tool"), job)
 
         assert result == "True"
 
@@ -344,7 +344,7 @@ class TestDocsAgentIntegration:
         job = _make_job("doc_format_test", tools=[docs_tool],
                         context_extras={"_SimpleDocClass": _SimpleDocClass})
 
-        result = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
+        result, _ = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
 
         assert result.startswith("class "), (
             f"Output should start with 'class ', got: {result[:60]!r}"
@@ -356,7 +356,7 @@ class TestDocsAgentIntegration:
         job = _make_job("doc_format_test2", tools=[docs_tool],
                         context_extras={"_SimpleDocClass": _SimpleDocClass})
 
-        result = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
+        result, _ = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
 
         assert not result.endswith('""""'), (
             f"Output should end with '\"\"\"', not '\"\"\"\"', got tail: {result[-20:]!r}"
