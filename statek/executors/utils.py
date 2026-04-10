@@ -749,9 +749,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             log_code = f"```python\n{code_str}\n```" if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT) else code_str  # pylint: disable=no-member
             job._log(log_code)  # pylint: disable=protected-access
 
-        # Check for empty code submission (no executable code and no tool calls)
+        # Check for empty code submission (no executable code and no tool calls).
+        # In DIRECT style the LLM response is prose, not Python code — code
+        # execution only happens via python_cli tool calls.
         has_tool_calls = isinstance(code, CodeBlock) and code.tool_calls
-        if not has_tool_calls and _is_empty_code(code_str):
+        if (not has_tool_calls
+                and job.job_def.chat_style != ChatStyle.DIRECT  # pylint: disable=no-member
+                and _is_empty_code(code_str)):
             error_msg = "Error: no code submitted."
             job.console_append(error_msg, error_message=error_msg)
 
