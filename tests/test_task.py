@@ -11,6 +11,7 @@ from statek.executors.chat_log_item import UserLogItem
 from statek.agents.dialog_agent import DialogAgent
 from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
+from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
@@ -325,6 +326,25 @@ class TestDelegateTask:
         result = delegate_task(supervised_agent)
         assert not result.job.py_env.local_state
 
+    def test_delegate_task_locale_forwarded_to_job_def(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """locale parameter is forwarded to the JobDef."""
+
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        result = delegate_task(supervised_agent, locale=locale)
+        assert result.job.job_def.locale is locale
+
+    def test_delegate_task_no_locale_defaults_to_none(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Without locale, JobDef.locale is None."""
+        result = delegate_task(supervised_agent)
+        assert result.job.job_def.locale is None
+
 
 def _make_send_message(body: str, media=None):
     """Mock send_message for DialogAgent tests.
@@ -455,6 +475,27 @@ class TestStartDialog:
         job = start_dialog(agent, message="hi")
         assert not job.py_env.local_state
 
+    def test_start_dialog_locale_forwarded_to_job_def(
+        self, db0_fixture, mock_settings
+    ):
+        """locale parameter is forwarded to the JobDef."""
+
+        locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.GB,
+        )
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hello", locale=locale)
+        assert job.job_def.locale is locale
+
+    def test_start_dialog_no_locale_defaults_to_none(
+        self, db0_fixture, mock_settings
+    ):
+        """Without locale, JobDef.locale is None."""
+        agent = DialogAgent(send_message=_make_send_message)
+        job = start_dialog(agent, message="hi")
+        assert job.job_def.locale is None
+
 
 class TestDialogAgentCreateJobDefChatStyle:
     """Tests for DialogAgent.create_job_def chat_style parameter."""
@@ -470,6 +511,17 @@ class TestDialogAgentCreateJobDefChatStyle:
         agent = DialogAgent(send_message=_make_send_message)
         job_def = agent.create_job_def(chat_style=ChatStyle.DIRECT)
         assert job_def.chat_style == ChatStyle.DIRECT
+
+    def test_locale_forwarded_through_dialog_agent(self, db0_fixture):
+        """DialogAgent.create_job_def forwards locale to the JobDef."""
+
+        locale = StatekLocale(
+            lang_code=StatekLangCode.FR,
+            country_code=StatekCountryCode.FR,
+        )
+        agent = DialogAgent(send_message=_make_send_message)
+        job_def = agent.create_job_def(locale=locale)
+        assert job_def.locale is locale
 
 
 class TestSubmitNewJob:

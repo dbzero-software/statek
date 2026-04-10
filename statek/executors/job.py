@@ -12,6 +12,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_mark
                           extract_dialog,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
+from statek.locale import get_language_rule, get_language_hint
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 
 """
@@ -94,6 +95,8 @@ class JobDef:
     warmup_code: Optional[Union[str, CodeBlock, Sequence[Union[str, CodeBlock]]]] = None
     # Optional job-level chat style override (falls back to StatekSettings.chat_style)
     _chat_style: Optional[ChatStyle] = None
+    # Optional locale for language-specific behaviour
+    locale: Optional["StatekLocale"] = None
 
     def __post_init__(self):
         if self.agent is not None:
@@ -403,6 +406,29 @@ class Job:
         db0.tags(self).add(new_status)
         self.__job_status = new_status
 
+    def _language_hint_suffix(self) -> str:
+        """Return the language hint suffix for push_log messages, or empty string.
+
+        Returns a string like ``' (PAMIĘTAJ: ...)'`` when the job's locale
+        specifies a non-EN language and AUTO_LANG_HINT is not disabled.
+        """
+        locale = self.job_def.locale
+        if locale is None:
+            return ""
+        metadata = self.job_def.agent._metadata or {}  # pylint: disable=protected-access
+        if metadata.get("AUTO_LANG_HINT", "").upper() == "FALSE":
+            return ""
+        hint = get_language_hint(locale.lang_code)
+        if hint:
+            return f" ({hint})"
+        return ""
+
+    def _with_language_hint(self, message: str) -> str:
+        """Append the locale language hint to a real user message when enabled."""
+        if not message:
+            return message
+        return f"{message}{self._language_hint_suffix()}"
+
     def _collect_push_log(self, from_pos: int) -> str:
         """Return push_log messages with key >= from_pos as a newline-joined string.
 
@@ -414,14 +440,15 @@ class Job:
         """
         if not self.py_env.push_log:
             return ""
+        hint_suffix = self._language_hint_suffix()
         parts = []
         for key in sorted(self.py_env.push_log.keys()):
             if key >= from_pos:
                 value = self.py_env.push_log[key]
                 if not isinstance(value, str):
-                    parts.extend(value)
+                    parts.extend(f"{v}{hint_suffix}" for v in value)
                 else:
-                    parts.append(value)
+                    parts.append(f"{value}{hint_suffix}")
         return "\n".join(parts)
 
     def get_next_prompt(self) -> str:
@@ -547,13 +574,15 @@ class Job:
             and isinstance(self.chat_log[0], str)
             and self.chat_log[0]
         ):
-            initial_parts.append(self.chat_log[0])
+            initial_parts.append(self._with_language_hint(self.chat_log[0]))
         if 0 in push_log:
             v = push_log[0]
             if isinstance(v, list):
-                initial_parts.extend(s for s in v if s)
+                initial_parts.extend(
+                    self._with_language_hint(s) for s in v if s
+                )
             elif v:
-                initial_parts.append(v)
+                initial_parts.append(self._with_language_hint(v))
         if initial_parts:
             yield ChatHistoryItem(
                 role=ChatRole.USER,
@@ -589,7 +618,7 @@ class Job:
                     for msg in msgs:
                         yield ChatHistoryItem(
                             role=ChatRole.USER,
-                            content=msg,
+                            content=self._with_language_hint(msg),
                             content_src=ContentSource.USER,
                         )
 
@@ -598,7 +627,7 @@ class Job:
                 if item.message:
                     yield ChatHistoryItem(
                         role=ChatRole.USER,
-                        content=item.message,
+                        content=self._with_language_hint(item.message),
                         content_src=ContentSource.USER,
                     )
                 continue
@@ -687,6 +716,16 @@ class Job:
             self.job_def.agent.system_prompt(job_params=self.job_def.job_params)
             if self.job_def.agent is not None else ""
         )
+
+        # Append language rule when locale specifies a non-EN language
+        # and AUTO_LANG_RULE is not explicitly disabled in metadata.
+        if (
+            self.job_def.locale is not None
+            and metadata.get("AUTO_LANG_RULE", "").upper() != "FALSE"
+        ):
+            lang_rule = get_language_rule(self.job_def.locale.lang_code)
+            if lang_rule:
+                system_prompt = f"{system_prompt}\n\n{lang_rule}"
 
         def _request_chat_history() -> Iterable[ChatHistoryItem]:
             history = list(self.get_chat_history())

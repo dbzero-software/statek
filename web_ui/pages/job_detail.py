@@ -8,6 +8,7 @@ import dbzero as db0
 
 from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
+from statek.locale import LANGUAGE_HINTS
 from statek.utils import CodeBlock
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from web_ui.nicegui_compat import ui
@@ -161,6 +162,19 @@ def _get_tool_data_for_block(code_block, chat_log_item) -> list:
     return result
 
 
+def _strip_language_hint_suffix(content: str) -> str:
+    """Remove display-only locale hints appended to user messages."""
+    if not content:
+        return content
+
+    suffixes = tuple(f' ({hint})' for hint in LANGUAGE_HINTS.values())
+    stripped_lines = []
+    for line in content.splitlines():
+        suffix = next((item for item in suffixes if line.endswith(item)), None)
+        stripped_lines.append(line[:-len(suffix)] if suffix else line)
+    return '\n'.join(stripped_lines)
+
+
 @dataclass
 class _HistoryMessage:
     """A normalized message displayed inside or outside an assistant section."""
@@ -269,9 +283,12 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 current.tool_data[next_idx] = (cs, item.content or '', err)
                 continue
 
+        content = item.content or ''
+        if item.content_src == ContentSource.USER:
+            content = _strip_language_hint_suffix(content)
         message = _HistoryMessage(
             title=_message_title(item, current is not None),
-            content=item.content or '',
+            content=content,
             content_src=item.content_src,
         )
         if target is not None:

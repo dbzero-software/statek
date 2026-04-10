@@ -16,6 +16,7 @@ from web_ui.pages.job_detail import (
     _get_tool_data_for_block,
     _get_exception_messages,
     _get_system_prompt,
+    _strip_language_hint_suffix,
     _build_history_sections,
     _build_md_content,
     _build_raw_repr,
@@ -806,6 +807,24 @@ class TestGetSystemPrompt:
 
 
 class TestBuildHistorySections:
+    def test_strip_language_hint_suffix_removes_known_suffix(self):
+        text = (
+            'prosze o ustawienie negatywnej preferencji '
+            '(PAMIĘTAJ: Odpowiedz wyłącznie po polsku)'
+        )
+        assert _strip_language_hint_suffix(text) == 'prosze o ustawienie negatywnej preferencji'
+
+    def test_strip_language_hint_suffix_removes_suffix_per_line(self):
+        text = (
+            'pierwsza wiadomosc (PAMIĘTAJ: Odpowiedz wyłącznie po polsku)\n'
+            'druga wiadomosc (PAMIĘTAJ: Odpowiedz wyłącznie po polsku)'
+        )
+        assert _strip_language_hint_suffix(text) == 'pierwsza wiadomosc\ndruga wiadomosc'
+
+    def test_strip_language_hint_suffix_leaves_other_parenthetical_text(self):
+        text = 'wiadomosc testowa (to ma zostac)'
+        assert _strip_language_hint_suffix(text) == text
+
     def test_groups_assistant_tool_calls_and_console_followups(self, db0_fixture):
         cs = CallSpec(id='T', func_name='search', args=['query'])
         job = _make_job()
@@ -842,6 +861,30 @@ class TestBuildHistorySections:
         assert sections[1].tool_data == [(cs, 'tool result', None)]
         assert sections[1].followups[0].title == 'Console Output'
         assert sections[1].followups[0].content == 'console output\n'
+
+    def test_strips_language_hint_from_user_followup_display(self, db0_fixture):
+        job = _make_job()
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.ASSISTANT,
+                content='assistant reply',
+                content_src=ContentSource.ASSISTANT,
+            ),
+            ChatHistoryItem(
+                role=ChatRole.USER,
+                content=(
+                    'prosze o ustawienie negatywnej preferencji '
+                    '(PAMIĘTAJ: Odpowiedz wyłącznie po polsku)'
+                ),
+                content_src=ContentSource.USER,
+            ),
+        ]
+
+        sections = _build_history_sections(job)
+
+        assert len(sections) == 1
+        assert sections[0].followups[0].title == 'User Message'
+        assert sections[0].followups[0].content == 'prosze o ustawienie negatywnej preferencji'
 
     def test_creates_warmup_titles_from_system_assistant_items(self, db0_fixture):
         job = _make_job(warmup_code=['x = 1', 'y = 2'])

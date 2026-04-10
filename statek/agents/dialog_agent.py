@@ -88,8 +88,9 @@ class DialogAgent(SupervisedAgent):
         _send_message.__doc__ = getattr(original, "__doc__", None)
         self.append_tool(_send_message)
 
-    def create_job_def(  # pylint: disable=no-member
-        self, tools=None, warmup_code=None, shared_vars=None, chat_style=None, **kwargs
+    def create_job_def(  # pylint: disable=no-member,arguments-renamed,too-many-arguments,too-many-positional-arguments
+        self, tools=None, warmup_code=None, shared_vars=None, chat_style=None,
+        locale=None, **kwargs
     ):
         """Create a JobDef with a dialog chat style.
 
@@ -103,12 +104,14 @@ class DialogAgent(SupervisedAgent):
             warmup_code: optional initialization code
             shared_vars: optional shared variables (forwarded to the parent)
             chat_style: chat style override; if omitted, falls back to prompt metadata
+            locale: optional locale for job execution
             **kwargs: job-specific parameters forwarded to the parent
         """
         if chat_style is None and self._metadata and 'CHAT_STYLE' in self._metadata:
             chat_style = ChatStyle[self._metadata['CHAT_STYLE']]  # pylint: disable=no-member
         job_def = super().create_job_def(
-            tools=tools, warmup_code=warmup_code, shared_vars=shared_vars, **kwargs
+            tools=tools, warmup_code=warmup_code, shared_vars=shared_vars,
+            locale=locale, **kwargs
         )
         job_def.set_chat_style(chat_style or ChatStyle.MD_DIALOG)  # pylint: disable=no-member
         return job_def

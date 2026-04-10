@@ -166,11 +166,12 @@ def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
 @pytest.fixture
 def job_def_factory(agent):
     """Factory fixture to create JobDef instances with custom parameters."""
-    def _create_job_def(job_params=None, warmup_code=None):
+    def _create_job_def(job_params=None, warmup_code=None, **kwargs):
         return JobDef(
             agent=agent,
             job_params=job_params,
-            warmup_code=warmup_code
+            warmup_code=warmup_code,
+            **kwargs
         )
     return _create_job_def
 
