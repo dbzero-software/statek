@@ -47,7 +47,7 @@ def docs_dir(temp_dir):
 
 def test_list_topics(docs_dir, capsys):
     """No topic arg lists all topics."""
-    _STATEK_CTX = {}  # noqa: F841
+    _PERM_CTX = {}  # noqa: F841
     _impl("agent_a", docs_dir, topic=None)
     out = capsys.readouterr().out
     assert "Preferences" in out
@@ -56,7 +56,7 @@ def test_list_topics(docs_dir, capsys):
 
 def test_list_documents_in_topic(docs_dir, capsys):
     """Specifying topic lists documents within it."""
-    _STATEK_CTX = {}  # noqa: F841
+    _PERM_CTX = {}  # noqa: F841
     _impl("agent_a", docs_dir, topic=0)
     out = capsys.readouterr().out
     assert "Overview" in out
@@ -65,7 +65,7 @@ def test_list_documents_in_topic(docs_dir, capsys):
 
 def test_list_documents_filters_by_audience(docs_dir, capsys):
     """Documents not matching audience are excluded."""
-    _STATEK_CTX = {}  # noqa: F841
+    _PERM_CTX = {}  # noqa: F841
     _impl("agent_b", docs_dir, topic="Preferences")
     out = capsys.readouterr().out
     assert "Overview" in out
@@ -73,16 +73,16 @@ def test_list_documents_filters_by_audience(docs_dir, capsys):
 
 
 def test_list_documents_sets_last_topic_id(docs_dir):
-    """Accessing a topic stores its ID in _STATEK_CTX."""
-    _STATEK_CTX = {}  # noqa: F841
+    """Accessing a topic stores its ID in _PERM_CTX."""
+    _PERM_CTX = {}  # noqa: F841
     _impl("agent_a", docs_dir, topic=0)
-    from statek.utils import statek_ctx_get  # pylint: disable=import-outside-toplevel
-    assert statek_ctx_get("last_topic_id") == 0
+    from statek.utils import perm_ctx_get  # pylint: disable=import-outside-toplevel
+    assert perm_ctx_get("last_topic_id") == 0
 
 
 def test_list_topics_respects_limit(docs_dir, capsys):
     """Limit parameter caps the number of listed topics."""
-    _STATEK_CTX = {}  # noqa: F841
+    _PERM_CTX = {}  # noqa: F841
     _impl("agent_a", docs_dir, topic=None, limit=1)
     out = capsys.readouterr().out
     lines = [l for l in out.strip().splitlines() if not l.startswith("#")]
