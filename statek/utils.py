@@ -740,6 +740,80 @@ def statek_ctx_get(*key_and_default) -> Any:
     return ctx.get(*key_and_default) if has_default else ctx[key_and_default[0]]
 
 
+def _get_perm_ctx() -> Optional[dict]:
+    """Locate the _PERM_CTX dict from the call stack.
+
+    Returns:
+        The _PERM_CTX dict, or None if not found.
+    """
+    ctx = next(iter(find_locals(var_name='_PERM_CTX')), None)
+    if not isinstance(ctx, dict):
+        return None
+    return ctx
+
+
+def perm_ctx_set(**kwargs) -> None:
+    """Set or update variables in the persistent execution context.
+
+    If _PERM_CTX already exists in the call stack it is updated directly.
+    Otherwise the function creates _PERM_CTX on the current job (obtained
+    from _STATEK_CTX) so it persists across steps.
+
+    Args:
+        **kwargs: key-value pairs to set in _PERM_CTX.
+
+    Raises:
+        RuntimeError: if neither _PERM_CTX nor _STATEK_CTX with a job is
+            found in the call stack.
+    """
+    ctx = _get_perm_ctx()
+    if ctx is not None:
+        ctx.update(kwargs)
+        return
+
+    # Create on demand via the job from _STATEK_CTX
+    statek_ctx = _get_statek_ctx()
+    if statek_ctx is None or 'job' not in statek_ctx:
+        raise RuntimeError("_PERM_CTX not found and no job in execution context")
+    job = statek_ctx['job']
+    if job.perm_ctx is None:
+        job.perm_ctx = {}
+    job.perm_ctx.update(kwargs)
+
+
+def perm_ctx_get(*key_and_default) -> Any:
+    """Retrieve a variable from the persistent execution context.
+
+    Accepts one or two positional arguments: the key name, and an optional
+    default returned when the key is missing.  Without a default, a missing
+    key or missing context raises KeyError / RuntimeError respectively.
+    With a default, a missing context also returns the default.
+
+    Raises:
+        KeyError: if the key is not found and no default is provided.
+        RuntimeError: if _PERM_CTX is not found and no default is provided.
+        TypeError: if called with zero or more than two arguments.
+    """
+    if not key_and_default or len(key_and_default) > 2:
+        raise TypeError(
+            f"perm_ctx_get expected 1 or 2 arguments, got {len(key_and_default)}"
+        )
+    has_default = len(key_and_default) == 2
+
+    ctx = _get_perm_ctx()
+    if ctx is None:
+        # Fall back to job.perm_ctx via _STATEK_CTX
+        statek_ctx = _get_statek_ctx()
+        if statek_ctx is not None and 'job' in statek_ctx:
+            ctx = statek_ctx['job'].perm_ctx
+
+    if ctx is None:
+        if has_default:
+            return key_and_default[1]
+        raise RuntimeError("_PERM_CTX not found in execution context")
+    return ctx.get(*key_and_default) if has_default else ctx[key_and_default[0]]
+
+
 def get_current_agent():
     """Retrieve the Agent from the current execution context (_STATEK_CTX).
 
