@@ -225,6 +225,11 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     local_context['_STATEK_CTX'] = statek_ctx
     global_context['_STATEK_CTX'] = statek_ctx
 
+    # Inject _PERM_CTX if it was previously created on the job
+    if job.perm_ctx is not None:
+        local_context['_PERM_CTX'] = job.perm_ctx
+        global_context['_PERM_CTX'] = job.perm_ctx
+
     try:
         yield custom_print_fn, custom_exit_fn
     finally:
@@ -233,7 +238,7 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
         builtins.exit = original_exit
 
         # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX']:
+        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX', '_PERM_CTX']:
             if key in local_context:
                 del local_context[key]
 

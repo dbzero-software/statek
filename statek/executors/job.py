@@ -244,6 +244,8 @@ class Job:
         self.total_bytes_received = 0
         # Total cost as reported by the LLM API provider
         self.total_cost = 0.0
+        # Persistent execution context (created on demand by perm_ctx_set)
+        self.perm_ctx: Optional[dict] = None
 
         # Log system prompt and prompt template on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
