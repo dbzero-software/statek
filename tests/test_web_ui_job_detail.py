@@ -6,7 +6,7 @@ from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.pyenv import PyEnv
 from statek.utils import CodeBlock, CallSpec
-from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
+from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from web_ui.pages.job_detail import (
     _get_console_slice,
     _get_warmup_blocks,
@@ -14,6 +14,7 @@ from web_ui.pages.job_detail import (
     _get_turn_console_ranges,
     _get_code_str,
     _get_tool_data_for_block,
+    _get_exception_messages,
     _get_system_prompt,
     _build_history_sections,
     _build_md_content,
@@ -287,6 +288,18 @@ class TestGetCodeStr:
         assert _get_code_str(['x = 1\n', 'y = 2\n']) == 'x = 1\ny = 2\n'
 
 
+class TestGetExceptionMessages:
+    def test_excludes_tool_errors_from_tool_log(self, db0_fixture):
+        """Tool errors in tool_log should NOT appear in exception messages."""
+        item = _make_chat_log_item(console_pos=0, llm_resp='code',
+                                   tool_log=[ToolError(err_message="tool err")])
+        job = _make_job(chat_log=[item])
+        job.py_env.exceptions = {0: "code err"}
+        result = _get_exception_messages(job)
+        assert "code err" in result
+        assert "tool err" not in result
+
+
 class TestGetToolDataForBlock:
     def test_plain_string_returns_empty(self, db0_fixture):
         item = _make_chat_log_item(console_pos=0, llm_resp='some code')
@@ -318,14 +331,14 @@ class TestGetToolDataForBlock:
         cb = CodeBlock(tool_calls=[cs])
         item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log='result text')
         data = _get_tool_data_for_block(cb, item)
-        assert data == [(cs, 'result text')]
+        assert data == [(cs, 'result text', None)]
 
     def test_single_tool_call_result_stored_as_list(self, db0_fixture):
         cs = CallSpec(id='T', func_name='fetch', kwargs={'url': 'http://x'})
         cb = CodeBlock(tool_calls=[cs])
         item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log=['fetched content'])
         data = _get_tool_data_for_block(cb, item)
-        assert data == [(cs, 'fetched content')]
+        assert data == [(cs, 'fetched content', None)]
 
     def test_multiple_tool_calls(self, db0_fixture):
         cs1 = CallSpec(id='T', func_name='search', args=['q1'])
@@ -333,7 +346,7 @@ class TestGetToolDataForBlock:
         cb = CodeBlock(tool_calls=[cs1, cs2])
         item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log=['res1', 'res2'])
         data = _get_tool_data_for_block(cb, item)
-        assert data == [(cs1, 'res1'), (cs2, 'res2')]
+        assert data == [(cs1, 'res1', None), (cs2, 'res2', None)]
 
     def test_fewer_results_than_calls_uses_empty_string(self, db0_fixture):
         cs1 = CallSpec(id='T', func_name='a')
@@ -341,7 +354,7 @@ class TestGetToolDataForBlock:
         cb = CodeBlock(tool_calls=[cs1, cs2])
         item = _make_chat_log_item(console_pos=0, llm_resp=cb, tool_log=['only one result'])
         data = _get_tool_data_for_block(cb, item)
-        assert data == [(cs1, 'only one result'), (cs2, '')]
+        assert data == [(cs1, 'only one result', None), (cs2, '', None)]
 
 
 def _make_job_for_md(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -734,7 +747,7 @@ class TestBuildMdContentHistory:
         assert sections[0].content_src == ContentSource.SYSTEM
         assert sections[0].warmup_num == 1
         assert sections[0].warmup_total == 1
-        assert sections[0].tool_data == [(cs, 'docs result')]
+        assert sections[0].tool_data == [(cs, 'docs result', None)]
 
 
 def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, raw_prompt=None,
@@ -826,7 +839,7 @@ class TestBuildHistorySections:
         assert len(sections) == 2
         assert sections[0].title == 'Initial Prompt'
         assert sections[1].title == 'Turn 1'
-        assert sections[1].tool_data == [(cs, 'tool result')]
+        assert sections[1].tool_data == [(cs, 'tool result', None)]
         assert sections[1].followups[0].title == 'Console Output'
         assert sections[1].followups[0].content == 'console output\n'
 

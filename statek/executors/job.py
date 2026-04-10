@@ -5,7 +5,7 @@ from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Unio
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
-from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, WarmupLogItem, UserLogItem
+from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, ToolError, WarmupLogItem, UserLogItem
 from statek.llm_api import LLM_Response, CallParams
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_markup,
@@ -635,6 +635,8 @@ class Job:
                             result = item.get_tool_result(j)
                         except (KeyError, IndexError):
                             result = ""
+                        if isinstance(result, ToolError):
+                            result = result.err_message
                         yield ChatHistoryItem(
                             role=ChatRole.TOOL,
                             content=result,
@@ -884,26 +886,57 @@ class Job:
         """Returns console_pos values that correspond to warmup blocks."""
         return {item.console_pos for item in self.chat_log if isinstance(item, WarmupLogItem)}
 
+    @staticmethod
+    def _tool_error_count(item) -> int:
+        """Return the number of ToolError entries in item.tool_log."""
+        if item.tool_log is None:
+            return 0
+        if isinstance(item.tool_log, ToolError):
+            return 1
+        if isinstance(item.tool_log, str):
+            return 0
+        return sum(1 for entry in item.tool_log if isinstance(entry, ToolError))
+
+    def _has_exception(self, item) -> bool:
+        """Return True if *item* has a code exception or a tool exception."""
+        if self.py_env.exceptions and item.console_pos in self.py_env.exceptions:
+            return True
+        return self._tool_error_count(item) > 0
+
+    def _exception_count_for_item(self, item) -> int:
+        """Return the number of exceptions for a single chat log item."""
+        count = 0
+        if self.py_env.exceptions and item.console_pos in self.py_env.exceptions:
+            count += 1
+        count += self._tool_error_count(item)
+        return count
+
     @property
     def exception_count(self) -> int:
-        """Returns the number of exceptions from LLM turns (excludes warmup blocks)."""
-        if not self.py_env.exceptions:
+        """Returns the total number of exceptions from LLM turns (excludes warmup blocks).
+
+        Counts both code-execution exceptions (py_env.exceptions) and
+        tool-call exceptions (ToolError entries in tool_log).
+        """
+        if not self.chat_log:
             return 0
-        warmup = self._warmup_console_positions
-        return sum(1 for pos in self.py_env.exceptions if pos not in warmup)
+        return sum(self._exception_count_for_item(item) for item in self.chat_log
+                   if isinstance(item, LLM_LogItem))
 
     @property
     def max_consecutive_exceptions(self) -> int:
-        """Returns the maximum number of consecutive exceptions among LLM turns only."""
-        if not self.py_env.exceptions or not self.chat_log:
+        """Returns the maximum number of consecutive exceptions among LLM turns only.
+
+        Considers both code-execution exceptions and tool-call exceptions.
+        """
+        if not self.chat_log:
             return 0
-        exception_positions = set(self.py_env.exceptions.keys())
         max_streak = 0
         streak = 0
         for item in self.chat_log:
             if not isinstance(item, LLM_LogItem):
                 continue
-            if item.console_pos in exception_positions:
+            if self._has_exception(item):
                 streak += 1
                 max_streak = max(max_streak, streak)
             else:

@@ -72,3 +72,19 @@ class TestCheckAfterStep:
         harness = LLM_Harness(max_turns=None, max_exceptions=None,
                               max_consecutive_exceptions=None, max_token_usage=None)
         harness.check_after_step(_make_job(approx_token_usage=999_999))
+
+    def test_max_exceptions_checked_after_step(self):
+        """check_after_step should also enforce max_exceptions."""
+        harness = LLM_Harness(max_turns=None, max_exceptions=3,
+                              max_consecutive_exceptions=100, max_token_usage=None)
+        harness.check_after_step(_make_job(exception_count=3))
+        with pytest.raises(LLM_HarnessError, match="exceptions"):
+            harness.check_after_step(_make_job(exception_count=4))
+
+    def test_max_consecutive_exceptions_checked_after_step(self):
+        """check_after_step should also enforce max_consecutive_exceptions."""
+        harness = LLM_Harness(max_turns=None, max_exceptions=100,
+                              max_consecutive_exceptions=2, max_token_usage=None)
+        harness.check_after_step(_make_job(max_consecutive_exceptions=2))
+        with pytest.raises(LLM_HarnessError, match="consecutive"):
+            harness.check_after_step(_make_job(max_consecutive_exceptions=3))

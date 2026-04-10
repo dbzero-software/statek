@@ -16,7 +16,7 @@ from statek.future import FutureResult
 from statek.exceptions import FutureError
 from statek.future import FutureResult
 from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
-from statek.executors.chat_log_item import WarmupLogItem
+from statek.executors.chat_log_item import ToolError, WarmupLogItem
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
@@ -529,7 +529,7 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
 
 
 async def exec_tool(call_spec: CallSpec, job: Job,
-                    local_context: Optional[dict] = None) -> str:
+                    local_context: Optional[dict] = None) -> Tuple[str, Optional[str]]:
     """Execute a single non-temporal tool invocation within the job's local context.
 
     Uses _setup_execution_context to inject the same global_context / local_context
@@ -544,9 +544,10 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         job: the associated job for context
 
     Returns:
-        The invocation result as console output (newline-joined lines).
-        When the return value is not None its repr is included; on error the
-        exception type and message are included.
+        A tuple of (result_str, error_message).  *result_str* is the
+        invocation result as console output (newline-joined lines);
+        *error_message* is ``None`` on success or the formatted exception
+        string on failure.
     """
     STATEK_LOGGER.debug(
         "exec_tool: %s args=%r kwargs=%r",
@@ -595,7 +596,8 @@ async def exec_tool(call_spec: CallSpec, job: Job,
             func = global_context.get(call_spec.func_name) or local_context.get(call_spec.func_name)
 
         if func is None:
-            return f"NameError: tool '{call_spec.func_name}' not found"
+            error_msg = f"NameError: tool '{call_spec.func_name}' not found"
+            return error_msg, error_msg
 
         try:
             args = list(call_spec.args) if call_spec.args else []
@@ -611,9 +613,11 @@ async def exec_tool(call_spec: CallSpec, job: Job,
             if result is not None:
                 private_console.append(format_default_llm_repr(result))
         except Exception as e:  # pylint: disable=broad-exception-caught
-            private_console.append(f"{type(e).__name__}: {e}")
+            error_msg = f"{type(e).__name__}: {e}"
+            private_console.append(error_msg)
+            return "\n".join(private_console), error_msg
 
-    return "\n".join(private_console)
+    return "\n".join(private_console), None
 
 
 def _log_pending_console(job: Job):
@@ -753,9 +757,12 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             regular_calls = code.get_regular_tool_calls()
             if regular_calls:
                 for call_spec in regular_calls:
-                    result = await exec_tool(call_spec, job, local_context=dict(local_context))
+                    result, error = await exec_tool(call_spec, job, local_context=dict(local_context))
                     if last_chat_log_item is not None:
-                        last_chat_log_item.push_tool_result(result)
+                        if error is not None:
+                            last_chat_log_item.push_tool_result(ToolError(err_message=error))
+                        else:
+                            last_chat_log_item.push_tool_result(result)
                     job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
 
         # Step 6: Execute code and CLI tool calls using exec_all_steps

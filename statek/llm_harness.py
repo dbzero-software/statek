@@ -57,6 +57,14 @@ class LLM_Harness:
         if self.max_token_usage is not None and job.approx_token_usage > self.max_token_usage:
             raise LLM_HarnessError(
                 f"Maximum token usage exceeded: {job.approx_token_usage}/{self.max_token_usage}")
+        if self.max_exceptions is not None and job.exception_count > self.max_exceptions:
+            raise LLM_HarnessError(
+                f"Maximum number of exceptions exceeded: {job.exception_count}/{self.max_exceptions}") # pylint: disable=line-too-long
+        if (self.max_consecutive_exceptions is not None
+                and job.max_consecutive_exceptions > self.max_consecutive_exceptions):
+            raise LLM_HarnessError(
+                f"Maximum consecutive exceptions exceeded: "
+                f"{job.max_consecutive_exceptions}/{self.max_consecutive_exceptions}")
 
 
 @lru_cache()
