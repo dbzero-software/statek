@@ -808,7 +808,10 @@ class TestGetSystemPrompt:
 
 class TestBuildHistorySections:
     def test_strip_language_hint_suffix_removes_known_suffix(self):
-        text = 'prosze o ustawienie negatywnej preferencji (PAMIĘTAJ: Odpowiedz wyłącznie po polsku)'
+        text = (
+            'prosze o ustawienie negatywnej preferencji '
+            '(PAMIĘTAJ: Odpowiedz wyłącznie po polsku)'
+        )
         assert _strip_language_hint_suffix(text) == 'prosze o ustawienie negatywnej preferencji'
 
     def test_strip_language_hint_suffix_removes_suffix_per_line(self):
@@ -869,7 +872,10 @@ class TestBuildHistorySections:
             ),
             ChatHistoryItem(
                 role=ChatRole.USER,
-                content='prosze o ustawienie negatywnej preferencji (PAMIĘTAJ: Odpowiedz wyłącznie po polsku)',
+                content=(
+                    'prosze o ustawienie negatywnej preferencji '
+                    '(PAMIĘTAJ: Odpowiedz wyłącznie po polsku)'
+                ),
                 content_src=ContentSource.USER,
             ),
         ]
