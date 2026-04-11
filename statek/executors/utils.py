@@ -4,6 +4,7 @@ import inspect
 import traceback
 import asyncio
 import builtins
+import re
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Tuple, Union
 from contextlib import contextmanager
@@ -22,11 +23,26 @@ from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
-from statek.utils import (CodeBlock, CallSpec, format_default_llm_repr,
-                         get_current_job, get_current_agent, parse_dialog,
-                         strip_markup)
+from statek.utils import (
+    CodeBlock,
+    CallSpec,
+    format_default_llm_repr,
+    extract_dialog,
+    get_current_job,
+    get_current_agent,
+    parse_dialog,
+    strip_markup
+)
 
 STATEK_LOGGER = get_statek_logger()
+MARKDOWN_MEDIA_LINK_PATTERN = re.compile(r'!?\[[^\]]*\]\([^\s)]+(?:\s+"[^"]*")?\)')
+
+
+def _normalize_dialog_media_links(dialog: str) -> str:
+    """Normalize markdown media-link paths to Selltime media paths."""
+    dialog = dialog.replace("(sandbox://private/", "(private/")
+    dialog = dialog.replace("(sandbox:/private/", "(private/")
+    return dialog
 
 
 class _MirrorDict(dict):
@@ -675,6 +691,15 @@ async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
             f"MD_DIALOG/DIRECT chat style requires a DialogAgent, "
             f"got {type(agent).__name__}."
         )
+
+    dialog = extract_dialog(llm_resp)
+    if dialog is not None:
+        dialog = _normalize_dialog_media_links(dialog)
+    if dialog and MARKDOWN_MEDIA_LINK_PATTERN.search(dialog):
+        result = agent.send_message(body=dialog)
+        if inspect.iscoroutinefunction(agent.send_message):
+            await result
+        return
 
     for body, media in parse_dialog(llm_resp):
         if body or media:
