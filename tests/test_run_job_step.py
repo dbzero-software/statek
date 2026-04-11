@@ -9,8 +9,9 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import Agent
+from statek.agents.dialog_agent import DialogAgent
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.executors.utils import run_job_step
+from statek.executors.utils import handle_dialog, run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
 from statek.llm_harness import LLM_Harness
@@ -39,6 +40,13 @@ def _check_condition_true(_):
 
 def _fetch_result_from_deps(self):
     return self.deps.value
+
+
+_DIALOG_SENT_MESSAGES = []
+
+
+def _record_dialog_message(body: str, media=None):
+    _DIALOG_SENT_MESSAGES.append((body, media))
 
 
 def create_future_not_ready():
@@ -1397,6 +1405,70 @@ class TestRunJobStepDirect:
         mock_handle.assert_called_once()
         console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
         assert "Error: no code submitted." not in console_text
+
+
+class TestHandleDialogMarkdownMedia:
+    """Tests markdown media-link preservation during dialog delivery."""
+
+    @staticmethod
+    def _make_job(job_def_factory, warmup_code=None, status=None):
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+        if status is None:
+            status = JobStatus.STARTED
+        job_def = job_def_factory(warmup_code=warmup_code)
+        job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        return Job(
+            job_def=job_def, model_family="test", model="test-model",
+            job_status=status,
+        )
+
+    @pytest.mark.asyncio
+    async def test_handle_dialog_preserves_mixed_text_with_markdown_media_link(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        _DIALOG_SENT_MESSAGES.clear()
+        agent = DialogAgent(send_message=_record_dialog_message)
+        llm_resp = (
+            'Twoja preferencja zostala zapisana. '
+            '![Preferences calendar](private/calendar.svg) '
+            'Jesli potrzebujesz zmian, daj mi znac.'
+        )
+
+        with patch("statek.executors.utils.get_current_agent", return_value=agent):
+            await handle_dialog(llm_resp)
+
+        assert _DIALOG_SENT_MESSAGES == [(llm_resp, None)]
+
+    @pytest.mark.asyncio
+    async def test_handle_dialog_normalizes_sandbox_private_markdown_media_link(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        _DIALOG_SENT_MESSAGES.clear()
+        agent = DialogAgent(send_message=_record_dialog_message)
+        llm_resp = (
+            'Oto Twoj grafik. '
+            '![Grafik](sandbox://private/calendar.svg "Maj 2026")'
+        )
+
+        with patch("statek.executors.utils.get_current_agent", return_value=agent):
+            await handle_dialog(llm_resp)
+
+        assert _DIALOG_SENT_MESSAGES == [(
+            'Oto Twoj grafik. ![Grafik](private/calendar.svg "Maj 2026")',
+            None,
+        )]
+
+    @pytest.mark.asyncio
+    async def test_handle_dialog_keeps_plain_media_path_delivery_behavior(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        _DIALOG_SENT_MESSAGES.clear()
+        agent = DialogAgent(send_message=_record_dialog_message)
+
+        with patch("statek.executors.utils.get_current_agent", return_value=agent):
+            await handle_dialog("Here is your chart: gen/chart.svg")
+
+        assert _DIALOG_SENT_MESSAGES == [("Here is your chart:", "gen/chart.svg")]
 
     @pytest.mark.asyncio
     async def test_direct_response_with_tool_calls_continues(
