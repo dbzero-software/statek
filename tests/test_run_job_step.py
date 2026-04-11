@@ -1423,7 +1423,9 @@ class TestHandleDialogMarkdownMedia:
         )
 
     @pytest.mark.asyncio
-    async def test_handle_dialog_preserves_mixed_text_with_markdown_media_link(self, db0_fixture):
+    async def test_handle_dialog_preserves_mixed_text_with_markdown_media_link(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
         _DIALOG_SENT_MESSAGES.clear()
         agent = DialogAgent(send_message=_record_dialog_message)
         llm_resp = (
@@ -1438,7 +1440,9 @@ class TestHandleDialogMarkdownMedia:
         assert _DIALOG_SENT_MESSAGES == [(llm_resp, None)]
 
     @pytest.mark.asyncio
-    async def test_handle_dialog_normalizes_sandbox_private_markdown_media_link(self, db0_fixture):
+    async def test_handle_dialog_normalizes_sandbox_private_markdown_media_link(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
         _DIALOG_SENT_MESSAGES.clear()
         agent = DialogAgent(send_message=_record_dialog_message)
         llm_resp = (
@@ -1455,7 +1459,9 @@ class TestHandleDialogMarkdownMedia:
         )]
 
     @pytest.mark.asyncio
-    async def test_handle_dialog_keeps_plain_media_path_delivery_behavior(self, db0_fixture):
+    async def test_handle_dialog_keeps_plain_media_path_delivery_behavior(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
         _DIALOG_SENT_MESSAGES.clear()
         agent = DialogAgent(send_message=_record_dialog_message)
 
