@@ -565,6 +565,27 @@ class TestSubmitNewJob:
         assert job.job_def.job_params["kind"] == "invoice"
         assert job.job_def.prompt() == "Handle invoice"
 
+    def test_locale_forwarded_to_job_def(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """locale parameter is forwarded to the JobDef."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.FR,
+            country_code=StatekCountryCode.FR,
+        )
+
+        job = submit_new_job(supervised_agent, locale=locale)
+
+        assert job.job_def.locale is locale
+
+    def test_no_locale_defaults_to_none(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Without locale, JobDef.locale is None."""
+        job = submit_new_job(supervised_agent)
+
+        assert job.job_def.locale is None
+
 
 class TestSubmitNewJobsBatch:
     """Tests for submit_new_jobs_batch function."""
@@ -593,3 +614,25 @@ class TestSubmitNewJobsBatch:
         assert jobs[0].py_env.local_state["x"] == 1
         assert jobs[1].py_env.local_state["x"] == 2
         assert not jobs[2].py_env.local_state
+
+    def test_locale_forwarded_to_each_job_def(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """locale parameter is forwarded to every created JobDef."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.DE,
+            country_code=StatekCountryCode.DE,
+        )
+
+        jobs = submit_new_jobs_batch(supervised_agent, [{"x": 1}, None], locale=locale)
+
+        assert len(jobs) == 2
+        assert all(job.job_def.locale is locale for job in jobs)
+
+    def test_batch_no_locale_defaults_to_none(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Without locale, every batch JobDef.locale is None."""
+        jobs = submit_new_jobs_batch(supervised_agent, [{"x": 1}, None])
+
+        assert all(job.job_def.locale is None for job in jobs)

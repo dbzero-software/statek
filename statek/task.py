@@ -191,6 +191,7 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
 def submit_new_job(
     agent: SupervisedAgent,
     shared_vars: Optional[Dict[str, Any]] = None,
+    locale=None,
     **kwargs
 ) -> Job:
     """Create a new job for external use.
@@ -203,12 +204,15 @@ def submit_new_job(
         agent: The agent (must inherit from SupervisedAgent).
         shared_vars: Optional ``{var_name: object}`` mapping of variables
             to share with the job.
+        locale: Optional locale for job execution.
         kwargs: Agent-specific job parameters.
 
     Returns:
         The newly created :class:`Job` instance.
     """
-    job_def = agent.create_job_def(shared_vars=shared_vars, **kwargs)
+    job_def = agent.create_job_def(
+        shared_vars=shared_vars, locale=locale, **kwargs
+    )
 
     env = PyEnv()
     if shared_vars:
@@ -226,6 +230,7 @@ def submit_new_job(
 def submit_new_jobs_batch(
     agent: SupervisedAgent,
     shared_vars_batch: List[Optional[Dict[str, Any]]],
+    locale=None,
     **kwargs
 ) -> List[Job]:
     """Create multiple jobs with different shared variables in one call.
@@ -233,12 +238,13 @@ def submit_new_jobs_batch(
     Args:
         agent: The agent (must inherit from SupervisedAgent).
         shared_vars_batch: A list of shared_vars entries — one per job.
+        locale: Optional locale for job execution.
         kwargs: Agent-specific job parameters (same for all jobs).
 
     Returns:
         A list of newly created :class:`Job` instances.
     """
     return [
-        submit_new_job(agent, shared_vars=sv, **kwargs)
+        submit_new_job(agent, shared_vars=sv, locale=locale, **kwargs)
         for sv in shared_vars_batch
     ]

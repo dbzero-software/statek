@@ -207,3 +207,31 @@ class StatekLocale:
     """
     lang_code: StatekLangCode
     country_code: StatekCountryCode
+
+
+# In-process cache: maps normalised "LANG-COUNTRY" keys to StatekLocale instances.
+# Avoids creating a new db0 object on every call with the same locale string.
+_LOCALE_CACHE: dict = {}
+
+
+def resolve_locale(locale_str: str) -> StatekLocale:
+    """Return a StatekLocale for *locale_str* (``"LANG-COUNTRY"`` format).
+
+    Results are cached in-process so the same instance is reused for repeated
+    calls with the same string.
+
+    Args:
+        locale_str: A locale string such as ``"PL-PL"`` or ``"EN-GB"``
+            (case-insensitive).
+
+    Returns:
+        A :class:`StatekLocale` with the requested language and country codes.
+    """
+    key = locale_str.upper()
+    if key not in _LOCALE_CACHE:
+        lang, country = key.split("-", 1)
+        _LOCALE_CACHE[key] = StatekLocale(
+            lang_code=StatekLangCode[lang],
+            country_code=StatekCountryCode[country],
+        )
+    return _LOCALE_CACHE[key]

@@ -4,6 +4,7 @@
 from unittest.mock import MagicMock, PropertyMock
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
+from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.pyenv import PyEnv
 from statek.utils import CodeBlock, CallSpec
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
@@ -15,6 +16,7 @@ from web_ui.pages.job_detail import (
     _get_code_str,
     _get_tool_data_for_block,
     _get_exception_messages,
+    _get_locale_str,
     _get_system_prompt,
     _strip_language_hint_suffix,
     _build_history_sections,
@@ -136,6 +138,29 @@ class TestGetConsoleSlice:
     def test_to_pos_beyond_list(self):
         console = ['a', 'b']
         assert _get_console_slice(console, 0, 100) == 'a\nb\n'
+
+
+class TestGetLocaleStr:
+    def test_returns_lang_and_country_when_locale_defined(self, db0_fixture):
+        job = _make_job()
+        job.job_def.locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+
+        assert _get_locale_str(job) == 'PL-PL'
+
+    def test_returns_empty_string_when_locale_missing(self):
+        job = _make_job()
+        job.job_def.locale = None
+
+        assert _get_locale_str(job) == ''
+
+    def test_returns_empty_string_when_job_def_missing(self):
+        job = MagicMock()
+        job.job_def = None
+
+        assert _get_locale_str(job) == ''
 
 
 class TestGetWarmupBlocks:
@@ -387,7 +412,7 @@ def _call_build_md(job, **kwargs):
     )
 
 
-class TestBuildMdContentSummary:
+class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
     def test_includes_title(self, db0_fixture):
         job = _make_job_for_md()
         md = _call_build_md(job)
@@ -406,6 +431,26 @@ class TestBuildMdContentSummary:
         assert 'gpt-4' in md
         assert '1.5' in md
         assert '7' in md
+
+    def test_includes_locale_when_present(self, db0_fixture):
+        job = _make_job_for_md()
+        job.job_def.locale = StatekLocale(
+            lang_code=StatekLangCode.FR,
+            country_code=StatekCountryCode.CA,
+        )
+
+        md = _call_build_md(job)
+
+        assert 'Locale' in md
+        assert 'FR-CA' in md
+
+    def test_omits_locale_when_missing(self, db0_fixture):
+        job = _make_job_for_md()
+        job.job_def.locale = None
+
+        md = _call_build_md(job)
+
+        assert 'Locale' not in md
 
     def test_includes_chat_style_when_present(self, db0_fixture):
         job = _make_job_for_md()

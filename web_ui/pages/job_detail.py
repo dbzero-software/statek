@@ -131,6 +131,27 @@ def _get_code_str(llm_resp) -> str:
     return str(llm_resp)
 
 
+def _get_locale_str(job) -> str:
+    """Return a compact locale label for the job, or an empty string."""
+    try:
+        if not job.job_def:
+            return ''
+        locale = job.job_def.locale
+        if locale is None:
+            return ''
+        lang_code = getattr(locale, 'lang_code', None)
+        country_code = getattr(locale, 'country_code', None)
+        if lang_code and country_code:
+            return f'{lang_code}-{country_code}'
+        if lang_code:
+            return str(lang_code)
+        if country_code:
+            return str(country_code)
+    except Exception:  # pylint: disable=broad-except
+        return ''
+    return ''
+
+
 def _get_tool_data_for_block(code_block, chat_log_item) -> list:
     """Return [(call_spec, result_str, error_str|None), ...] for a code block's tool calls.
 
@@ -577,6 +598,7 @@ def _build_md_content(
     parts: list[str] = []
     sections = _build_history_sections(job)
     errors = _get_exception_messages(job)
+    locale_str = _get_locale_str(job)
 
     # ── Header ──────────────────────────────────────────────────────────────
     parts.append('# Job Detail\n')
@@ -586,6 +608,8 @@ def _build_md_content(
     parts.append(f'| **UUID** | `{_escape_md(uuid_str)}` |')
     parts.append(f'| **Agent** | {_escape_md(agent_role)} |')
     parts.append(f'| **Model** | `{_escape_md(model)}` |')
+    if locale_str:
+        parts.append(f'| **Locale** | `{_escape_md(locale_str)}` |')
     parts.append(f'| **Cost** | `${total_cost:.4f}` |')
     parts.append(f'| **Turns** | {num_turns} |')
     if chat_style:
@@ -970,6 +994,7 @@ def create_job_detail_dialog(job) -> None:
         pass
 
     model = getattr(job, 'model', None) or '—'
+    locale_str = _get_locale_str(job)
     chat_style_str = ''
     try:
         if job.job_def and job.job_def.chat_style is not None:
@@ -1007,6 +1032,10 @@ def create_job_detail_dialog(job) -> None:
                         with ui.row().classes('items-center gap-1'):
                             ui.icon('memory').classes('text-sm text-gray-500')
                             ui.label(model).classes('text-xs font-mono text-gray-600')
+                        if locale_str:
+                            with ui.row().classes('items-center gap-1'):
+                                ui.icon('language').classes('text-sm text-gray-500')
+                                ui.label(locale_str).classes('text-xs font-mono text-gray-600')
                         if chat_style_str:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('forum').classes('text-sm text-gray-500')

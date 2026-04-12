@@ -6,7 +6,7 @@ import dbzero as db0
 
 from statek.locale import (
     StatekLangCode, StatekCountryCode, StatekLocale,
-    get_language_rule, get_language_hint,
+    get_language_rule, get_language_hint, resolve_locale,
 )
 
 
@@ -106,6 +106,40 @@ class TestGetLanguageRule:
         # Pick a language unlikely to have a hardcoded rule
         rule = get_language_rule(StatekLangCode.ET)
         assert rule is None
+
+
+class TestResolveLocale:
+    """Tests for the resolve_locale helper."""
+
+    def setup_method(self):
+        """Clear the module-level cache between tests."""
+        # pylint: disable=import-outside-toplevel
+        import statek.locale as _locale_mod
+        _locale_mod._LOCALE_CACHE.clear()  # pylint: disable=protected-access
+
+    def test_creates_new_locale_from_string(self, db0_fixture):
+        """resolve_locale creates a StatekLocale when none exists yet."""
+        locale = resolve_locale("PL-PL")
+        assert locale.lang_code == StatekLangCode.PL
+        assert locale.country_code == StatekCountryCode.PL
+
+    def test_returns_same_instance_for_repeated_calls(self, db0_fixture):
+        """A second call with the same string returns the cached instance."""
+        first = resolve_locale("DE-DE")
+        second = resolve_locale("DE-DE")
+        assert first is second
+
+    def test_different_locale_strings_produce_distinct_instances(self, db0_fixture):
+        """Different locale strings must produce distinct StatekLocale objects."""
+        pl = resolve_locale("PL-PL")
+        en = resolve_locale("EN-GB")
+        assert pl is not en
+
+    def test_locale_string_is_case_insensitive(self, db0_fixture):
+        """resolve_locale should handle lower-case or mixed-case input."""
+        lower = resolve_locale("fr-fr")
+        upper = resolve_locale("FR-FR")
+        assert lower is upper
 
 
 class TestGetLanguageHint:
