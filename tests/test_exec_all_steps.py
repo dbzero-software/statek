@@ -5,7 +5,10 @@ import pytest
 from statek.executors.utils import exec_all_steps
 from statek.exceptions import FutureError
 from statek.utils import CodeBlock, CallSpec
-from tests.test_exec_step import get_value_not_ready
+from tests.test_exec_step import (
+    create_future_not_ready, create_future_ready,
+    get_value, get_value_not_ready,
+)
 
 
 DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
@@ -132,3 +135,102 @@ class TestExecAllSteps:
         outputs = []
         await exec_all_steps(block, job, lambda idx, s: outputs.append((idx, s)))
         assert outputs == [(0, "123")]
+
+    # --- Temporal function tests: multiple CLI steps ---
+
+    @pytest.mark.asyncio
+    async def test_future_error_in_first_cli_step_blocks_remaining(self, job_factory):
+        """FutureError in the first CLI step prevents subsequent CLI steps from running."""
+        job = self.create_job(job_factory)
+        job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
+        cs0 = CallSpec(id="a", func_name="python_cli",
+                       kwargs={"code": "result = get_value_not_ready()\nprint(result)"})
+        cs1 = CallSpec(id="b", func_name="python_cli",
+                       kwargs={"code": "y = 99"})
+        block = CodeBlock(code=None, tool_calls=[cs0, cs1])
+
+        with pytest.raises(FutureError) as exc_info:
+            await exec_all_steps(block, job, lambda idx, s: None)
+
+        # First CLI step (index 0), second instruction (print)
+        assert exc_info.value.instr_num == (0, 1)
+        # Second CLI step never ran
+        assert job.py_env.local_state.get('y') is None
+
+    @pytest.mark.asyncio
+    async def test_future_error_in_second_cli_step(self, job_factory):
+        """First CLI step succeeds; FutureError in second carries correct tuple."""
+        job = self.create_job(job_factory)
+        job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
+        cs0 = CallSpec(id="a", func_name="python_cli",
+                       kwargs={"code": "x = 1"})
+        cs1 = CallSpec(id="b", func_name="python_cli",
+                       kwargs={"code": "result = get_value_not_ready()\nprint(result)"})
+        block = CodeBlock(code=None, tool_calls=[cs0, cs1])
+
+        with pytest.raises(FutureError) as exc_info:
+            await exec_all_steps(block, job, lambda idx, s: None)
+
+        # Second CLI step (index 1), second instruction (print)
+        assert exc_info.value.instr_num == (1, 1)
+        # First CLI step completed
+        assert job.py_env.local_state.get('x') == 1
+
+    @pytest.mark.asyncio
+    async def test_continuation_resumes_blocked_cli_step(self, job_factory):
+        """Tuple instr_num resumes at the correct CLI step and instruction."""
+        job = self.create_job(job_factory)
+        job.py_env.local_state = {'future_val': create_future_not_ready()}
+        cs0 = CallSpec(id="a", func_name="python_cli",
+                       kwargs={"code": "a = 1"})
+        cs1 = CallSpec(id="b", func_name="python_cli",
+                       kwargs={"code": "b = 2\nprint(future_val)"})
+        block = CodeBlock(code=None, tool_calls=[cs0, cs1])
+
+        # First run — blocks at cli step 1, instruction 1
+        with pytest.raises(FutureError) as exc_info:
+            await exec_all_steps(block, job, lambda idx, s: None)
+        assert exc_info.value.instr_num == (1, 1)
+        assert job.py_env.local_state.get('b') == 2
+
+        # Replace with ready future and resume
+        job.py_env.local_state['future_val'] = create_future_ready(77)
+        outputs = []
+        await exec_all_steps(block, job,
+                             lambda idx, s: outputs.append((idx, s)),
+                             instr_num=(1, 1))
+        assert (1, "77") in outputs
+
+    @pytest.mark.asyncio
+    async def test_multiple_cli_steps_each_with_temporal_sequential_blocking(self, job_factory):
+        """Two CLI steps each call a temporal function; first blocks the entire step."""
+        job = self.create_job(job_factory)
+        job.py_env.local_state = {
+            'get_value_not_ready': get_value_not_ready,
+            'get_value': get_value,
+        }
+        cs0 = CallSpec(id="a", func_name="python_cli",
+                       kwargs={"code": "r0 = get_value_not_ready()\nprint(r0)"})
+        cs1 = CallSpec(id="b", func_name="python_cli",
+                       kwargs={"code": "r1 = get_value()\nprint(r1)"})
+        block = CodeBlock(code=None, tool_calls=[cs0, cs1])
+
+        # The not-ready future in cli step 0 blocks before cli step 1 executes
+        with pytest.raises(FutureError) as exc_info:
+            await exec_all_steps(block, job, lambda idx, s: None)
+
+        assert exc_info.value.instr_num == (0, 1)
+        # cli step 1 never ran — r1 not set
+        assert job.py_env.local_state.get('r1') is None
+
+    @pytest.mark.asyncio
+    async def test_ready_temporal_in_cli_step(self, job_factory):
+        """A ready temporal function in a CLI step produces output normally."""
+        job = self.create_job(job_factory)
+        job.py_env.local_state = {'get_value': get_value}
+        cs = CallSpec(id="1", func_name="python_cli",
+                      kwargs={"code": "result = get_value()\nresult"})
+        block = CodeBlock(code=None, tool_calls=[cs])
+        outputs = []
+        await exec_all_steps(block, job, lambda idx, s: outputs.append((idx, s)))
+        assert (0, "42") in outputs

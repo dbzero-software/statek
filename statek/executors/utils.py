@@ -351,6 +351,12 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                         compile(ast.Expression(body=node.value),
                                 filename="<string>", mode="eval"),
                         global_context, sync_local)
+                    if isinstance(result, FutureResult):
+                        result = result.value
+                        if asyncio.iscoroutine(result):
+                            import nest_asyncio
+                            nest_asyncio.apply()
+                            result = asyncio.get_running_loop().run_until_complete(result)
                     if result is not None or idx not in print_call_exprs:
                         output_fn(format_default_llm_repr(result))
                 else:
@@ -502,8 +508,7 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
     if isinstance(code, str):
         code = CodeBlock(code=code)
 
-    # Determine whether to run regular code and where to start CLI steps
-    skip_regular = isinstance(instr_num, tuple)
+    skip_regular = instr_num is not None and not isinstance(instr_num, int)
     regular_instr_num = None if skip_regular else instr_num
     cli_start_idx = instr_num[0] if skip_regular else 0
     cli_instr_num = instr_num[1] if skip_regular else None
@@ -631,6 +636,10 @@ async def exec_tool(call_spec: CallSpec, job: Job,
             result = func(*args, **kwargs)
             if asyncio.iscoroutine(result):
                 result = await result
+            if isinstance(result, FutureResult):
+                result = result.value
+                if asyncio.iscoroutine(result):
+                    result = await result
             if result is not None:
                 private_console.append(format_default_llm_repr(result))
         except Exception as e:  # pylint: disable=broad-exception-caught

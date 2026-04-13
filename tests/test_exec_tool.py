@@ -9,6 +9,11 @@ from statek.utils import CallSpec
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
 from statek.system import tool, docs as docs_tool, brief as brief_tool
+from statek.future import FutureResult
+from tests.test_exec_step import (
+    create_future_ready, create_future_not_ready, MemoObject,
+    _check_condition_true,
+)
 
 
 # Module-level @tool function (db0 does not allow nested/decorated functions as members)
@@ -44,6 +49,11 @@ async def _async_agent_tool(value: str, **kwargs):  # pylint: disable=unused-arg
 async def _async_agent_tool_error(**kwargs):  # pylint: disable=unused-argument
     """Async agent tool that raises an exception."""
     raise ValueError("async agent tool error")
+
+
+async def _async_fetch_result_from_deps(future_result):
+    """Async complement that returns the value from deps."""
+    return future_result.deps.value
 
 
 class _LLMReprToolObject:  # pylint: disable=too-few-public-methods
@@ -361,3 +371,49 @@ class TestDocsAgentIntegration:
         assert not result.endswith('""""'), (
             f"Output should end with '\"\"\"', not '\"\"\"\"', got tail: {result[-20:]!r}"
         )
+
+
+class TestExecToolFutureResult:
+    """Tests for FutureResult/FutureElement unwrapping in exec_tool."""
+
+    @pytest.mark.asyncio
+    async def test_sync_future_result_unwrapped(self, db0_fixture):  # pylint: disable=unused-argument
+        """Tool returning a ready FutureResult has .value unwrapped."""
+        def tool_returning_future():
+            return create_future_ready(99)
+
+        job = _make_job("role_future_sync", context_extras={
+            "tool_returning_future": tool_returning_future})
+        result, error = await exec_tool(_call_spec("tool_returning_future"), job)
+
+        assert error is None
+        assert "99" in result
+
+    @pytest.mark.asyncio
+    async def test_async_complement_future_result_unwrapped(self, db0_fixture):  # pylint: disable=unused-argument
+        """Tool returning a FutureResult with async complement has .value awaited."""
+        def tool_returning_async_future():
+            future = FutureResult(deps=MemoObject(value=77), state_num=0)
+            future.set_complement_functions(complement=_async_fetch_result_from_deps,
+                                            condition=_check_condition_true)
+            return future
+
+        job = _make_job("role_future_async", context_extras={
+            "tool_returning_async_future": tool_returning_async_future})
+        result, error = await exec_tool(_call_spec("tool_returning_async_future"), job)
+
+        assert error is None
+        assert "77" in result
+
+    @pytest.mark.asyncio
+    async def test_not_ready_future_result_raises_error(self, db0_fixture):  # pylint: disable=unused-argument
+        """Tool returning a not-ready FutureResult produces a FutureError in output."""
+        def tool_returning_not_ready():
+            return create_future_not_ready()
+
+        job = _make_job("role_future_err", context_extras={
+            "tool_returning_not_ready": tool_returning_not_ready})
+        result, error = await exec_tool(_call_spec("tool_returning_not_ready"), job)
+
+        assert error is not None
+        assert "FutureError" in result
