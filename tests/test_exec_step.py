@@ -939,6 +939,18 @@ x + y"""
         assert "30" in simple_job.py_env.console[0]
 
     @pytest.mark.asyncio
+    async def test_exec_step_temporal_expression_prints_value(self, job_factory):
+        """Standalone temporal function call prints the unwrapped FutureResult value."""
+        simple_job = self.create_job(job_factory)
+        simple_job.py_env.local_state = {'get_value': get_value}
+
+        await exec_step('get_value()', simple_job)
+
+        assert simple_job.py_env.console is not None
+        assert len(simple_job.py_env.console) == 1
+        assert "42" in simple_job.py_env.console[0]
+
+    @pytest.mark.asyncio
     async def test_exec_step_local_vars_in_comprehension(self, job_factory):
         """Test that local variables are accessible in list comprehensions."""
         simple_job = self.create_job(job_factory)
