@@ -636,6 +636,10 @@ async def exec_tool(call_spec: CallSpec, job: Job,
             result = func(*args, **kwargs)
             if asyncio.iscoroutine(result):
                 result = await result
+            if isinstance(result, FutureResult):
+                result = result.value
+                if asyncio.iscoroutine(result):
+                    result = await result
             if result is not None:
                 private_console.append(format_default_llm_repr(result))
         except Exception as e:  # pylint: disable=broad-exception-caught
