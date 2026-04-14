@@ -257,7 +257,6 @@ class TestProcessRequestToolScope:
     async def test_python_cli_included_only_for_direct_style(self, openrouter_api):
         """python_cli (target=DIRECT) appears when chat_style=DIRECT, not for other styles."""
         from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
-        from statek.system import find_tools  # pylint: disable=import-outside-toplevel
 
         captured = {}
 
