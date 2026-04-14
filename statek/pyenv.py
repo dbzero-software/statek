@@ -36,3 +36,9 @@ class PyEnv:
         if self.console is None:
             self.console = []
         self.console.append(out)
+
+    def update_locals(self, **kwargs):
+        """Merge values into local_state, creating it if needed."""
+        if self.local_state is None:
+            self.local_state = {}
+        self.local_state.update(kwargs)
