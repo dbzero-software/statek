@@ -43,6 +43,11 @@ class CallSpec:
         return f"{self.func_name}({', '.join(parts)})"
 
 
+# CallSpec-compatible tuple for chat history usage in DIRECT mode.
+# This allow to creat chat history without write access.
+CallSpecWrapper = namedtuple("CallSpecWrapper", ["id", "func_name", "args", "kwargs"])
+
+
 @db0.memo
 @dataclass
 class CodeBlock:

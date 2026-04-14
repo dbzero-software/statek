@@ -8,8 +8,8 @@ from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, ToolError, WarmupLogItem, UserLogItem
 from statek.llm_api import LLM_Response, CallParams
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
-from statek.utils import (prompt_append_console, CodeBlock, CallSpec, strip_markup,
-                          extract_dialog,
+from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
+                          strip_markup, extract_dialog,
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
@@ -551,6 +551,7 @@ class Job:
         push_log = self.py_env.push_log or {}
         console = self.py_env.console or []
         console_len = len(console)
+        is_direct = self.job_def.chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
         warmup = self.job_def.warmup_code
         warmup_blocks: List[Union[str, CodeBlock]] = (
             [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
@@ -654,6 +655,35 @@ class Job:
                     else None
                 )
                 block_code = block.code if isinstance(block, CodeBlock) else block
+
+                # DIRECT style: wrap plain warmup code as python_cli tool calls
+                # so the LLM sees them as tool use, not confusing text/console.
+                if is_direct and isinstance(item, WarmupLogItem) and not tool_calls and block_code:
+                    warmup_call = CallSpecWrapper(
+                        id=f"STATEK-WARMUP-{item.warmup_block_num:03d}",
+                        func_name="python_cli",
+                        args=None,
+                        kwargs={"code": block_code},
+                    )
+                    yield ChatHistoryItem(
+                        role=ChatRole.ASSISTANT,
+                        content=None,
+                        content_src=asst_src,
+                        tool_calls=[warmup_call],
+                    )
+                    # Console output as TOOL result instead of USER message
+                    from_pos = item.console_pos
+                    to_pos = end_positions[idx]
+                    console_text = "\n".join(console[from_pos:to_pos]) if to_pos > from_pos and console else ""
+                    yield ChatHistoryItem(
+                        role=ChatRole.TOOL,
+                        content=console_text,
+                        content_src=ContentSource.CONSOLE,
+                        tool_calls=[warmup_call],
+                    )
+                    yield from _yield_pushes(from_pos, to_pos)
+                    continue
+
                 if tool_calls:
                     yield ChatHistoryItem(
                         role=ChatRole.ASSISTANT,

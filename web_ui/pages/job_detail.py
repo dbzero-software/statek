@@ -1,6 +1,7 @@
 """Job detail view for the Statek web UI."""
 
 import io
+import traceback
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -228,6 +229,7 @@ def _get_history_items(job) -> list:
     try:
         return [item for item in getter() if item is not None]
     except Exception:  # pylint: disable=broad-except
+        traceback.print_exc()
         return []
 
 
@@ -278,12 +280,22 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 content_src = item.content_src
                 render_as_code = not is_direct
             tool_data = []
+            content = item.content or ''
             if item.tool_calls:
-                tool_data = [(cs, '', None) for cs in list(item.tool_calls)]
+                tool_calls_list = list(item.tool_calls)
+                # DIRECT warmup: python_cli tool calls carry the code in kwargs;
+                # extract it so the code block shows the actual warmup code
+                # instead of an empty "(empty)" block.
+                if is_warmup and not content and len(tool_calls_list) == 1:
+                    cs0 = tool_calls_list[0]
+                    if cs0.func_name == 'python_cli' and cs0.kwargs and 'code' in cs0.kwargs:
+                        content = cs0.kwargs['code']
+                        tool_calls_list = []
+                tool_data = [(cs, '', None) for cs in tool_calls_list]
             current = _HistorySection(
                 kind='assistant',
                 title=title,
-                content=item.content or '',
+                content=content,
                 content_src=content_src,
                 render_as_code=render_as_code,
                 tool_data=tool_data,
