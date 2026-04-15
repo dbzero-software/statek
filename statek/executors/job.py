@@ -183,27 +183,13 @@ class JobDef:
             return self._chat_style
         return get_statek_settings().chat_style
 
-    def prompt(self) -> str:
-        """
-        Generate the user prompt from the agent's prompt template.
-
-        Reads the 'prompt_template' key from agent._metadata and formats it
-        with job_params using format_map.
-
-        Returns:
-            Formatted prompt string, or None if no template is set
-        """
+    @property
+    def system_prompt(self) -> str:
+        """Return the agent's system prompt formatted with job-specific parameters."""
         if self.agent is None:
             return ""
-        template = (
-            self.agent._metadata.get('prompt_template')  # pylint: disable=protected-access
-            if self.agent._metadata else None
-        )
-        if template is None:
-            return None
-        if self.job_params:
-            return template.format_map(self.job_params)
-        return template
+        return self.agent.system_prompt(job_params=self.job_params)
+
 
 
 @memo
@@ -276,10 +262,9 @@ class Job:
         # Persistent execution context (created on demand by perm_ctx_set)
         self.perm_ctx: Optional[dict] = None
 
-        # Log system prompt and prompt template on job creation if logging is enabled
+        # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
-            self._log(self.job_def.agent.system_prompt(job_params=self.job_def.job_params))
-            self._log(self.job_def.prompt())
+            self._log(self.job_def.system_prompt)
 
     @property
     def model_family(self) -> Optional[str]:
@@ -536,13 +521,13 @@ class Job:
                 parts = [p for p in [console_part, push_part] if p]
                 return "\n".join(parts)
             else:
-                # No warmup: template + all console is the first user prompt
-                template = self.job_def.prompt()
+                # No warmup: system_prompt + all console is the first user prompt
+                sys_prompt = self.job_def.system_prompt or None
                 console_part = prompt_append_console(
                     self.py_env.console, chat_style, from_pos=0, xml_tags=xml_tags
                 )
                 push_part = self._collect_push_log(from_pos=0)
-                parts = [p for p in [template, console_part, push_part] if p]
+                parts = [p for p in [sys_prompt, console_part, push_part] if p]
                 return "\n".join(parts)
         else:
             # Not first prompt: format console from last LLM element's console position
@@ -593,14 +578,14 @@ class Job:
             [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
         ) if warmup else []
 
-        # When warmup is present, the job prompt moves out of the current user
-        # message and needs to stay anchored at the head of the history.
+        # When warmup is present, the system prompt moves out of the current
+        # user message and needs to stay anchored at the head of the history.
         if warmup_blocks:
-            prompt = self.job_def.prompt()
-            if prompt:
+            sys_prompt = self.job_def.system_prompt
+            if sys_prompt:
                 yield ChatHistoryItem(
                     role=ChatRole.SYSTEM,
-                    content=prompt,
+                    content=sys_prompt,
                     content_src=ContentSource.SYSTEM,
                 )
 
@@ -780,10 +765,7 @@ class Job:
         )
         if self.job_def.model is not None:
             metadata["MODEL"] = self.job_def.model
-        system_prompt = (
-            self.job_def.agent.system_prompt(job_params=self.job_def.job_params)
-            if self.job_def.agent is not None else ""
-        )
+        system_prompt = self.job_def.system_prompt
 
         # Append language rule when locale specifies a non-EN language
         # and AUTO_LANG_RULE is not explicitly disabled in metadata.
@@ -800,14 +782,13 @@ class Job:
             if (
                 history
                 and history[0].role == ChatRole.USER
+                and system_prompt
             ):
-                prompt = self.job_def.prompt()
-                if prompt:
-                    yield ChatHistoryItem(
-                        role=ChatRole.SYSTEM,
-                        content=prompt,
-                        content_src=ContentSource.SYSTEM,
-                    )
+                yield ChatHistoryItem(
+                    role=ChatRole.SYSTEM,
+                    content=system_prompt,
+                    content_src=ContentSource.SYSTEM,
+                )
             yield from history
 
         request_params: Dict[str, Any] = {

@@ -11,7 +11,7 @@ from tests.conftest import create_chat_log_item
 
 def _make_agent(role):
     return Agent(role=role, _system_prompt="Sys",
-                 _metadata={"prompt_template": "Task", "MODEL": "test-model"}, _tools=[])
+                 _metadata={"MODEL": "test-model"}, _tools=[])
 
 
 def _make_job(agent, warmup_code=None, started=False):

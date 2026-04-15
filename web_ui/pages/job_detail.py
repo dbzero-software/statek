@@ -992,9 +992,7 @@ def _get_system_prompt(job) -> str:
         if not job.job_def or not job.job_def.agent:
             return ''
         try:
-            return job.job_def.agent.system_prompt(
-                job_params=job.job_def.job_params
-            ) or ''
+            return job.job_def.system_prompt or ''
         except Exception:  # pylint: disable=broad-except
             raw = job.job_def.agent._system_prompt or ''  # pylint: disable=protected-access
             return raw

@@ -121,10 +121,10 @@ def _render_job_def_card(job_def) -> None:
         with ui.expansion('Warmup Code', icon='code').classes('w-full'):
             _render_warmup_preview(job_def.warmup_code)
 
-        # Prompt template preview (from agent metadata)
-        prompt_text = job_def.prompt()
+        # System prompt preview
+        prompt_text = job_def.system_prompt
         if prompt_text:
-            with ui.expansion('Prompt Template', icon='chat').classes('w-full'):
+            with ui.expansion('System Prompt', icon='chat').classes('w-full'):
                 preview = prompt_text[:500] + ('…' if len(prompt_text) > 500 else '')
                 ui.code(preview, language='text').classes('w-full text-xs')
 

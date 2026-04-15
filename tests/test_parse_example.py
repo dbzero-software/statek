@@ -25,7 +25,7 @@ def _fmt(example, style=ChatStyle.MARKDOWN, warmup=True, metadata=False) -> str:
 
 def _job_with_warmup():
     agent = Agent(role="test", _system_prompt="sys",
-                  _metadata={'prompt_template': 'task', 'MODEL': 'test-model'}, _tools=[])
+                  _metadata={'MODEL': 'test-model'}, _tools=[])
     job_def = JobDef(agent=agent, warmup_code="setup = True")
     job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
     job.py_env.console = ["True", "after_llm"]

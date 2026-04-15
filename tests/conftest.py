@@ -140,21 +140,18 @@ def db0_fixture():
 @pytest.fixture
 def agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
-    return Agent(role="test", _system_prompt="Test agent",
-                 _metadata={'prompt_template': 'Test task', 'MODEL': 'test-model'}, _tools=[])
+    return Agent(role="test", _system_prompt="Test agent", _tools=[],
+                 _metadata={'MODEL': 'test-model'} )
 
 
 @pytest.fixture
 def agent_factory(db0_fixture):  # pylint: disable=unused-argument
     """Factory fixture to create Agent instances with custom parameters."""
-    def _create_agent(prompt_template="Test task", role="test", system_prompt="Test", tools=None):
-        metadata = {'MODEL': 'test-model'}
-        if prompt_template:
-            metadata['prompt_template'] = prompt_template
+    def _create_agent(role="test", system_prompt="Test", tools=None):
         return Agent(
             role=role,
             _system_prompt=system_prompt,
-            _metadata=metadata,
+            _metadata={'MODEL': 'test-model'},
             _tools=tools or []
         )
     return _create_agent
@@ -166,7 +163,7 @@ def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
     return SupervisedAgent(
         role="test",
         _system_prompt="Test agent",
-        _metadata={'prompt_template': 'Test task', 'MODEL': 'test-model'},
+        _metadata={'MODEL': 'test-model'},
         _tools=[]
     )
 

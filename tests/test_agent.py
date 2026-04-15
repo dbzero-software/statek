@@ -160,6 +160,36 @@ class TestAgent:
         assert result is True
         assert agent.description == "New"
 
+    def test_shared_var_names_resolved_from_job_params(self, db0_fixture):  # pylint: disable=unused-argument
+        """shared_var_names placeholder is resolved to comma-delimited shared_vars keys."""
+        agent = Agent(
+            role="test",
+            _system_prompt="Available variables: {shared_var_names}",
+            _tools=[]
+        )
+        result = agent.system_prompt(job_params={"shared_vars": ["user", "message"]})
+        assert result == "Available variables: user, message"
+
+    def test_shared_var_names_empty_when_no_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
+        """shared_var_names resolves to empty string when shared_vars not in job_params."""
+        agent = Agent(
+            role="test",
+            _system_prompt="Variables: {shared_var_names}",
+            _tools=[]
+        )
+        result = agent.system_prompt(job_params={"other": "value"})
+        assert result == "Variables: "
+
+    def test_shared_var_names_empty_when_no_job_params(self, db0_fixture):  # pylint: disable=unused-argument
+        """shared_var_names resolves to empty string when job_params is None."""
+        agent = Agent(
+            role="test",
+            _system_prompt="Variables: {shared_var_names}",
+            _tools=[]
+        )
+        result = agent.system_prompt()
+        assert result == "Variables: "
+
 
 class TestSupervisedAgentCustomRole:
     """Test cases for SupervisedAgent with custom role support."""

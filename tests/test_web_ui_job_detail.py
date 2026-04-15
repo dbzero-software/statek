@@ -812,9 +812,9 @@ def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, r
         agent = MagicMock()
         agent._system_prompt = raw_prompt  # pylint: disable=protected-access
         if system_prompt_raises:
-            agent.system_prompt.side_effect = system_prompt_raises
+            type(job_def).system_prompt = PropertyMock(side_effect=system_prompt_raises)
         else:
-            agent.system_prompt.return_value = system_prompt_return
+            type(job_def).system_prompt = PropertyMock(return_value=system_prompt_return)
         job_def.agent = agent
     job.job_def = job_def
     return job
