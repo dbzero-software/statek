@@ -8,6 +8,7 @@ from datetime import date, datetime, time as _time
 from functools import wraps
 import nest_asyncio
 import dbzero as db0
+from .chat_style import ChatStyle
 from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
 from .utils import find_locals, get_current_agent_name, get_current_job
@@ -553,7 +554,7 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
         print(f"{type(e).__name__}: {e}")
 
 
-@tool(system=True)
+@tool(system=True, target={ChatStyle.DIRECT})  # pylint: disable=no-member
 def python_cli(code: str, **kwargs):  # pylint: disable=unused-argument
     """Execute Python code within the current job context.
 

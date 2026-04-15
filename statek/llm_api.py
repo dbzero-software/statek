@@ -215,7 +215,7 @@ class LLM_API(ABC):
         )
 
         tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
-        if tools_scope and available_tools:
+        if tools_scope and available_tools is not None:
             tools = select_tools(available_tools, tools_scope, chat_style=chat_style)
             if tools_scope in ("SYSTEM", "ALL", None):
                 existing = {t.__name__ for t in tools}

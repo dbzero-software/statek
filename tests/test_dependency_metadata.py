@@ -17,7 +17,7 @@ def _read_lines(path: str) -> list[str]:
 def test_runtime_requirements_include_web_ui_pdf_dependencies():
     requirements = _read_lines('requirements.txt')
 
-    assert 'dbzero==0.1.11' in requirements
+    assert 'dbzero==0.1.12' in requirements
     assert 'nicegui==2.24.2' in requirements
     assert 'markdown2==2.5.4' in requirements
     assert 'weasyprint==68.1' in requirements
