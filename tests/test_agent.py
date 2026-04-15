@@ -252,6 +252,18 @@ class TestWarmupDef:
 class TestCreateJobDefWarmup:
     """Test cases for SupervisedAgent.create_job_def warmup_def integration."""
 
+    def test_model_initialized_from_agent_metadata(self, db0_fixture):  # pylint: disable=unused-argument
+        """JobDef freezes model metadata at creation time."""
+        agent = SupervisedAgent(
+            role="test",
+            _system_prompt="test",
+            _metadata={"MODEL": "deepseek/deepseek-v3.2"},
+            _tools=[],
+        )
+        job_def = agent.create_job_def()
+        assert job_def.model == "deepseek/deepseek-v3.2"
+        assert job_def.model_family == "deepseek"
+
     def test_no_warmup_code_no_warmup_def(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def with no warmup_code and no warmup_def produces None warmup."""
         agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])

@@ -16,6 +16,7 @@ from web_ui.pages.job_detail import (
     _get_code_str,
     _get_tool_data_for_block,
     _get_exception_messages,
+    _get_job_model,
     _get_locale_str,
     _get_system_prompt,
     _strip_language_hint_suffix,
@@ -95,6 +96,7 @@ def _make_job(
     job_def = MagicMock()
     job_def.warmup_code = warmup_code
     job_def.chat_style = chat_style
+    job_def.model = None
     job.job_def = job_def
     positions = warmup_console_positions or []
     job._warmup_end_positions = MagicMock(return_value=positions)  # pylint: disable=protected-access
@@ -1000,8 +1002,9 @@ class _StubPyEnv:  # pylint: disable=too-few-public-methods
 
 class _StubJob:  # pylint: disable=too-few-public-methods
     def __init__(self):
-        self.model = 'claude-3-opus'
-        self.model_family = 'claude'
+        self.job_def = MagicMock()
+        self.job_def.model = 'claude-3-opus'
+        self.job_def.model_family = 'claude'
         self.session_id = 'sess-abc'
         self.total_cost = 0.0042
         self.context_bytes = 1024
@@ -1086,6 +1089,18 @@ class TestBuildRawRepr:
         assert 'good_field' in result
         assert '(Error' in result
         assert 'Prefix: 999 not found' in result
+
+
+class TestGetJobModel:
+    def test_reads_model_from_job_def(self):
+        job = _make_job()
+        job.job_def.model = 'deepseek/deepseek-v3.2'
+        assert _get_job_model(job) == 'deepseek/deepseek-v3.2'
+
+    def test_missing_job_def_returns_dash(self):
+        job = MagicMock()
+        job.job_def = None
+        assert _get_job_model(job) == '—'
 
 
 class TestBuildRawHtml:

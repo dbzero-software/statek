@@ -153,6 +153,17 @@ def _get_locale_str(job) -> str:
     return ''
 
 
+def _get_job_model(job) -> str:
+    """Return the frozen job model from the job definition, or an empty fallback."""
+    try:
+        if not job.job_def:
+            return '—'
+        model = job.job_def.model
+        return str(model) if model else '—'
+    except Exception:  # pylint: disable=broad-except
+        return '—'
+
+
 def _get_tool_data_for_block(code_block, chat_log_item) -> list:
     """Return [(call_spec, result_str, error_str|None), ...] for a code block's tool calls.
 
@@ -1005,7 +1016,7 @@ def create_job_detail_dialog(job) -> None:
     except Exception:  # pylint: disable=broad-except
         pass
 
-    model = getattr(job, 'model', None) or '—'
+    model = _get_job_model(job)
     locale_str = _get_locale_str(job)
     chat_style_str = ''
     try:

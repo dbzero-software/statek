@@ -42,12 +42,22 @@ def _job_uuid(job) -> str:
         return '—'
 
 
+def _job_model(job) -> str:
+    """Return the job definition model label for a job, or '—' on any error."""
+    try:
+        if job.job_def is None or job.job_def.model is None:
+            return '—'
+        return str(job.job_def.model)
+    except Exception:  # pylint: disable=broad-except
+        return '—'
+
+
 def _render_job_row(job) -> None:
     """Render a single job as a table-style row."""
     uuid_str = _job_uuid(job)
     agent_role = _job_agent_role(job)
     status_str = _job_status_str(job)
-    model = getattr(job, 'model', None) or '—'
+    model = _job_model(job)
     num_turns = getattr(job, 'num_turns', 0)
     total_cost = getattr(job, 'total_cost', 0.0)
     cost_label = f'${total_cost:.4f}' if total_cost else '—'

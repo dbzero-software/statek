@@ -90,7 +90,7 @@ class DialogAgent(SupervisedAgent):
 
     def create_job_def(  # pylint: disable=no-member,arguments-renamed,too-many-arguments,too-many-positional-arguments
         self, tools=None, warmup_code=None, shared_vars=None, chat_style=None,
-        locale=None, **kwargs
+        locale=None, model_family=None, model=None, **kwargs
     ):
         """Create a JobDef with a dialog chat style.
 
@@ -111,7 +111,7 @@ class DialogAgent(SupervisedAgent):
             chat_style = ChatStyle[self._metadata['CHAT_STYLE']]  # pylint: disable=no-member
         job_def = super().create_job_def(
             tools=tools, warmup_code=warmup_code, shared_vars=shared_vars,
-            locale=locale, **kwargs
+            locale=locale, model_family=model_family, model=model, **kwargs
         )
         job_def.set_chat_style(chat_style or ChatStyle.MD_DIALOG)  # pylint: disable=no-member
         return job_def

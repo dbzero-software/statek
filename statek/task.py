@@ -72,6 +72,20 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
     return task_future.job.status == JobStatus.DONE
 
 
+def _job_model_kwargs(agent) -> Dict[str, Optional[str]]:
+    """Return explicit JobDef model kwargs only when metadata does not already pin them."""
+    metadata = agent._metadata or {}  # pylint: disable=protected-access
+    if metadata.get("MODEL") or metadata.get("MODEL_FAMILY"):
+        return {}
+
+    provider = get_statek_settings().default_llm_api_provider
+    provider_settings = get_provider_settings(provider)
+    return {
+        "model_family": provider,
+        "model": provider_settings.default_model if provider_settings else None,
+    }
+
+
 @temporal(complement = get_task_result, condition=is_job_completed)
 @tool
 def delegate_task(agent: SupervisedAgent,
@@ -95,7 +109,11 @@ def delegate_task(agent: SupervisedAgent,
     """
 
     job_def = agent.create_job_def(
-        warmup_code=warmup_code, shared_vars=shared_vars, locale=locale, **kwargs
+        warmup_code=warmup_code,
+        shared_vars=shared_vars,
+        locale=locale,
+        **_job_model_kwargs(agent),
+        **kwargs,
     )
 
     env = PyEnv()
@@ -115,8 +133,6 @@ def delegate_task(agent: SupervisedAgent,
 
     job = Job(
         job_def=job_def,
-        model_family=get_statek_settings().default_llm_api_provider,
-        model=get_provider_settings().default_model,
         job_status=JobStatus.READY,
         py_env=env
     )
@@ -156,7 +172,11 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
         The newly created Job instance.
     """
     job_def = agent.create_job_def(
-        warmup_code=warmup_code, shared_vars=shared_vars, locale=locale, **kwargs
+        warmup_code=warmup_code,
+        shared_vars=shared_vars,
+        locale=locale,
+        **_job_model_kwargs(agent),
+        **kwargs,
     )
 
     env = PyEnv()
@@ -174,8 +194,6 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
 
     job = Job(
         job_def=job_def,
-        model_family=get_statek_settings().default_llm_api_provider,
-        model=get_provider_settings().default_model,
         job_status=JobStatus.READY,
         py_env=env
     )
@@ -211,7 +229,10 @@ def submit_new_job(
         The newly created :class:`Job` instance.
     """
     job_def = agent.create_job_def(
-        shared_vars=shared_vars, locale=locale, **kwargs
+        shared_vars=shared_vars,
+        locale=locale,
+        **_job_model_kwargs(agent),
+        **kwargs,
     )
 
     env = PyEnv()
@@ -220,8 +241,6 @@ def submit_new_job(
 
     return Job(
         job_def=job_def,
-        model_family=get_statek_settings().default_llm_api_provider,
-        model=get_provider_settings().default_model,
         job_status=JobStatus.READY,
         py_env=env,
     )

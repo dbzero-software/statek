@@ -198,6 +198,8 @@ class TestDelegateTask:
         # Verify result is TaskFutureResult with a Job
         assert result.job.model_family == "OPENAI"
         assert result.job.model == "gpt-4"
+        assert result.job.job_def.model_family == "OPENAI"
+        assert result.job.job_def.model == "gpt-4"
         assert result.job.job_def.agent is supervised_agent
         # Prompt comes from agent's __prompt_template
         assert result.job.job_def.prompt() == "Test task"

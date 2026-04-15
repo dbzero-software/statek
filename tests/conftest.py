@@ -166,11 +166,13 @@ def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
 @pytest.fixture
 def job_def_factory(agent):
     """Factory fixture to create JobDef instances with custom parameters."""
-    def _create_job_def(job_params=None, warmup_code=None, **kwargs):
+    def _create_job_def(job_params=None, warmup_code=None, model_family="test", model="test-model", **kwargs):
         return JobDef(
             agent=agent,
             job_params=job_params,
             warmup_code=warmup_code,
+            model_family=model_family,
+            model=model,
             **kwargs
         )
     return _create_job_def
@@ -180,11 +182,14 @@ def job_def_factory(agent):
 def job_factory(job_def_factory):
     """Factory fixture to create Job instances with custom parameters."""
     def _create_job(job_params=None, warmup_code=None, model_family="test", model="test-model"):
-        job_def = job_def_factory(job_params=job_params, warmup_code=warmup_code)
-        return Job(
-            job_def=job_def,
+        job_def = job_def_factory(
+            job_params=job_params,
+            warmup_code=warmup_code,
             model_family=model_family,
             model=model,
+        )
+        return Job(
+            job_def=job_def,
             job_status=JobStatus.READY  # pylint: disable=no-member
         )
     return _create_job

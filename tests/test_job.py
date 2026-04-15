@@ -613,6 +613,26 @@ class TestJobGetNextRequest:
         request = job.get_next_request()
         assert request["system_prompt"] == "Test agent"
 
+    def test_get_next_request_uses_model_frozen_on_job_def_creation(self, db0_fixture):
+        """MODEL is frozen on JobDef creation and reused in later requests."""
+        from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+
+        agent = SupervisedAgent(
+            role="test",
+            _system_prompt="Test agent",
+            _metadata={"MODEL": "deepseek/deepseek-v3.2"},
+            _tools=[],
+        )
+        job_def = agent.create_job_def()
+        job = Job(job_def=job_def, job_status=JobStatus.READY)
+
+        agent.update_metadata({"MODEL": "openai/gpt-4o"})
+        request = job.get_next_request()
+
+        assert job.job_def.model == "deepseek/deepseek-v3.2"
+        assert job.model == "deepseek/deepseek-v3.2"
+        assert request["metadata"]["MODEL"] == "deepseek/deepseek-v3.2"
+
     def test_last_response_empty_chat_log(self, job_factory):
         """Test last_response returns None when chat_log is empty."""
         job = job_factory()

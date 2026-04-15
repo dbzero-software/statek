@@ -1,6 +1,6 @@
 """Tests for the web_ui jobs page helper functions."""
 
-from web_ui.pages.jobs import _paginate, _job_agent_role, _job_status_str, _job_uuid
+from web_ui.pages.jobs import _paginate, _job_agent_role, _job_status_str, _job_uuid, _job_model
 
 
 # ---------------------------------------------------------------------------
@@ -13,13 +13,14 @@ class _FakeAgent:  # pylint: disable=too-few-public-methods
 
 
 class _FakeJobDef:  # pylint: disable=too-few-public-methods
-    def __init__(self, agent=None):
+    def __init__(self, agent=None, model='test-model'):
         self.agent = agent
+        self.model = model
 
 
 class _FakeJob:  # pylint: disable=too-few-public-methods
-    def __init__(self, agent_role='researcher', status='DONE'):
-        self.job_def = _FakeJobDef(agent=_FakeAgent(agent_role))
+    def __init__(self, agent_role='researcher', status='DONE', model='test-model'):
+        self.job_def = _FakeJobDef(agent=_FakeAgent(agent_role), model=model)
         self.status = status
 
 
@@ -120,3 +121,17 @@ class TestJobUuid:  # pylint: disable=too-few-public-methods
     def test_exception_returns_dash(self):
         # Plain Python objects are not tracked by db0, so uuid() raises.
         assert _job_uuid(object()) == '—'
+
+
+class TestJobModel:
+    def test_returns_job_def_model(self):
+        job = _FakeJob(model='deepseek/deepseek-v3.2')
+        assert _job_model(job) == 'deepseek/deepseek-v3.2'
+
+    def test_missing_job_def_model_returns_dash(self):
+        class _J:  # pylint: disable=too-few-public-methods
+            job_def = _FakeJobDef(model=None)
+        assert _job_model(_J()) == '—'
+
+    def test_exception_returns_dash(self):
+        assert _job_model(_FakeJobBadAttr()) == '—'

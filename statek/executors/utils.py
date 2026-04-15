@@ -1117,6 +1117,8 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
 def find_existing_job_def(
     agent: 'Agent',
     warmup_code: Optional[Union[str, Sequence]],
+    model_family: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
@@ -1129,8 +1131,13 @@ def find_existing_job_def(
     """
     parsed = parse_warmup_code(warmup_code)
     for job_def in db0.find(JobDef, db0.as_tag(agent)):
-        if job_def.warmup_code == parsed:
-            return job_def
+        if job_def.warmup_code != parsed:
+            continue
+        if model_family is not None and job_def.model_family != model_family:
+            continue
+        if model is not None and job_def.model != model:
+            continue
+        return job_def
     return None
 
 
@@ -1175,19 +1182,31 @@ def _make_start_jobs_func(agent, job_def, task_queue_size_func, provider):
 
         statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='debug')
 
-        provider_settings = get_provider_settings(provider)
-        model_to_use = provider_settings.default_model if provider_settings else None
-
         for _ in range(jobs_to_create):
             Job(
                 job_def=job_def,
-                model_family=provider or "default",
-                model=model_to_use,
                 job_status=JobStatus.READY,
                 py_env=PyEnv(local_state={}),
             )
 
     return start_jobs_func
+
+
+def _resolve_job_def_model(agent, provider: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Resolve the frozen JobDef model family and model for loop-created jobs."""
+    metadata = agent._metadata or {}  # pylint: disable=protected-access
+    model = metadata.get("MODEL")
+    model_family = metadata.get("MODEL_FAMILY")
+    if model_family is None and model and '/' in model:
+        model_family = model.split('/', 1)[0]
+    if model is not None and model_family is not None:
+        return model_family, model
+
+    provider_name = provider or get_statek_settings().default_llm_api_provider
+    provider_settings = get_provider_settings(provider_name)
+    return model_family or provider_name, model or (
+        provider_settings.default_model if provider_settings else None
+    )
 
 
 @dataclass
@@ -1242,7 +1261,10 @@ async def run_agentic_loop(agent: 'Agent',
     statek_log("Starting agentic loop...", level='debug')
 
     # Reuse an existing matching job definition or create a new one
-    job_def = find_existing_job_def(agent, warmup_code)
+    model_family, model_to_use = _resolve_job_def_model(agent, provider)
+    job_def = find_existing_job_def(
+        agent, warmup_code, model_family=model_family, model=model_to_use
+    )
     if job_def:
         # Clear any previous errors on the job definition they might'be been fixed after process restart
         job_def.clear_errors()
@@ -1252,6 +1274,8 @@ async def run_agentic_loop(agent: 'Agent',
             agent=agent,
             job_params=None,
             warmup_code=parsed_warmup_code,
+            model_family=model_family,
+            model=model_to_use,
         )
     
     start_jobs_func = _make_start_jobs_func(agent, job_def, task_queue_size_func, provider)
@@ -1291,7 +1315,10 @@ async def run_agentic_fleet(
         warmup_code = loop_def.warmup_code
         task_queue_size_func = loop_def.task_queue_size_func
 
-        job_def = find_existing_job_def(agent, warmup_code)
+        model_family, model_to_use = _resolve_job_def_model(agent, provider)
+        job_def = find_existing_job_def(
+            agent, warmup_code, model_family=model_family, model=model_to_use
+        )
         if job_def:
             job_def.clear_errors()
         else:
@@ -1300,6 +1327,8 @@ async def run_agentic_fleet(
                 agent=agent,
                 job_params=None,
                 warmup_code=parsed_warmup_code,
+                model_family=model_family,
+                model=model_to_use,
             )
 
         start_jobs_funcs.append(_make_start_jobs_func(agent, job_def, task_queue_size_func, provider))
