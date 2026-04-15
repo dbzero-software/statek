@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 import re
 import traceback as _traceback_module
 from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Union
@@ -228,7 +229,8 @@ class Job:
         awaited_result: Optional[FutureResult] = None,
         next_instr_num: Optional[int] = None,
         warmup_block_num: Optional[int] = None,
-        error: Optional[JobDefError] = None
+        error: Optional[JobDefError] = None,
+        created_at: Optional[datetime] = None,
     ):
         del model_family, model  # backward-compatible init args; source of truth is JobDef
         self.job_def = job_def
@@ -251,6 +253,8 @@ class Job:
         self.warmup_block_num = warmup_block_num
         # Error information if the job failed
         self.error: Optional[JobDefError] = error
+        # Timestamp when the job object was created
+        self.created_at = created_at or datetime.now()
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
         # Total context bytes used by this job so far
@@ -883,6 +887,119 @@ class Job:
         if isinstance(last, LLM_LogItem):
             return last.llm_resp
         return None
+
+    def _is_user_facing_llm_response(self, item: LLM_LogItem) -> bool:
+        """Return True when the LLM log item corresponds to a visible reply.
+
+        ``get_response_times()`` tracks user-visible latency, so internal
+        execution turns in dialog styles should not count as the first reply.
+        """
+        response = item.llm_resp
+        if response is None:
+            return False
+
+        chat_style = self.job_def.chat_style
+        if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
+            return isinstance(response, str) and bool(response.strip())
+
+        if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+            if isinstance(response, CodeBlock):
+                return False
+            if not isinstance(response, str):
+                return False
+            return any(line.startswith("# ") for line in response.splitlines())
+
+        return True
+
+    def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
+        """Return user-message timestamps paired with time-to-first user reply.
+
+        Only timestamped user messages stored in ``chat_log`` are included:
+        the initial dialog-style message (stored as a plain ``str`` and
+        measured from ``created_at``) and any subsequent ``UserLogItem``
+        entries. Warmup items are ignored. Internal dialog-mode execution
+        turns such as tool-call requests or script-only responses are skipped.
+        If no later user-facing ``LLM_LogItem`` responds to a message, its
+        duration is ``None``.
+        """
+        response_times: List[tuple[datetime, Optional[float]]] = []
+        pending_indices: List[int] = []
+
+        for item in self.chat_log:
+            if isinstance(item, str):
+                if item and self.created_at is not None:
+                    pending_indices.append(len(response_times))
+                    response_times.append((self.created_at, None))
+                continue
+
+            if isinstance(item, UserLogItem):
+                if item.message:
+                    pending_indices.append(len(response_times))
+                    response_times.append((item.timestamp, None))
+                continue
+
+            if isinstance(item, LLM_LogItem):
+                if not pending_indices or not self._is_user_facing_llm_response(item):
+                    continue
+                for idx in pending_indices:
+                    message_time, _ = response_times[idx]
+                    response_times[idx] = (
+                        message_time,
+                        (item.timestamp - message_time).total_seconds(),
+                    )
+                pending_indices = []
+
+        return response_times
+
+    def get_llm_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
+        """Return per-request LLM timings from the chat log.
+
+        Each tuple contains the request timestamp and time-to-response in
+        seconds. Explicit pending ``LLM_LogItem`` markers (``llm_resp=None``)
+        are treated as the cleanest request boundary and paired with the next
+        concrete ``LLM_LogItem``. When no pending marker exists, the first
+        concrete response is measured from ``created_at`` and later concrete
+        ``LLM_LogItem`` entries use the previous response timestamp as an
+        approximate boundary.
+
+        Non-LLM entries are ignored. A trailing pending marker with no later
+        response is returned with ``None`` as its duration.
+        """
+        response_times: List[tuple[datetime, Optional[float]]] = []
+        pending_request_time: Optional[datetime] = None
+        previous_response_time: Optional[datetime] = None
+
+        for item in self.chat_log:
+            if not isinstance(item, LLM_LogItem):
+                continue
+
+            if item.llm_resp is None:
+                pending_request_time = item.timestamp
+                continue
+
+            if pending_request_time is not None:
+                response_times.append((
+                    pending_request_time,
+                    (item.timestamp - pending_request_time).total_seconds(),
+                ))
+                pending_request_time = None
+            elif previous_response_time is not None:
+                response_times.append((
+                    previous_response_time,
+                    (item.timestamp - previous_response_time).total_seconds(),
+                ))
+            elif self.created_at is not None and self.created_at <= item.timestamp:
+                response_times.append((
+                    self.created_at,
+                    (item.timestamp - self.created_at).total_seconds(),
+                ))
+
+            previous_response_time = item.timestamp
+
+        if pending_request_time is not None:
+            response_times.append((pending_request_time, None))
+
+        return response_times
 
     def _get_warmup_block_count(self) -> int:
         """
