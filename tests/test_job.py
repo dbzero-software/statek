@@ -1541,7 +1541,7 @@ class TestGetResponseTimes:
         t2 = t1 + timedelta(seconds=7)
         t3 = t2 + timedelta(seconds=11)
 
-        job.initial_user_message_timestamp = t0
+        job.created_at = t0
         job.chat_log.append("initial msg")
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp1"))
         job.chat_log[-1].timestamp = t1

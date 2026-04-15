@@ -230,7 +230,6 @@ class Job:
         next_instr_num: Optional[int] = None,
         warmup_block_num: Optional[int] = None,
         error: Optional[JobDefError] = None,
-        initial_user_message_timestamp: Optional[datetime] = None,
         created_at: Optional[datetime] = None,
     ):
         del model_family, model  # backward-compatible init args; source of truth is JobDef
@@ -254,8 +253,6 @@ class Job:
         self.warmup_block_num = warmup_block_num
         # Error information if the job failed
         self.error: Optional[JobDefError] = error
-        # Timestamp for the initial dialog-style user message stored as str
-        self.initial_user_message_timestamp = initial_user_message_timestamp
         # Timestamp when the job object was created
         self.created_at = created_at or datetime.now()
         # Registered error handlers (ErrorHandler instances)
@@ -918,8 +915,8 @@ class Job:
         """Return user-message timestamps paired with time-to-first user reply.
 
         Only timestamped user messages stored in ``chat_log`` are included:
-        the initial dialog-style message (stored as a plain ``str`` with its
-        timestamp tracked separately) and any subsequent ``UserLogItem``
+        the initial dialog-style message (stored as a plain ``str`` and
+        measured from ``created_at``) and any subsequent ``UserLogItem``
         entries. Warmup items are ignored. Internal dialog-mode execution
         turns such as tool-call requests or script-only responses are skipped.
         If no later user-facing ``LLM_LogItem`` responds to a message, its
@@ -930,9 +927,9 @@ class Job:
 
         for item in self.chat_log:
             if isinstance(item, str):
-                if item and self.initial_user_message_timestamp is not None:
+                if item and self.created_at is not None:
                     pending_indices.append(len(response_times))
-                    response_times.append((self.initial_user_message_timestamp, None))
+                    response_times.append((self.created_at, None))
                 continue
 
             if isinstance(item, UserLogItem):
@@ -1183,7 +1180,6 @@ class Job:
         """
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             if not self.chat_log:
-                self.initial_user_message_timestamp = datetime.now()
                 self.chat_log.append(message)
             else:
                 self.chat_log.append(UserLogItem(message=message))
