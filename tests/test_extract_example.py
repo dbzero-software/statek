@@ -253,7 +253,6 @@ class TestFormatExample:
         if warmup_code is not None:
             agent = Agent(role="test", _system_prompt="Test agent",
                           _metadata={
-                              'prompt_template': 'Test task',
                               'MODEL': 'test-model',
                           }, _tools=[])
             job_def = JobDef(agent=agent, warmup_code=warmup_code)

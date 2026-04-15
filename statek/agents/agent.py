@@ -236,6 +236,10 @@ class Agent:
             format_ctx.update(job_params)
         if kwargs:
             format_ctx.update(kwargs)
+        # Resolve {shared_var_names} to comma-delimited list of shared_vars keys
+        if '{shared_var_names}' in result:
+            shared_vars = format_ctx.get('shared_vars', [])
+            format_ctx['shared_var_names'] = ', '.join(shared_vars) if shared_vars else ''
         if format_ctx:
             return result.format_map(format_ctx)
         return result

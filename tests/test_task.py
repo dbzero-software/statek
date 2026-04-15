@@ -201,8 +201,6 @@ class TestDelegateTask:
         assert result.job.job_def.model_family is None
         assert result.job.job_def.model == "test-model"
         assert result.job.job_def.agent is supervised_agent
-        # Prompt comes from agent's __prompt_template
-        assert result.job.job_def.prompt() == "Test task"
 
     def test_delegate_task_with_warmup_code_copies_referenced_locals(
         self, db0_fixture, supervised_agent, mock_settings
@@ -232,7 +230,7 @@ class TestDelegateTask:
         agent = SupervisedAgent(
             role="test",
             _system_prompt="Test agent",
-            _metadata={'prompt_template': 'Process {data_type} for {user}', 'MODEL': 'test-model'},
+            _metadata={'MODEL': 'test-model'},
             _tools=[]
         )
 
@@ -244,7 +242,6 @@ class TestDelegateTask:
 
         assert result.job.job_def.job_params["data_type"] == "orders"
         assert result.job.job_def.job_params["user"] == "Alice"
-        assert result.job.job_def.prompt() == "Process orders for Alice"
 
     def test_delegate_task_future_result(self, db0_fixture, supervised_agent, mock_settings):
         """Test delegate_task returns proper future result."""
@@ -560,12 +557,11 @@ class TestSubmitNewJob:
         agent = SupervisedAgent(
             role="test",
             _system_prompt="Test",
-            _metadata={'prompt_template': 'Handle {kind}', 'MODEL': 'test-model'},
+            _metadata={'MODEL': 'test-model'},
             _tools=[]
         )
         job = submit_new_job(agent, kind="invoice")
         assert job.job_def.job_params["kind"] == "invoice"
-        assert job.job_def.prompt() == "Handle invoice"
 
     def test_locale_forwarded_to_job_def(
         self, db0_fixture, supervised_agent, mock_settings

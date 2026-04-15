@@ -1212,31 +1212,51 @@ def _format_object_llm(class_name: str, members: Dict[str, Any],
 _MEDIA_PATH_RE = re.compile(r'^/?(?:\S+/)+\S+\.\w{3}$')
 
 
+_MD_IMAGE_RE = re.compile(r'!\[[^\]]*\]\([^)]*\)')
+
+
 def extract_media(text: str) -> Iterable[Tuple[str, Optional[str]]]:
     """Parse text into (body, media) tuples.
 
     Media paths are tokens that contain at least one folder separator and end
-    with a 3-character extension.  Extra whitespace is eliminated during parsing.
+    with a 3-character extension.  Markdown image syntax ``![alt](path)`` and
+    ``![alt](path "title")`` is recognised as a single media unit and
+    preserved verbatim.  Extra whitespace is eliminated during parsing.
 
     Args:
         text: The input string to parse.
 
     Yields:
-        (body, media) tuples where *media* is a file path or None for the
-        trailing body fragment.
+        (body, media) tuples where *media* is a file path (or full markdown
+        image reference) or None for the trailing body fragment.
     """
-    # Strip markdown image/link syntax: ![alt](url) or [text](url) → alt url
-    text = re.sub(r'!\[([^\]]*)\]\(([^)]*)\)', r'\1 \2', text)
-    text = re.sub(r'\[([^\]]*)\]\(([^)]*)\)', r'\1 \2', text)
-    tokens = [t for t in re.split(r'[\s\[\]\(\)\{\},]+', text.strip()) if t]
-    body_parts: List[str] = []
+    # Split on markdown image references first, keeping them as tokens.
+    parts = _MD_IMAGE_RE.split(text)
+    md_images = _MD_IMAGE_RE.findall(text)
 
-    for token in tokens:
-        if _MEDIA_PATH_RE.match(token):
-            yield (" ".join(body_parts), token)
+    # Interleave plain-text segments with their following markdown images.
+    segments: List[Tuple[str, Optional[str]]] = []
+    for i, part in enumerate(parts):
+        segments.append(("plain", part))
+        if i < len(md_images):
+            segments.append(("md", md_images[i]))
+
+    # Strip [text](url) link syntax in plain segments: [text](url) → text url
+    body_parts: List[str] = []
+    for kind, value in segments:
+        if kind == "md":
+            yield (" ".join(body_parts), value)
             body_parts = []
         else:
-            body_parts.append(token)
+            plain = re.sub(r'\[([^\]]*)\]\(([^)]*)\)', r'\1 \2', value)
+            tokens = [t for t in re.split(r'[\s\[\]\(\)\{\},]+',
+                                          plain.strip()) if t]
+            for token in tokens:
+                if _MEDIA_PATH_RE.match(token):
+                    yield (" ".join(body_parts), token)
+                    body_parts = []
+                else:
+                    body_parts.append(token)
 
     if body_parts:
         yield (" ".join(body_parts), None)

@@ -75,47 +75,32 @@ class TestJobWithError:
 class TestJobDef:
     """Test cases for JobDef class."""
 
-    def test_prompt_with_goal_in_job_params(self, agent_factory, job_def_factory):
-        """Test prompt property formats template with goal in job_params."""
-        agent = agent_factory(prompt_template="Complete the {goal} task")
-        job_def = job_def_factory(job_params={"goal": "analysis"})
-        # Need to use custom agent
+    def test_system_prompt_delegates_to_agent(self, agent_factory, job_def_factory):
+        """system_prompt property delegates to agent.system_prompt with job_params."""
+        agent = agent_factory(system_prompt="You are a {role} assistant")
+        job_def = job_def_factory(job_params={"role": "helpful"})
         job_def.agent = agent
-        assert job_def.prompt() == "Complete the analysis task"
+        assert job_def.system_prompt == "You are a helpful assistant"
 
-    def test_prompt_without_goal(self, agent_factory, job_def_factory):
-        """Test prompt property returns plain template when no job_params."""
-        agent = agent_factory(prompt_template="Complete the task")
+    def test_system_prompt_without_job_params(self, agent_factory, job_def_factory):
+        """system_prompt property returns unformatted prompt when no job_params."""
+        agent = agent_factory(system_prompt="You are a test assistant")
         job_def = job_def_factory(job_params=None)
         job_def.agent = agent
-        assert job_def.prompt() == "Complete the task"
+        assert job_def.system_prompt == "You are a test assistant"
 
-    def test_prompt_with_job_params(self, agent_factory, job_def_factory):
-        """Test prompt method formats description with job_params."""
-        agent = agent_factory(prompt_template="Process {data_type} for {user}")
-        job_params = {"data_type": "transactions", "user": "John"}
-        job_def = job_def_factory(job_params=job_params)
-        job_def.agent = agent
-        assert job_def.prompt() == "Process transactions for John"
+    def test_system_prompt_no_agent(self, job_def_factory):
+        """system_prompt returns empty string when agent is None."""
+        job_def = job_def_factory()
+        job_def.agent = None
+        assert job_def.system_prompt == ""
 
-    def test_prompt_with_job_params_in_jobdef(self, agent_factory, job_def_factory):
-        """Test prompt method formats description with job_params stored in JobDef."""
-        agent = agent_factory(prompt_template="Process {data_type} for {user}")
-        job_params = {"data_type": "orders", "user": "Alice"}
-        job_def = job_def_factory(job_params=job_params)
+    def test_system_prompt_resolves_shared_var_names(self, agent_factory, job_def_factory):
+        """system_prompt resolves {shared_var_names} from job_params shared_vars."""
+        agent = agent_factory(system_prompt="Variables: {shared_var_names}")
+        job_def = job_def_factory(job_params={"shared_vars": ["user", "message"]})
         job_def.agent = agent
-        assert job_def.prompt() == "Process orders for Alice"
-
-    def test_prompt_with_job_params_and_goal(self, agent_factory, job_def_factory):
-        """Test prompt method with goal included in job_params."""
-        agent = agent_factory(
-            prompt_template="Process {data_type} with {status} for {user}. Complete the {goal}."
-        )
-        job_params = {"data_type": "orders", "status": "pending", "user": "Bob", "goal": "analysis"}
-        job_def = job_def_factory(job_params=job_params)
-        job_def.agent = agent
-        result = job_def.prompt()
-        assert result == "Process orders with pending for Bob. Complete the analysis."
+        assert job_def.system_prompt == "Variables: user, message"
 
 
 class TestJob:
@@ -126,8 +111,8 @@ class TestJob:
         job = job_factory()
         result = job.get_next_prompt()
 
-        # Should return just the job_def.prompt() since console is empty
-        assert result == "Test task"
+        # Should return the system_prompt since console is empty
+        assert result == "Test agent"
 
     def test_get_next_prompt_first_prompt_with_console(self, job_factory):
         """Test get_next_prompt when chat_log is empty and console has content."""
@@ -139,8 +124,8 @@ class TestJob:
 
         result = job.get_next_prompt()
 
-        # Should include the prompt and all console outputs from position 0
-        expected = "Test task\n> Output line 1\n> Output line 2"
+        # Should include the system_prompt and all console outputs from position 0
+        expected = "Test agent\n> Output line 1\n> Output line 2"
         assert result == expected
 
     def test_get_next_prompt_subsequent_prompt_from_console_pos(self, job_factory):
@@ -200,7 +185,7 @@ class TestJob:
         job = job_factory()
         job.py_env.console_append("Out1")
         result = job.get_next_prompt()
-        assert result == "Test task\n> Out1"
+        assert result == "Test agent\n> Out1"
 
     def test_get_next_prompt_first_prompt_push_log_appended(self, job_factory):
         """First prompt: push_log message is appended after console output."""
@@ -735,7 +720,7 @@ class TestJobGetNextPromptWithWarmup:
 
         result = job.get_next_prompt()
 
-        assert result == "Test task\n> line1\n> line2"
+        assert result == "Test agent\n> line1\n> line2"
 
     def test_warmup_prompt_is_last_block_console_output(self, job_factory):
         """With warmup, prompt is the console output OF the last warmup block."""
@@ -794,6 +779,7 @@ class TestJobGetChatHistoryWithWarmup:
 
         assert len(history) == 3
         assert history[0].role == ChatRole.SYSTEM
+        assert history[0].content == "Test agent"
         assert history[1].role == ChatRole.ASSISTANT
         assert history[1].content == "x = 1"
         assert history[1].content_src == ContentSource.SYSTEM
@@ -811,6 +797,7 @@ class TestJobGetChatHistoryWithWarmup:
 
         assert len(history) == 5
         assert history[0].role == ChatRole.SYSTEM
+        assert history[0].content == "Test agent"
         assert history[1].content == "block1"
         assert history[1].content_src == ContentSource.SYSTEM
         assert history[2].content == "out1"
@@ -829,6 +816,7 @@ class TestJobGetChatHistoryWithWarmup:
 
         assert len(history) == 5
         assert history[0].role == ChatRole.SYSTEM
+        assert history[0].content == "Test agent"
         assert history[1].content == "x = 1"        # warmup asst
         assert history[2].content == "warmup out"   # warmup user
         assert history[3].content == "resp1"        # llm asst
@@ -844,6 +832,7 @@ class TestJobGetChatHistoryWithWarmup:
         history = list(job.get_chat_history())
 
         assert history[0].role == ChatRole.SYSTEM
+        assert history[0].content == "Test agent"
         assert history[1].role == ChatRole.ASSISTANT
         assert history[1].content is None
         assert history[1].content_src == ContentSource.SYSTEM

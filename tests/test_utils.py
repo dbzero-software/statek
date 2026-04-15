@@ -579,11 +579,31 @@ class TestExtractMedia:
         assert result == [("Media", "private/chart.svg"), ("is here", None)]
 
     def test_markdown_image_syntax(self):
-        """Markdown image ![alt](path) is parsed correctly."""
+        """Markdown image ![alt](path) is preserved as full markdown media."""
         text = " ![April On-Call Schedule](private/calendar_zeo144sc.svg)"
         result = list(extract_media(text))
         assert result == [
-            ("April On-Call Schedule", "private/calendar_zeo144sc.svg"),
+            ("", "![April On-Call Schedule](private/calendar_zeo144sc.svg)"),
+        ]
+
+    def test_markdown_image_with_title(self):
+        """Markdown image ![alt](path "title") is preserved as full markdown media."""
+        text = "Here's your calendar for march: " \
+               '![Calendar](gen/1234abc.svg "March Calendar")'
+        result = list(extract_media(text))
+        assert result == [
+            ("Here's your calendar for march:",
+             '![Calendar](gen/1234abc.svg "March Calendar")'),
+        ]
+
+    def test_markdown_image_mixed_with_plain(self):
+        """Markdown images and plain paths can coexist."""
+        text = "Chart: ![Chart](gen/chart.svg) and gen/data.csv here"
+        result = list(extract_media(text))
+        assert result == [
+            ("Chart:", "![Chart](gen/chart.svg)"),
+            ("and", "gen/data.csv"),
+            ("here", None),
         ]
 
 
