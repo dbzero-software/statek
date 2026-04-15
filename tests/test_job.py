@@ -1666,6 +1666,22 @@ class TestGetLlmResponseTimes:
             (t1, 4.0),
         ]
 
+    def test_created_at_after_first_response_is_ignored(self, job_factory):
+        """A later created_at timestamp must not yield negative latency."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=9)
+        t_created = t1 + timedelta(seconds=1)
+
+        job.created_at = t_created
+        first = create_chat_log_item(console_pos=0, llm_resp="resp1")
+        first.timestamp = t0
+        second = create_chat_log_item(console_pos=1, llm_resp="resp2")
+        second.timestamp = t1
+        job.chat_log.extend([first, second])
+
+        assert list(job.get_llm_response_times()) == [(t0, 9.0)]
+
     def test_pending_llm_marker_takes_precedence_over_previous_response(self, job_factory):
         """Awaiting-response markers provide the clean request timestamp."""
         job = job_factory()

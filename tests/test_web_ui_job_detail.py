@@ -980,7 +980,7 @@ class TestBuildHistorySections:
 
         sections = _build_history_sections(job)
 
-        assert sections == []
+        assert not sections
 
     def test_strips_language_hint_from_user_followup_display(self, db0_fixture):
         job = _make_job()

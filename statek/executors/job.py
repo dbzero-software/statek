@@ -988,7 +988,7 @@ class Job:
                     previous_response_time,
                     (item.timestamp - previous_response_time).total_seconds(),
                 ))
-            elif self.created_at is not None:
+            elif self.created_at is not None and self.created_at <= item.timestamp:
                 response_times.append((
                     self.created_at,
                     (item.timestamp - self.created_at).total_seconds(),
