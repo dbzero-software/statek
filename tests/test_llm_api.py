@@ -59,7 +59,6 @@ def openrouter_api():
     settings = LLM_API_Settings(
         api_url="https://openrouter.ai/api/v1/chat/completions",
         api_key="test-key",
-        default_model="gpt-4o",
     )
     return OpenRouter_API(settings=settings, model="gpt-4o")
 
@@ -69,7 +68,6 @@ def claude_api():
     settings = LLM_API_Settings(
         api_url="https://api.anthropic.com/v1/messages",
         api_key="test-key",
-        default_model="claude-3-5-sonnet-20241022",
     )
     return Claude_API(settings=settings, model="claude-3-5-sonnet-20241022",
                       use_prompt_caching=False)
@@ -1197,7 +1195,6 @@ class TestClaudeBuildMessages:
         settings = LLM_API_Settings(
             api_url="https://api.anthropic.com/v1/messages",
             api_key="test-key",
-            default_model="claude-3-5-sonnet-20241022",
             use_prompt_caching=True,
         )
         api = Claude_API(settings=settings, model="claude-3-5-sonnet-20241022")

@@ -50,6 +50,16 @@ def copy_directory(input_path, output_path):
     shutil.copytree(input_path, output_path)
 
 
+def remove_lock_files(root_path):
+    """Remove stale db0 lock files left behind after close()."""
+    if not os.path.exists(root_path):
+        return
+    for current_root, _dirs, files in os.walk(root_path):
+        for name in files:
+            if name.endswith('.lock'):
+                os.remove(os.path.join(current_root, name))
+
+
 @pytest.fixture(scope='session')
 def test_data_dir():
     """Provide test data directory path."""
@@ -90,14 +100,13 @@ def db0_fixture_preloaded():
         # Initialize db0
         db0.init(DB0_DIR, read_write=True)
         db0.open("test_prefix", "rw")  # pylint: disable=no-member
-        # Create empty db0 snapshot
+        db0.commit()
+        db0.close()  # pylint: disable=no-member
+        remove_lock_files(DB0_DIR)
+        # Create empty db0 snapshot only after close so lock files are not copied
         paths = {}
         paths["EMPTY_DB0"] = os.path.join(TEST_FILES_DIR_ROOT, "empty_db0")
-        db0.commit()
         copy_directory(DB0_DIR, paths["EMPTY_DB0"])
-
-        # Close db0
-        db0.close()  # pylint: disable=no-member
 
     yield {
         "db0_paths": paths,
@@ -112,17 +121,13 @@ def db0_fixture_preloaded():
 
 
 @pytest.fixture()
-def db0_fixture(db0_fixture_preloaded):
+def db0_fixture():
     """Provide empty db0 instance for each test."""
     with FixtureInitializationManager("db0_fixture"):
         if os.path.exists(DB0_DIR):
             shutil.rmtree(DB0_DIR)
+        os.makedirs(DB0_DIR)
 
-        # Copy empty db0
-        paths = db0_fixture_preloaded["db0_paths"]
-        copy_directory(paths["EMPTY_DB0"], DB0_DIR)
-
-        # Initialize db0
         db0.init(DB0_DIR, read_write=True)
         db0.open("test_prefix", "rw")  # pylint: disable=no-member
         yield db0
@@ -136,17 +141,20 @@ def db0_fixture(db0_fixture_preloaded):
 def agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
     return Agent(role="test", _system_prompt="Test agent",
-                 _metadata={'prompt_template': 'Test task'}, _tools=[])
+                 _metadata={'prompt_template': 'Test task', 'MODEL': 'test-model'}, _tools=[])
 
 
 @pytest.fixture
 def agent_factory(db0_fixture):  # pylint: disable=unused-argument
     """Factory fixture to create Agent instances with custom parameters."""
     def _create_agent(prompt_template="Test task", role="test", system_prompt="Test", tools=None):
+        metadata = {'MODEL': 'test-model'}
+        if prompt_template:
+            metadata['prompt_template'] = prompt_template
         return Agent(
             role=role,
             _system_prompt=system_prompt,
-            _metadata={'prompt_template': prompt_template} if prompt_template else None,
+            _metadata=metadata,
             _tools=tools or []
         )
     return _create_agent
@@ -158,7 +166,7 @@ def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
     return SupervisedAgent(
         role="test",
         _system_prompt="Test agent",
-        _metadata={'prompt_template': 'Test task'},
+        _metadata={'prompt_template': 'Test task', 'MODEL': 'test-model'},
         _tools=[]
     )
 
@@ -166,7 +174,13 @@ def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
 @pytest.fixture
 def job_def_factory(agent):
     """Factory fixture to create JobDef instances with custom parameters."""
-    def _create_job_def(job_params=None, warmup_code=None, model_family="test", model="test-model", **kwargs):
+    def _create_job_def(
+        job_params=None,
+        warmup_code=None,
+        model_family="test",
+        model="test-model",
+        **kwargs,
+    ):
         return JobDef(
             agent=agent,
             job_params=job_params,

@@ -298,20 +298,19 @@ class OpenRouter_API(LLM_API):
 
         Args:
             settings: LLM_API_Settings containing API URL and key
-            model: Specific model to use. If None, uses default_model from settings
+            model: Specific model to use.
 
         Raises:
-            ValueError: If no model is specified and no default is available
+            ValueError: If no model is specified
         """
         self.settings = settings
-        self.model = model or settings.default_model
+        self.model = model
         self.response_format = LLM_API._load_response_format(settings)
         # additional kwargs that will be passed to request if needed
         self.kwargs = kwargs
         if not self.model:
             raise ValueError(
-                "No model specified and no default model available in settings. "
-                "Please provide a model name or configure default_model in settings."
+                "No model specified. Please provide a model name."
             )
 
         self.api_url = settings.api_url
@@ -473,17 +472,17 @@ class Claude_API(LLM_API):
 
         Args:
             settings: LLM_API_Settings containing API URL and key
-            model: Specific model to use. If None, uses default_model from settings
+            model: Specific model to use.
             use_prompt_caching: Whether to enable prompt caching for system prompts
                                and conversation history (reduces cost and latency).
                                If None, uses value from settings
                                (env var CLAUDE_USE_PROMPT_CACHING).
 
         Raises:
-            ValueError: If no model is specified and no default is available
+            ValueError: If no model is specified
         """
         self.settings = settings
-        self.model = model or settings.default_model
+        self.model = model
         self.response_format = LLM_API._load_response_format(settings)
         self.use_prompt_caching = (
             use_prompt_caching if use_prompt_caching is not None
@@ -492,8 +491,7 @@ class Claude_API(LLM_API):
         self.kwargs = kwargs
         if not self.model:
             raise ValueError(
-                "No model specified and no default model available in settings. "
-                "Please provide a model name or configure default_model in settings."
+                "No model specified. Please provide a model name."
             )
         self.api_key = settings.api_key
 

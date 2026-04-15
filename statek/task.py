@@ -10,7 +10,18 @@ from .agents.agent import SupervisedAgent
 from .agents.dialog_agent import DialogAgent
 from .executors.job import Job, JobStatus
 from .pyenv import PyEnv
-from .settings import get_provider_settings, get_statek_settings
+from .settings import get_provider_settings as _get_provider_settings
+from .settings import get_statek_settings as _get_statek_settings
+
+
+def get_provider_settings(provider=None):
+    """Compatibility shim for tests patching task-level settings access."""
+    return _get_provider_settings(provider)
+
+
+def get_statek_settings():
+    """Compatibility shim for tests patching task-level settings access."""
+    return _get_statek_settings()
 
 
 def copy_locals(code: str, dest: Dict, local_vars: Optional[Dict] = None):
@@ -72,20 +83,6 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
     return task_future.job.status == JobStatus.DONE
 
 
-def _job_model_kwargs(agent) -> Dict[str, Optional[str]]:
-    """Return explicit JobDef model kwargs only when metadata does not already pin them."""
-    metadata = agent._metadata or {}  # pylint: disable=protected-access
-    if metadata.get("MODEL") or metadata.get("MODEL_FAMILY"):
-        return {}
-
-    provider = get_statek_settings().default_llm_api_provider
-    provider_settings = get_provider_settings(provider)
-    return {
-        "model_family": provider,
-        "model": provider_settings.default_model if provider_settings else None,
-    }
-
-
 @temporal(complement = get_task_result, condition=is_job_completed)
 @tool
 def delegate_task(agent: SupervisedAgent,
@@ -112,7 +109,6 @@ def delegate_task(agent: SupervisedAgent,
         warmup_code=warmup_code,
         shared_vars=shared_vars,
         locale=locale,
-        **_job_model_kwargs(agent),
         **kwargs,
     )
 
@@ -175,7 +171,6 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
         warmup_code=warmup_code,
         shared_vars=shared_vars,
         locale=locale,
-        **_job_model_kwargs(agent),
         **kwargs,
     )
 
@@ -231,7 +226,6 @@ def submit_new_job(
     job_def = agent.create_job_def(
         shared_vars=shared_vars,
         locale=locale,
-        **_job_model_kwargs(agent),
         **kwargs,
     )
 

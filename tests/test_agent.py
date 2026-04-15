@@ -5,6 +5,7 @@
 import os
 from pathlib import Path
 from unittest.mock import patch
+import pytest
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from tests.conftest import clock, docs, exit_tool
@@ -170,7 +171,12 @@ class TestSupervisedAgentCustomRole:
 
     def test_supervised_agent_role_in_job_def(self, db0_fixture):  # pylint: disable=unused-argument
         """Test that custom role propagates to job definitions."""
-        agent = SupervisedAgent(role="custom_worker", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(
+            role="custom_worker",
+            _system_prompt="test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = agent.create_job_def()
         assert job_def.agent.role == "custom_worker"
 
@@ -252,6 +258,15 @@ class TestWarmupDef:
 class TestCreateJobDefWarmup:
     """Test cases for SupervisedAgent.create_job_def warmup_def integration."""
 
+    @staticmethod
+    def _agent():
+        return SupervisedAgent(
+            role="test",
+            _system_prompt="test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
+
     def test_model_initialized_from_agent_metadata(self, db0_fixture):  # pylint: disable=unused-argument
         """JobDef freezes model metadata at creation time."""
         agent = SupervisedAgent(
@@ -264,28 +279,34 @@ class TestCreateJobDefWarmup:
         assert job_def.model == "deepseek/deepseek-v3.2"
         assert job_def.model_family == "deepseek"
 
+    def test_create_job_def_requires_model_metadata(self, db0_fixture):  # pylint: disable=unused-argument
+        """create_job_def fails fast when MODEL metadata is missing."""
+        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        with pytest.raises(ValueError, match="MODEL"):
+            agent.create_job_def()
+
     def test_no_warmup_code_no_warmup_def(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def with no warmup_code and no warmup_def produces None warmup."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def()
         assert job_def.warmup_code is None
 
     def test_dynamic_warmup_only(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def with warmup_code but no warmup_def uses only dynamic code."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def(warmup_code="dynamic_block")
         assert job_def.warmup_code == "dynamic_block"
 
     def test_warmup_def_only(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def with no warmup_code but with warmup_def uses only agent's warmup."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         agent.update_warmup_def("agent_block")
         job_def = agent.create_job_def()
         assert job_def.warmup_code == "agent_block"
 
     def test_dynamic_and_warmup_def_combined(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def combines dynamic warmup_code followed by warmup_def blocks."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         agent.update_warmup_def("agent_block")
         job_def = agent.create_job_def(warmup_code="dynamic_block")
         # Dynamic first, then agent's warmup_def
@@ -294,7 +315,7 @@ class TestCreateJobDefWarmup:
 
     def test_dynamic_list_and_warmup_def_combined(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def combines dynamic warmup_code list with warmup_def blocks."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         agent.update_warmup_def("agent_block")
         job_def = agent.create_job_def(warmup_code=["d1", "d2"])
         blocks = list(job_def.warmup_code)
@@ -302,7 +323,7 @@ class TestCreateJobDefWarmup:
 
     def test_dynamic_and_multi_block_warmup_def(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def combines dynamic code with multi-block warmup_def."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         agent.update_warmup_def("a1\n# ----------\na2")
         job_def = agent.create_job_def(warmup_code="dynamic_block")
         blocks = list(job_def.warmup_code)
@@ -310,7 +331,7 @@ class TestCreateJobDefWarmup:
 
     def test_job_params_still_work(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def still passes kwargs as job_params when warmup_def is present."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         agent.update_warmup_def("agent_block")
         job_def = agent.create_job_def(warmup_code="dynamic_block", user_question="hello")
         assert job_def.job_params == {"user_question": "hello"}
@@ -319,27 +340,36 @@ class TestCreateJobDefWarmup:
 class TestCreateJobDefSharedVars:
     """Test cases for SupervisedAgent.create_job_def shared_vars integration."""
 
+    @staticmethod
+    def _agent():
+        return SupervisedAgent(
+            role="test",
+            _system_prompt="test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
+
     def test_no_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
         """Without shared_vars, job_params has no 'shared_vars' key."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def()
         assert job_def.job_params is None
 
     def test_dict_shared_vars_populates_job_params(self, db0_fixture):  # pylint: disable=unused-argument
         """Dict shared_vars: keys are recorded as 'shared_vars' in job_params."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def(shared_vars={"alpha": 1, "beta": 2})
         assert job_def.job_params == {"shared_vars": ["alpha", "beta"]}
 
     def test_empty_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
         """Empty shared_vars: 'shared_vars' is not added to job_params."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def(shared_vars={})
         assert job_def.job_params is None
 
     def test_shared_vars_combined_with_kwargs(self, db0_fixture):  # pylint: disable=unused-argument
         """shared_vars coexist with other kwargs in job_params."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def(
             shared_vars={"alpha": 1}, user_question="hi"
         )
@@ -350,7 +380,7 @@ class TestCreateJobDefSharedVars:
 
     def test_shared_vars_does_not_affect_warmup_code(self, db0_fixture):  # pylint: disable=unused-argument
         """shared_vars only reports names; it does not generate warmup_code."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def(shared_vars={"alpha": 1})
         assert job_def.warmup_code is None
 
@@ -358,9 +388,18 @@ class TestCreateJobDefSharedVars:
 class TestCreateJobDefLocale:
     """Test cases for SupervisedAgent.create_job_def locale parameter."""
 
+    @staticmethod
+    def _agent():
+        return SupervisedAgent(
+            role="test",
+            _system_prompt="test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
+
     def test_no_locale_defaults_to_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Without locale, JobDef.locale is None."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def()
         assert job_def.locale is None
 
@@ -371,7 +410,7 @@ class TestCreateJobDefLocale:
             lang_code=StatekLangCode.EN,
             country_code=StatekCountryCode.US,
         )
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def(locale=locale)
         assert job_def.locale is locale
 
@@ -382,7 +421,7 @@ class TestCreateJobDefLocale:
             lang_code=StatekLangCode.DE,
             country_code=StatekCountryCode.DE,
         )
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = self._agent()
         job_def = agent.create_job_def(
             warmup_code="x = 1",
             shared_vars={"alpha": 1},

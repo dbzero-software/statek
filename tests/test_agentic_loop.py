@@ -1,8 +1,6 @@
 """Tests for run_agentic_loop / _make_start_jobs_func."""
 # pylint: disable=no-member
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 import dbzero as db0
 
@@ -13,20 +11,14 @@ from statek.executors.utils import _make_start_jobs_func, find_existing_job_def
 from statek.pyenv import PyEnv
 
 
-def _mock_provider_settings(model="test-model"):
-    settings = MagicMock()
-    settings.default_model = model
-    return settings
-
-
-_PROVIDER_PATCH = patch(
-    "statek.executors.utils.get_provider_settings",
-    return_value=_mock_provider_settings(),
-)
-
-
 def _make_job_def(agent, warmup_code=None):
-    return JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
+    return JobDef(
+        agent=agent,
+        job_params=None,
+        warmup_code=warmup_code,
+        model_family="test",
+        model="test-model",
+    )
 
 
 def _make_job(job_def, status=JobStatus.READY):
@@ -80,8 +72,7 @@ class TestMakeStartJobsFunc:
         job_def = _make_job_def(agent)
 
         func = _make_start_jobs_func(agent, job_def, lambda: 10, provider=None)
-        with _PROVIDER_PATCH:
-            func(capacity=3)
+        func(capacity=3)
 
         jobs = list(db0.find(Job, db0.as_tag(agent)))
         assert len(jobs) == 3
@@ -91,8 +82,7 @@ class TestMakeStartJobsFunc:
         job_def = _make_job_def(agent)
 
         func = _make_start_jobs_func(agent, job_def, lambda: 2, provider=None)
-        with _PROVIDER_PATCH:
-            func(capacity=10)
+        func(capacity=10)
 
         jobs = list(db0.find(Job, db0.as_tag(agent)))
         assert len(jobs) == 2
@@ -106,8 +96,7 @@ class TestMakeStartJobsFunc:
 
         # queue=5, ready=2 → should create min(10, 5-2) = 3
         func = _make_start_jobs_func(agent, job_def, lambda: 5, provider=None)
-        with _PROVIDER_PATCH:
-            func(capacity=10)
+        func(capacity=10)
 
         all_jobs = list(db0.find(Job, db0.as_tag(agent)))
         assert len(all_jobs) == 5  # 2 pre-existing + 3 new
@@ -120,8 +109,7 @@ class TestMakeStartJobsFunc:
 
         # queue=4, ready_or_warming_up=1 → min(10, 4-1) = 3
         func = _make_start_jobs_func(agent, job_def, lambda: 4, provider=None)
-        with _PROVIDER_PATCH:
-            func(capacity=10)
+        func(capacity=10)
 
         all_jobs = list(db0.find(Job, db0.as_tag(agent)))
         assert len(all_jobs) == 4  # 1 pre-existing + 3 new
@@ -135,8 +123,7 @@ class TestMakeStartJobsFunc:
 
         # queue=2, ready=3 → min(10, 2-3) = min(10, -1) → 0
         func = _make_start_jobs_func(agent, job_def, lambda: 2, provider=None)
-        with _PROVIDER_PATCH:
-            func(capacity=10)
+        func(capacity=10)
 
         all_jobs = list(db0.find(Job, db0.as_tag(agent)))
         assert len(all_jobs) == 3  # no new jobs created
@@ -155,8 +142,7 @@ class TestMakeStartJobsFunc:
 
         # queue=4, agent_a ready=0 → min(10, 4) = 4
         func = _make_start_jobs_func(agent_a, job_def_a, lambda: 4, provider=None)
-        with _PROVIDER_PATCH:
-            func(capacity=10)
+        func(capacity=10)
 
         agent_a_jobs = list(db0.find(Job, db0.as_tag(agent_a)))
         assert len(agent_a_jobs) == 4
@@ -165,7 +151,13 @@ class TestMakeStartJobsFunc:
 def _make_tagged_job_def(agent, warmup_code=None):
     """Create a JobDef (automatically tagged with its agent via __post_init__)."""
     parsed = parse_warmup_code(warmup_code)
-    return JobDef(agent=agent, job_params=None, warmup_code=parsed)
+    return JobDef(
+        agent=agent,
+        job_params=None,
+        warmup_code=parsed,
+        model_family="test",
+        model="test-model",
+    )
 
 
 class TestFindExistingJobDef:

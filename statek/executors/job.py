@@ -13,7 +13,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWr
                           parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
-from statek.settings import get_provider_settings, get_statek_settings, ChatStyle, statek_log
+from statek.settings import get_statek_settings, ChatStyle, statek_log
 
 """
 READY: a fresh job instance ready for execution
@@ -112,27 +112,23 @@ class JobDef:
         )
         metadata_model = metadata.get('MODEL')
         metadata_model_family = metadata.get('MODEL_FAMILY')
+        if self.model is None and metadata_model is None:
+            role = self.agent.role if self.agent is not None else '<unknown>'
+            raise ValueError(
+                f"JobDef for agent '{role}' requires metadata field 'MODEL'"
+            )
         if self.model_family is None:
             self.model_family = (
                 metadata_model_family
                 or (
-                    metadata_model.split('/', 1)[0]
-                    if metadata_model and '/' in metadata_model
+                    (self.model or metadata_model).split('/', 1)[0]
+                    if (self.model or metadata_model) and '/' in (self.model or metadata_model)
                     else None
                 )
-                or get_statek_settings().default_llm_api_provider
             )
         if self.model is None:
             self.model = metadata_model
-            if self.model is None:
-                provider_settings = get_provider_settings(self.model_family)
-                self.model = provider_settings.default_model if provider_settings else None
-        if (
-            metadata_model_family is None
-            and self.model_family == get_statek_settings().default_llm_api_provider
-            and self.model
-            and '/' in self.model
-        ):
+        if metadata_model_family is None and self.model_family is None and self.model and '/' in self.model:
             self.model_family = self.model.split('/', 1)[0]
 
     def set_error(self, error: Exception, collect_traceback: bool = True) -> None:

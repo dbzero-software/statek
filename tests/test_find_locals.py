@@ -457,7 +457,12 @@ async def _async_find_local_tool(var_name: str, **kwargs):
 
 def _make_job_with_tools(role, tools):
     """Create a job with the given agent tools."""
-    agent = Agent(role=role, _system_prompt="Test", _tools=tools)
+    agent = Agent(
+        role=role,
+        _system_prompt="Test",
+        _metadata={"MODEL": "test-model"},
+        _tools=tools,
+    )
     job_def = JobDef(agent=agent, job_params={"goal": "Test"}, warmup_code=None)
     return Job(
         job_def=job_def,

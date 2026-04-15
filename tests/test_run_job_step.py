@@ -250,7 +250,6 @@ class TestRunJobStepHarnessIsolation:
             settings=LLM_API_Settings(
                 api_url="https://openrouter.ai/api/v1/chat/completions",
                 api_key="test-key",
-                default_model="gpt-4o",
             ),
             model="gpt-4o",
         )
@@ -293,7 +292,12 @@ class TestRunJobStepHarnessIsolation:
 
 def _make_job_with_tool(role, tool_name, tool_fn, warmup_code):
     """Create a Job with a named tool in agent context and given warmup code."""
-    agent = Agent(role=role, _system_prompt="Test", _tools=[])
+    agent = Agent(
+        role=role,
+        _system_prompt="Test",
+        _metadata={"MODEL": "test-model"},
+        _tools=[],
+    )
     agent.context[tool_name] = tool_fn
     job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
     return Job(
@@ -333,7 +337,12 @@ class TestRunJobStepToolExecution:
         cs1 = CallSpec(id="STATEK-001", func_name="tool_a", args=[], kwargs={})
         cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
         warmup_code = CodeBlock(code='exit("ok")', tool_calls=[cs1, cs2])
-        agent = Agent(role="role_multi", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="role_multi",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["tool_a"] = lambda: "alpha"
         agent.context["tool_b"] = lambda: "beta"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
@@ -377,7 +386,12 @@ class TestRunJobStepToolExecution:
     @pytest.mark.asyncio
     async def test_no_tool_calls_leaves_warmup_item_tool_log_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Warmup code without tool calls creates WarmupLogItem with tool_log=None."""
-        agent = Agent(role="role_no_tc", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="role_no_tc",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code='exit("ok")')
         job = Job(
             job_def=job_def, model_family="test", model="test-model",
@@ -500,7 +514,12 @@ class TestRunJobStepToolCallLogging:
         cs1 = CallSpec(id="STATEK-001", func_name="tool_a", args=[], kwargs={})
         cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
         warmup_code = CodeBlock(code='exit("ok")', tool_calls=[cs1, cs2])
-        agent = Agent(role="log_multi", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="log_multi",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["tool_a"] = lambda: "alpha"
         agent.context["tool_b"] = lambda: "beta"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
@@ -536,7 +555,12 @@ class TestRunJobStepToolCallLogging:
     @pytest.mark.asyncio
     async def test_no_tool_calls_no_statek_log_entry(self, db0_fixture, tmp_path):  # pylint: disable=unused-argument
         """No #STATEK: as tool entries in the log when warmup has no tool calls."""
-        agent = Agent(role="log_no_tc", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="log_no_tc",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code='exit("ok")')
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -554,7 +578,12 @@ class TestRunJobStepToolCallLogging:
         """Tool call log entry appears before the console output in the log file."""
         cs = CallSpec(id="STATEK-001", func_name="setup", args=[], kwargs={})
         warmup_code = CodeBlock(code='print("printed_output")\nexit("ok")', tool_calls=[cs])
-        agent = Agent(role="log_order", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="log_order",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["setup"] = lambda: "ready"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
@@ -648,7 +677,12 @@ class TestMultiBlockWarmupToolLog:
         cs2 = CallSpec(id="STATEK-002", func_name="tool_b", args=[], kwargs={})
         block1 = CodeBlock(code='print("setup")', tool_calls=[cs1])
         block2 = CodeBlock(code='exit("ok")', tool_calls=[cs2])
-        agent = Agent(role="multi_warmup_tl", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="multi_warmup_tl",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["tool_a"] = lambda: "alpha"
         agent.context["tool_b"] = lambda: "beta"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=[block1, block2])
@@ -683,7 +717,12 @@ class TestRunJobStepWarmupException:
     @pytest.mark.asyncio
     async def test_warmup_exception_sets_job_done(self, db0_fixture):  # pylint: disable=unused-argument
         """A non-FutureError exception in warmup sets job status to DONE."""
-        agent = Agent(role="warmup_exc_done", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="warmup_exc_done",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code="raise ValueError('boom')")
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -695,7 +734,12 @@ class TestRunJobStepWarmupException:
     @pytest.mark.asyncio
     async def test_warmup_exception_calls_set_error_on_job_def(self, db0_fixture):  # pylint: disable=unused-argument
         """A non-FutureError exception in warmup calls job_def.set_error with the exception."""
-        agent = Agent(role="warmup_exc_set_error", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="warmup_exc_set_error",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code="raise RuntimeError('critical')")
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -710,7 +754,12 @@ class TestRunJobStepWarmupException:
     @pytest.mark.asyncio
     async def test_warmup_exception_returns_true(self, db0_fixture):  # pylint: disable=unused-argument
         """run_job_step returns True when warmup raises a non-FutureError exception."""
-        agent = Agent(role="warmup_exc_ret", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="warmup_exc_ret",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code="raise TypeError('bad type')")
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -722,7 +771,12 @@ class TestRunJobStepWarmupException:
     @pytest.mark.asyncio
     async def test_warmup_exception_does_not_call_llm(self, db0_fixture):  # pylint: disable=unused-argument
         """No LLM API call is made when warmup raises a non-FutureError exception."""
-        agent = Agent(role="warmup_exc_no_llm", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="warmup_exc_no_llm",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code="raise ValueError('no llm')")
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -739,7 +793,12 @@ class TestRunJobStepWarmupException:
     @pytest.mark.asyncio
     async def test_warmup_future_error_still_suspends(self, db0_fixture):  # pylint: disable=unused-argument
         """FutureError from warmup still suspends the job (not treated as critical failure)."""
-        agent = Agent(role="warmup_future_suspend", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="warmup_future_suspend",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         future_not_ready = create_future_not_ready()
         warmup_code = "result = future_val"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
@@ -756,7 +815,12 @@ class TestRunJobStepWarmupException:
     @pytest.mark.asyncio
     async def test_non_warmup_exception_does_not_set_error(self, db0_fixture):  # pylint: disable=unused-argument
         """A non-FutureError exception in STARTED (non-warmup) code does NOT call set_error."""
-        agent = Agent(role="started_exc_no_error", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="started_exc_no_error",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.STARTED)
@@ -787,7 +851,12 @@ class TestRunJobStepWarmupException:
     @pytest.mark.asyncio
     async def test_warmup_second_block_exception_sets_job_done(self, db0_fixture):  # pylint: disable=unused-argument
         """Exception in the second warmup block is also treated as critical failure."""
-        agent = Agent(role="warmup_blk2_exc", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="warmup_blk2_exc",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None,
                          warmup_code=["x = 1", "raise ValueError('second block fails')"])
         job = Job(job_def=job_def, model_family="test", model="test-model",
@@ -811,7 +880,12 @@ class TestRunJobStepEmptyLLMSubmission:
     @pytest.mark.asyncio
     async def test_empty_string_response_prints_error(self, db0_fixture):  # pylint: disable=unused-argument
         """LLM responding with empty string prints error to console."""
-        agent = Agent(role="empty_resp", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="empty_resp",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
         job = Job(
             job_def=job_def, model_family="test", model="test-model",
@@ -844,7 +918,12 @@ class TestRunJobStepEmptyLLMSubmission:
     @pytest.mark.asyncio
     async def test_comment_only_response_prints_error(self, db0_fixture):  # pylint: disable=unused-argument
         """LLM responding with only comments prints error to console."""
-        agent = Agent(role="comment_resp", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="comment_resp",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
         job = Job(
             job_def=job_def, model_family="test", model="test-model",
@@ -878,7 +957,12 @@ class TestRunJobStepEmptyLLMSubmission:
     @pytest.mark.asyncio
     async def test_block_comment_only_response_prints_error(self, db0_fixture):  # pylint: disable=unused-argument
         """LLM responding with only block comments (docstrings) prints error to console."""
-        agent = Agent(role="block_comment_resp", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="block_comment_resp",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
         job = Job(
             job_def=job_def, model_family="test", model="test-model",
@@ -914,7 +998,12 @@ class TestRunJobStepEmptyLLMSubmission:
         """CodeBlock with tool calls but no code should NOT print error."""
         call_spec = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={})
         warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
-        agent = Agent(role="tool_no_error", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="tool_no_error",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["my_tool"] = lambda: "tool_result"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_blocks)
         job = Job(
@@ -930,7 +1019,12 @@ class TestRunJobStepEmptyLLMSubmission:
     @pytest.mark.asyncio
     async def test_valid_code_no_error(self, db0_fixture):  # pylint: disable=unused-argument
         """Normal code response should NOT print error."""
-        agent = Agent(role="valid_code", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="valid_code",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
         job = Job(
             job_def=job_def, model_family="test", model="test-model",
@@ -954,7 +1048,12 @@ class TestRunJobStepEmptyCodeBlock:
         call_spec = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={})
         # Two-block warmup: first block is tool-calls-only (code=None), second exits
         warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
-        agent = Agent(role="role_empty_code", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="role_empty_code",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["my_tool"] = lambda: "tool_result"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_blocks)
         job = Job(
@@ -973,7 +1072,12 @@ class TestRunJobStepEmptyCodeBlock:
         """Tool results are stored in WarmupLogItem even when CodeBlock.code is None."""
         call_spec = CallSpec(id="STATEK-001", func_name="my_tool", args=[], kwargs={})
         warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
-        agent = Agent(role="role_empty_tool", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="role_empty_tool",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["my_tool"] = lambda: "my_result"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_blocks)
         job = Job(
@@ -1002,7 +1106,12 @@ class TestRunJobStepCliToolCalls:
         """python_cli tool call output is captured into the WarmupLogItem's tool_log."""
         cs = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-hello")'})
         warmup_blocks = [CodeBlock(code='x = 1', tool_calls=[cs]), 'exit("ok")']
-        agent = Agent(role="cli_tl", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="cli_tl",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_blocks)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -1031,7 +1140,12 @@ class TestRunJobStepCliToolCalls:
         cs_regular = CallSpec(id="R-001", func_name="tracking_tool", args=[], kwargs={})
         cs_cli = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'x = 1'})
         warmup_code = [CodeBlock(code='y = 2', tool_calls=[cs_regular, cs_cli]), 'exit("ok")']
-        agent = Agent(role="mixed_tc", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="mixed_tc",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["tracking_tool"] = tracking_tool
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
@@ -1050,7 +1164,12 @@ class TestRunJobStepCliToolCalls:
         cs_regular = CallSpec(id="R-001", func_name="my_tool", args=[], kwargs={})
         cs_cli = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-out")'})
         warmup_code = [CodeBlock(code='x = 1', tool_calls=[cs_regular, cs_cli]), 'exit("ok")']
-        agent = Agent(role="mixed_order", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="mixed_order",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         agent.context["my_tool"] = lambda: "regular_out"
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
@@ -1073,7 +1192,12 @@ class TestRunJobStepCliToolCalls:
         cs = CallSpec(id="C-001", func_name="python_cli",
                       kwargs={"code": '1 / 0'})
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
-        agent = Agent(role="cli_err", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="cli_err",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -1096,7 +1220,12 @@ class TestRunJobStepCliToolCalls:
         cs = CallSpec(id="C-001", func_name="python_cli",
                       kwargs={"code": 'x = None\nx'})
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
-        agent = Agent(role="cli_none", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="cli_none",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -1116,7 +1245,12 @@ class TestRunJobStepCliToolCalls:
         cs = CallSpec(id="C-001", func_name="python_cli",
                       kwargs={"code": "result = future_val\nprint(result)"})
         warmup_code = CodeBlock(code=None, tool_calls=[cs])
-        agent = Agent(role="cli_future", _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role="cli_future",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
@@ -1427,7 +1561,7 @@ class TestHandleDialogMarkdownMedia:
         self, db0_fixture  # pylint: disable=unused-argument
     ):
         _DIALOG_SENT_MESSAGES.clear()
-        agent = DialogAgent(send_message=_record_dialog_message)
+        agent = DialogAgent(send_message=_record_dialog_message, _metadata={"MODEL": "test-model"})
         llm_resp = (
             'Twoja preferencja zostala zapisana. '
             '![Preferences calendar](private/calendar.svg) '
@@ -1444,7 +1578,7 @@ class TestHandleDialogMarkdownMedia:
         self, db0_fixture  # pylint: disable=unused-argument
     ):
         _DIALOG_SENT_MESSAGES.clear()
-        agent = DialogAgent(send_message=_record_dialog_message)
+        agent = DialogAgent(send_message=_record_dialog_message, _metadata={"MODEL": "test-model"})
         llm_resp = (
             'Oto Twoj grafik. '
             '![Grafik](sandbox://private/calendar.svg "Maj 2026")'
@@ -1463,7 +1597,7 @@ class TestHandleDialogMarkdownMedia:
         self, db0_fixture  # pylint: disable=unused-argument
     ):
         _DIALOG_SENT_MESSAGES.clear()
-        agent = DialogAgent(send_message=_record_dialog_message)
+        agent = DialogAgent(send_message=_record_dialog_message, _metadata={"MODEL": "test-model"})
 
         with patch("statek.executors.utils.get_current_agent", return_value=agent):
             await handle_dialog("Here is your chart: gen/chart.svg")

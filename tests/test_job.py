@@ -613,7 +613,9 @@ class TestJobGetNextRequest:
         request = job.get_next_request()
         assert request["system_prompt"] == "Test agent"
 
-    def test_get_next_request_uses_model_frozen_on_job_def_creation(self, db0_fixture):
+    def test_get_next_request_uses_model_frozen_on_job_def_creation(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
         """MODEL is frozen on JobDef creation and reused in later requests."""
         from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
 

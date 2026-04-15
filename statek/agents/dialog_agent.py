@@ -2,7 +2,7 @@
 
 import inspect
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Callable, Dict, Iterable, Optional
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.chat_style import ChatStyle
@@ -60,6 +60,7 @@ class DialogAgent(SupervisedAgent):
         send_message: Callable,
         tools: Iterable[Callable] = None,
         role: str = "dialog_agent",
+        _metadata: Optional[Dict[str, str]] = None,
     ):
         _validate_send_message(send_message)
 
@@ -72,6 +73,7 @@ class DialogAgent(SupervisedAgent):
             role=role,
             _system_prompt=None,
             _tools=basic_tools,
+            _metadata=_metadata,
         )
 
         # Register send_message as an internal tool under a private name
@@ -90,7 +92,7 @@ class DialogAgent(SupervisedAgent):
 
     def create_job_def(  # pylint: disable=no-member,arguments-renamed,too-many-arguments,too-many-positional-arguments
         self, tools=None, warmup_code=None, shared_vars=None, chat_style=None,
-        locale=None, model_family=None, model=None, **kwargs
+        locale=None, **kwargs
     ):
         """Create a JobDef with a dialog chat style.
 
@@ -111,7 +113,7 @@ class DialogAgent(SupervisedAgent):
             chat_style = ChatStyle[self._metadata['CHAT_STYLE']]  # pylint: disable=no-member
         job_def = super().create_job_def(
             tools=tools, warmup_code=warmup_code, shared_vars=shared_vars,
-            locale=locale, model_family=model_family, model=model, **kwargs
+            locale=locale, **kwargs
         )
         job_def.set_chat_style(chat_style or ChatStyle.MD_DIALOG)  # pylint: disable=no-member
         return job_def

@@ -21,7 +21,7 @@ from statek.executors.chat_log_item import ToolError, WarmupLogItem
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
-from statek.settings import get_statek_settings, get_provider_settings, get_statek_logger, statek_log, ChatStyle
+from statek.settings import get_statek_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.utils import (
     CodeBlock,
@@ -1194,19 +1194,17 @@ def _make_start_jobs_func(agent, job_def, task_queue_size_func, provider):
 
 def _resolve_job_def_model(agent, provider: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """Resolve the frozen JobDef model family and model for loop-created jobs."""
+    del provider
     metadata = agent._metadata or {}  # pylint: disable=protected-access
     model = metadata.get("MODEL")
+    if model is None:
+        raise ValueError(
+            f"Agent '{agent.role}' is missing required metadata field 'MODEL'"
+        )
     model_family = metadata.get("MODEL_FAMILY")
     if model_family is None and model and '/' in model:
         model_family = model.split('/', 1)[0]
-    if model is not None and model_family is not None:
-        return model_family, model
-
-    provider_name = provider or get_statek_settings().default_llm_api_provider
-    provider_settings = get_provider_settings(provider_name)
-    return model_family or provider_name, model or (
-        provider_settings.default_model if provider_settings else None
-    )
+    return model_family, model
 
 
 @dataclass

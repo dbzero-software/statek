@@ -825,6 +825,7 @@ print(f"Result: {result}")
         agent = Agent(
             role="test",
             _system_prompt="Test agent with context",
+            _metadata={"MODEL": "test-model"},
             _tools=[],
             _X__context={"custom_tool": custom_tool, "agent_var": 42}
         )
@@ -1043,6 +1044,7 @@ class TestExecStepWithAsyncTools:
         agent = Agent(
             role="async_tools_exec_test",
             _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
             _tools=tools,
         )
         job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
@@ -1154,6 +1156,7 @@ class TestExecStepStringNameResolution:
         agent = Agent(
             role="string_resolution_test",
             _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
             _tools=tools,
             _X__context=context or {},
         )
@@ -1239,6 +1242,7 @@ class TestExecStepIsoDateParsing:
         agent = Agent(
             role="iso_date_parse_test",
             _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
             _tools=tools,
             _X__context=context or {},
         )

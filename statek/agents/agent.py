@@ -8,7 +8,7 @@ from statek.system import tool
 from statek.docstring import parse_tool_docstring, format_docstring
 from statek.utils import CodeBlock
 from statek.executors.job import JobDef, parse_warmup_code
-from statek.settings import get_provider_settings, get_statek_logger, get_statek_settings
+from statek.settings import get_statek_logger
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -387,8 +387,6 @@ class SupervisedAgent(Agent):
         warmup_code: Optional[Union[str, Sequence[str]]] = None,
         shared_vars: Optional[Dict[str, Any]] = None,
         locale=None,
-        model_family: Optional[str] = None,
-        model: Optional[str] = None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -419,17 +417,14 @@ class SupervisedAgent(Agent):
 
         combined = self._combine_warmup_code(warmup_code)
         metadata = self._metadata or {}
+        model = metadata.get('MODEL')
         if model is None:
-            model = metadata.get('MODEL')
-        if model_family is None:
-            model_family = metadata.get('MODEL_FAMILY')
-        if model_family is None and model and '/' in model:
+            raise ValueError(
+                f"Agent '{self.role}' is missing required metadata field 'MODEL'"
+            )
+        model_family = metadata.get('MODEL_FAMILY')
+        if model_family is None and '/' in model:
             model_family = model.split('/', 1)[0]
-        if model_family is None:
-            model_family = get_statek_settings().default_llm_api_provider
-        if model is None:
-            provider_settings = get_provider_settings(model_family)
-            model = provider_settings.default_model if provider_settings else None
 
         return JobDef(
             agent=self,

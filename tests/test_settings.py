@@ -12,7 +12,6 @@ def test_statek_settings_parses_environment_variables():
     # Set up environment variables
     os.environ['OPENAI_API_URL'] = 'https://api.openai.com/v1'
     os.environ['OPENAI_API_KEY'] = 'test-key-123'
-    os.environ['OPENAI_DEFAULT_MODEL'] = 'gpt-4'
 
     os.environ['OPENROUTER_API_URL'] = 'https://openrouter.com/api/v1'
     os.environ['OPENROUTER_API_KEY'] = 'test-router-key'
@@ -30,13 +29,11 @@ def test_statek_settings_parses_environment_variables():
         openai_settings = settings.llm_api_settings['OPENAI']
         assert openai_settings.api_url == 'https://api.openai.com/v1'
         assert openai_settings.api_key == 'test-key-123'
-        assert openai_settings.default_model == 'gpt-4'
 
         # Verify OPENROUTER settings
         router_settings = settings.llm_api_settings['OPENROUTER']
         assert router_settings.api_url == 'https://openrouter.com/api/v1'
         assert router_settings.api_key == 'test-router-key'
-        assert router_settings.default_model is None
 
         # Verify default provider
         assert settings.default_llm_api_provider == 'OPENAI'
@@ -55,7 +52,6 @@ def test_statek_settings_parses_environment_variables():
         # Clean up environment variables
         del os.environ['OPENAI_API_URL']
         del os.environ['OPENAI_API_KEY']
-        del os.environ['OPENAI_DEFAULT_MODEL']
         del os.environ['OPENROUTER_API_URL']
         del os.environ['OPENROUTER_API_KEY']
 
@@ -65,7 +61,6 @@ def test_get_provider_settings_cached_function():
     # Set up environment variables
     os.environ['GOOGLE_API_URL'] = 'https://api.google.com/v1'
     os.environ['GOOGLE_API_KEY'] = 'google-key-456'
-    os.environ['GOOGLE_DEFAULT_MODEL'] = 'gemini-pro'
 
     try:
         # Clear the cache before testing
@@ -78,7 +73,6 @@ def test_get_provider_settings_cached_function():
         assert settings is not None
         assert settings.api_url == 'https://api.google.com/v1'
         assert settings.api_key == 'google-key-456'
-        assert settings.default_model == 'gemini-pro'
 
         # Call again to verify caching works (should return same object from cache)
         cached_settings = get_provider_settings('GOOGLE')
@@ -88,7 +82,6 @@ def test_get_provider_settings_cached_function():
         # Clean up
         del os.environ['GOOGLE_API_URL']
         del os.environ['GOOGLE_API_KEY']
-        del os.environ['GOOGLE_DEFAULT_MODEL']
         get_provider_settings.cache_clear()
 
 
