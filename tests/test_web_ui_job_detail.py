@@ -1,6 +1,7 @@
 """Tests for the web_ui job detail helper functions."""
 # pylint: disable=unused-argument,no-member
 
+from datetime import datetime
 from unittest.mock import MagicMock, PropertyMock
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
@@ -18,6 +19,9 @@ from web_ui.pages.job_detail import (
     _get_exception_messages,
     _get_job_model,
     _get_locale_str,
+    _get_latency_samples,
+    _summarize_latencies,
+    _format_latency_seconds,
     _get_system_prompt,
     _strip_language_hint_suffix,
     _build_history_sections,
@@ -157,6 +161,62 @@ class TestGetLocaleStr:
         job.job_def.locale = None
 
         assert _get_locale_str(job) == ''
+
+
+class TestLatencyHelpers:
+    def test_get_latency_samples_calls_job_getter(self):
+        job = MagicMock()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        job.get_response_times.return_value = [(t0, 5.5)]
+
+        assert _get_latency_samples(job, 'get_response_times') == [(t0, 5.5)]
+
+    def test_get_latency_samples_returns_empty_when_getter_missing(self):
+        class _JobWithoutGetter:  # pylint: disable=too-few-public-methods
+            pass
+        job = _JobWithoutGetter()
+
+        assert not _get_latency_samples(job, 'get_response_times')
+
+    def test_get_latency_samples_returns_empty_on_error(self):
+        job = MagicMock()
+        job.get_response_times.side_effect = RuntimeError('boom')
+
+        assert not _get_latency_samples(job, 'get_response_times')
+
+    def test_summarize_latencies_counts_completed_and_pending(self):
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = datetime(2026, 1, 1, 12, 1, 0)
+        t2 = datetime(2026, 1, 1, 12, 2, 0)
+
+        summary = _summarize_latencies([
+            (t0, 10.0),
+            (t1, None),
+            (t2, 20.0),
+        ])
+
+        assert summary.sample_count == 3
+        assert summary.completed_count == 2
+        assert summary.pending_count == 1
+        assert summary.min_seconds == 10.0
+        assert summary.avg_seconds == 15.0
+        assert summary.max_seconds == 20.0
+
+    def test_summarize_latencies_handles_empty_input(self):
+        summary = _summarize_latencies([])
+
+        assert summary.sample_count == 0
+        assert summary.completed_count == 0
+        assert summary.pending_count == 0
+        assert summary.min_seconds is None
+        assert summary.avg_seconds is None
+        assert summary.max_seconds is None
+
+    def test_format_latency_seconds_formats_pending(self):
+        assert _format_latency_seconds(None) == 'Pending'
+
+    def test_format_latency_seconds_formats_numeric_value(self):
+        assert _format_latency_seconds(12.345) == '12.35s'
 
     def test_returns_empty_string_when_job_def_missing(self):
         job = MagicMock()
@@ -476,7 +536,7 @@ class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
         md = _call_build_md(job, system_prompt='')
         assert 'System Prompt' not in md
 
-    def test_includes_initial_prompt_when_present(self, db0_fixture):
+    def test_omits_initial_prompt_history_when_present(self, db0_fixture):
         job = _make_job_for_md()
         job.get_chat_history.return_value = [
             ChatHistoryItem(
@@ -486,8 +546,8 @@ class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
             )
         ]
         md = _call_build_md(job)
-        assert 'Initial Prompt' in md
-        assert 'Analyse this data.' in md
+        assert 'Initial Prompt' not in md
+        assert 'Analyse this data.' not in md
 
     def test_omits_initial_prompt_when_empty(self, db0_fixture):
         job = _make_job_for_md()
@@ -902,12 +962,25 @@ class TestBuildHistorySections:
 
         sections = _build_history_sections(job)
 
-        assert len(sections) == 2
-        assert sections[0].title == 'Initial Prompt'
-        assert sections[1].title == 'Turn 1'
-        assert sections[1].tool_data == [(cs, 'tool result', None)]
-        assert sections[1].followups[0].title == 'Console Output'
-        assert sections[1].followups[0].content == 'console output\n'
+        assert len(sections) == 1
+        assert sections[0].title == 'Turn 1'
+        assert sections[0].tool_data == [(cs, 'tool result', None)]
+        assert sections[0].followups[0].title == 'Console Output'
+        assert sections[0].followups[0].content == 'console output\n'
+
+    def test_ignores_system_history_items(self, db0_fixture):
+        job = _make_job()
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.SYSTEM,
+                content='Prompt text',
+                content_src=ContentSource.SYSTEM,
+            ),
+        ]
+
+        sections = _build_history_sections(job)
+
+        assert sections == []
 
     def test_strips_language_hint_from_user_followup_display(self, db0_fixture):
         job = _make_job()

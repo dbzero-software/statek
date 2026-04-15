@@ -2,6 +2,7 @@
 
 import io
 import traceback
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -232,6 +233,18 @@ class _HistorySection:
     warmup_total: Optional[int] = None
 
 
+@dataclass
+class _LatencySummary:
+    """Aggregated latency statistics for one latency series."""
+
+    sample_count: int = 0
+    completed_count: int = 0
+    pending_count: int = 0
+    min_seconds: Optional[float] = None
+    avg_seconds: Optional[float] = None
+    max_seconds: Optional[float] = None
+
+
 def _get_history_items(job) -> list:
     """Return normalized chat history items for job details."""
     getter = getattr(job, 'get_chat_history', None)
@@ -246,8 +259,6 @@ def _get_history_items(job) -> list:
 
 def _message_title(item, has_assistant_section: bool) -> str:
     """Return a display label for a non-assistant chat history item."""
-    if item.role == ChatRole.SYSTEM:
-        return 'Initial Prompt'
     if item.role == ChatRole.TOOL:
         return 'Tool Result'
     if item.content_src == ContentSource.CONSOLE:
@@ -274,6 +285,9 @@ def _build_history_sections(job) -> list[_HistorySection]:
             current = None
 
     for item in _get_history_items(job):
+        if item.role == ChatRole.SYSTEM:
+            continue
+
         if item.role == ChatRole.ASSISTANT:
             _flush_current()
             is_warmup = (
@@ -294,9 +308,6 @@ def _build_history_sections(job) -> list[_HistorySection]:
             content = item.content or ''
             if item.tool_calls:
                 tool_calls_list = list(item.tool_calls)
-                # DIRECT warmup: python_cli tool calls carry the code in kwargs;
-                # extract it so the code block shows the actual warmup code
-                # instead of an empty "(empty)" block.
                 if is_warmup and not content and len(tool_calls_list) == 1:
                     cs0 = tool_calls_list[0]
                     if cs0.func_name == 'python_cli' and cs0.kwargs and 'code' in cs0.kwargs:
@@ -355,6 +366,56 @@ def _get_exception_messages(job) -> list[str]:
     """Return code-execution exception messages only (py_env.exceptions)."""
     exceptions = getattr(getattr(job, 'py_env', None), 'exceptions', None) or {}
     return [str(msg) for _, msg in sorted(exceptions.items()) if msg]
+
+
+def _get_latency_samples(job, getter_name: str) -> list[tuple[datetime, Optional[float]]]:
+    """Safely call a latency getter on ``job`` and normalize the result to a list."""
+    getter = getattr(job, getter_name, None)
+    if not callable(getter):
+        return []
+    try:
+        return list(getter())
+    except Exception:  # pylint: disable=broad-except
+        traceback.print_exc()
+        return []
+
+
+def _summarize_latencies(
+    samples: list[tuple[datetime, Optional[float]]]
+) -> _LatencySummary:
+    """Return compact summary stats for a series of latency samples."""
+    completed = [seconds for _, seconds in samples if seconds is not None]
+    sample_count = len(samples)
+    completed_count = len(completed)
+    pending_count = sample_count - completed_count
+    if not completed:
+        return _LatencySummary(
+            sample_count=sample_count,
+            completed_count=completed_count,
+            pending_count=pending_count,
+        )
+    return _LatencySummary(
+        sample_count=sample_count,
+        completed_count=completed_count,
+        pending_count=pending_count,
+        min_seconds=min(completed),
+        avg_seconds=sum(completed) / completed_count,
+        max_seconds=max(completed),
+    )
+
+
+def _format_latency_seconds(seconds: Optional[float]) -> str:
+    """Render a latency measurement for display."""
+    if seconds is None:
+        return 'Pending'
+    return f'{seconds:.2f}s'
+
+
+def _format_latency_timestamp(timestamp: Optional[datetime]) -> str:
+    """Render a latency-series timestamp in a compact UTC-agnostic form."""
+    if timestamp is None:
+        return '—'
+    return timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
 
 # ---------------------------------------------------------------------------
@@ -1000,6 +1061,135 @@ def _get_system_prompt(job) -> str:
         return ''
 
 
+def _render_latency_summary_card(title: str, summary: _LatencySummary, color: str) -> None:
+    """Render a compact summary card for one latency series."""
+    with ui.card().classes('gap-2 shadow-sm').style(
+        f'border-top: 3px solid {color}; min-width: 220px'
+    ):
+        ui.label(title).classes('text-sm font-semibold text-gray-800')
+        with ui.row().classes('items-center gap-3 flex-wrap'):
+            ui.label(
+                f'{summary.sample_count} '
+                f'sample{"s" if summary.sample_count != 1 else ""}'
+            ).classes(
+                'text-xs text-gray-600'
+            )
+            ui.label(f'{summary.completed_count} resolved').classes('text-xs text-green-700')
+            if summary.pending_count:
+                ui.label(f'{summary.pending_count} pending').classes('text-xs text-amber-700')
+        with ui.row().classes('items-center gap-3 flex-wrap'):
+            ui.label(f'Min: {_format_latency_seconds(summary.min_seconds)}').classes(
+                'text-xs font-mono text-gray-600'
+            )
+            ui.label(f'Avg: {_format_latency_seconds(summary.avg_seconds)}').classes(
+                'text-xs font-mono text-gray-600'
+            )
+            ui.label(f'Max: {_format_latency_seconds(summary.max_seconds)}').classes(
+                'text-xs font-mono text-gray-600'
+            )
+
+
+def _render_latency_table(
+    title: str,
+    icon: str,
+    description: str,
+    samples: list[tuple[datetime, Optional[float]]],
+    empty_label: str,
+) -> None:
+    """Render one latency series."""
+    summary = _summarize_latencies(samples)
+    with ui.column().classes('w-full gap-3'):
+        with ui.row().classes('items-start gap-2'):
+            ui.icon(icon).classes('text-base text-gray-600 mt-0.5')
+            with ui.column().classes('gap-1'):
+                ui.label(title).classes('text-base font-semibold text-gray-900')
+                ui.label(description).classes('text-sm text-gray-600 whitespace-pre-wrap')
+
+        accent_color = '#90caf9' if icon == 'schedule' else '#a5d6a7'
+        _render_latency_summary_card(title, summary, accent_color)
+
+        if not samples:
+            ui.label(empty_label).classes('text-sm italic text-gray-500')
+            return
+
+        with ui.card().classes('w-full shadow-sm p-0 overflow-hidden'):
+            with ui.row().classes(
+                'w-full items-center gap-4 px-4 py-2 bg-gray-50 '
+                'border-b border-gray-200'
+            ):
+                ui.label('Request Timestamp').classes(
+                    'text-xs font-semibold text-gray-500 uppercase tracking-wide w-56 shrink-0'
+                )
+                ui.label('Latency').classes(
+                    'text-xs font-semibold text-gray-500 uppercase tracking-wide w-28 shrink-0'
+                )
+                ui.label('Status').classes(
+                    'text-xs font-semibold text-gray-500 uppercase tracking-wide flex-1'
+                )
+
+            for timestamp, seconds in samples:
+                with ui.row().classes(
+                    'w-full items-start gap-4 px-4 py-3 border-b border-gray-100'
+                ):
+                    ui.label(_format_latency_timestamp(timestamp)).classes(
+                        'text-xs font-mono text-gray-600 w-56 shrink-0'
+                    )
+                    latency_classes = (
+                        'text-xs font-mono w-28 shrink-0 text-amber-700'
+                        if seconds is None else
+                        'text-xs font-mono w-28 shrink-0 text-gray-800'
+                    )
+                    ui.label(_format_latency_seconds(seconds)).classes(latency_classes)
+                    ui.label(
+                        'Waiting for response' if seconds is None else 'Recorded'
+                    ).classes(
+                        'text-sm text-gray-600 flex-1'
+                    )
+
+
+def _open_latency_dialog(job) -> None:
+    """Open the latency dialog."""
+    overall_samples = _get_latency_samples(job, 'get_response_times')
+    llm_samples = _get_latency_samples(job, 'get_llm_response_times')
+
+    with ui.dialog() as dlg:
+        with ui.card().classes('w-[1000px] max-w-[95vw] max-h-[90vh] overflow-auto'):
+            with ui.row().classes('w-full items-start justify-between gap-4'):
+                with ui.column().classes('gap-1 flex-1'):
+                    ui.label('Latency Breakdown').classes(
+                        'text-xl font-bold text-gray-900'
+                    )
+                    ui.label(
+                        'Overall shows user-visible wait time. LLM shows model round-trip time.'
+                    ).classes(
+                        'text-sm text-gray-600'
+                    )
+                ui.button(icon='close', on_click=dlg.close).props('flat round dense')
+
+            ui.separator()
+
+            with ui.column().classes('w-full gap-6'):
+                _render_latency_table(
+                    title='Overall Latency',
+                    icon='schedule',
+                    description='From each user message to the first visible LLM response.',
+                    samples=overall_samples,
+                    empty_label='No overall latency samples.',
+                )
+                _render_latency_table(
+                    title='LLM Response Latency',
+                    icon='smart_toy',
+                    description=(
+                        'From the LLM request boundary to the response. '
+                        'Without an explicit pending marker, values are approximate.'
+                    ),
+                    samples=llm_samples,
+                    empty_label='No LLM latency samples.',
+                )
+
+    dlg.open()
+
+
 def create_job_detail_dialog(job) -> None:
     """Open a full-screen dialog showing the job execution breakdown."""
     try:
@@ -1112,6 +1302,15 @@ def create_job_detail_dialog(job) -> None:
                     ui.button('PDF', icon='picture_as_pdf', on_click=_download_pdf).props(
                         'flat dense no-caps'
                     ).classes('text-xs text-red-600').tooltip('Download as PDF')
+                    ui.button(
+                        'Latency',
+                        icon='speed',
+                        on_click=lambda j=job: _open_latency_dialog(j),
+                    ).props(
+                        'flat dense no-caps'
+                    ).classes('text-xs text-sky-700').tooltip(
+                        'Show overall and LLM latency details'
+                    )
                     ui.button(icon='close', on_click=dlg.close).props('flat round dense')
 
             ui.separator().classes('mb-2')

@@ -3,6 +3,7 @@
 # pylint: disable=no-member
 
 import types
+from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 import dbzero as db0
 from tests.conftest import create_chat_log_item, set_warmup_positions
@@ -1525,3 +1526,204 @@ class TestGetNextRequestUserMessages:
             create_chat_log_item(console_pos=0, llm_resp="code"))
         job.chat_log.append("follow-up")
         assert job.last_response is None
+
+
+class TestGetResponseTimes:
+    """Tests for Job.get_response_times."""
+
+    def test_initial_and_follow_up_messages_measure_to_first_llm_response(
+        self, job_factory
+    ):
+        """Each user message maps to the first later LLM response."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=5)
+        t2 = t1 + timedelta(seconds=7)
+        t3 = t2 + timedelta(seconds=11)
+
+        job.initial_user_message_timestamp = t0
+        job.chat_log.append("initial msg")
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp1"))
+        job.chat_log[-1].timestamp = t1
+        job.chat_log.append(UserLogItem(message="follow-up", timestamp=t2))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp2"))
+        job.chat_log[-1].timestamp = t3
+
+        assert list(job.get_response_times()) == [
+            (t0, 5.0),
+            (t2, 11.0),
+        ]
+
+    def test_multiple_user_messages_share_same_first_response(self, job_factory):
+        """Multiple queued user messages before one reply use that same first reply."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=3)
+        t2 = t1 + timedelta(seconds=7)
+
+        job.chat_log.append(UserLogItem(message="msg1", timestamp=t0))
+        job.chat_log.append(UserLogItem(message="msg2", timestamp=t1))
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp"))
+        job.chat_log[-1].timestamp = t2
+
+        assert list(job.get_response_times()) == [
+            (t0, 10.0),
+            (t1, 7.0),
+        ]
+
+    def test_unanswered_user_message_returns_none(self, job_factory):
+        """User message without a later LLM response yields None."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+
+        job.chat_log.append(UserLogItem(message="waiting", timestamp=t0))
+
+        assert list(job.get_response_times()) == [(t0, None)]
+
+    def test_warmup_items_do_not_count_as_responses(self, job_factory):
+        """Warmup log items are ignored when computing response times."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=4)
+        t2 = t1 + timedelta(seconds=6)
+
+        job.chat_log.append(UserLogItem(message="msg", timestamp=t0))
+        job.chat_log.append(WarmupLogItem(console_pos=0, warmup_block_num=0, timestamp=t1))
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp"))
+        job.chat_log[-1].timestamp = t2
+
+        assert list(job.get_response_times()) == [(t0, 10.0)]
+
+    def test_direct_tool_call_turn_does_not_count_as_first_response(self, job_factory):
+        """DIRECT latency should wait for the first plain dialog reply."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=3)
+        t2 = t1 + timedelta(seconds=7)
+
+        job.chat_log.append(UserLogItem(message="msg", timestamp=t0))
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
+        ))
+        job.chat_log[-1].timestamp = t1
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="done"))
+        job.chat_log[-1].timestamp = t2
+
+        assert list(job.get_response_times()) == [(t0, 10.0)]
+
+    def test_md_dialog_script_turn_does_not_count_as_first_response(self, job_factory):
+        """MD_DIALOG latency should skip a pure script turn before dialog text."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=4)
+        t2 = t1 + timedelta(seconds=6)
+
+        job.chat_log.append(UserLogItem(message="msg", timestamp=t0))
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="x = 1"))
+        job.chat_log[-1].timestamp = t1
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="# Done."))
+        job.chat_log[-1].timestamp = t2
+
+        assert list(job.get_response_times()) == [(t0, 10.0)]
+
+
+class TestGetLlmResponseTimes:
+    """Tests for Job.get_llm_response_times."""
+
+    def test_first_llm_response_uses_job_creation_time_as_reference(self, job_factory):
+        """The first LLM response is measured from the job creation timestamp."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=9)
+
+        job.created_at = t0
+        first = create_chat_log_item(console_pos=0, llm_resp="resp1")
+        first.timestamp = t1
+        job.chat_log.append(first)
+
+        assert list(job.get_llm_response_times()) == [(t0, 9.0)]
+
+    def test_consecutive_llm_items_measure_inter_request_latency(self, job_factory):
+        """Consecutive concrete LLM items define approximate request timings."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=9)
+        t2 = t1 + timedelta(seconds=4)
+
+        first = create_chat_log_item(console_pos=0, llm_resp="resp1")
+        first.timestamp = t0
+        second = create_chat_log_item(console_pos=1, llm_resp="resp2")
+        second.timestamp = t1
+        third = create_chat_log_item(console_pos=2, llm_resp="resp3")
+        third.timestamp = t2
+        job.chat_log.extend([first, second, third])
+
+        assert list(job.get_llm_response_times()) == [
+            (t0, 9.0),
+            (t1, 4.0),
+        ]
+
+    def test_pending_llm_marker_takes_precedence_over_previous_response(self, job_factory):
+        """Awaiting-response markers provide the clean request timestamp."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=12)
+        t2 = t1 + timedelta(seconds=5)
+
+        first = create_chat_log_item(console_pos=0, llm_resp="resp1")
+        first.timestamp = t0
+        pending = create_chat_log_item(console_pos=1, llm_resp=None)
+        pending.timestamp = t1
+        second = create_chat_log_item(console_pos=1, llm_resp="resp2")
+        second.timestamp = t2
+        job.chat_log.extend([first, pending, second])
+
+        assert list(job.get_llm_response_times()) == [(t1, 5.0)]
+
+    def test_pending_llm_marker_without_response_returns_none(self, job_factory):
+        """Outstanding LLM requests are returned with unknown duration."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+
+        pending = create_chat_log_item(console_pos=0, llm_resp=None)
+        pending.timestamp = t0
+        job.chat_log.append(pending)
+
+        assert list(job.get_llm_response_times()) == [(t0, None)]
+
+    def test_non_llm_items_are_ignored(self, job_factory):
+        """User and warmup entries do not affect the extracted LLM timings."""
+        job = job_factory()
+        t0 = datetime(2026, 1, 1, 12, 0, 0)
+        t1 = t0 + timedelta(seconds=3)
+        t2 = t1 + timedelta(seconds=7)
+        t3 = t2 + timedelta(seconds=5)
+
+        first = create_chat_log_item(console_pos=0, llm_resp="resp1")
+        first.timestamp = t0
+        pending = create_chat_log_item(console_pos=1, llm_resp=None)
+        pending.timestamp = t2
+        second = create_chat_log_item(console_pos=1, llm_resp="resp2")
+        second.timestamp = t3
+        job.chat_log.extend([
+            first,
+            UserLogItem(message="follow-up", timestamp=t1),
+            WarmupLogItem(console_pos=0, warmup_block_num=0, timestamp=t2),
+            pending,
+            second,
+        ])
+
+        assert list(job.get_llm_response_times()) == [(t2, 5.0)]
+
+
+class TestJobCreatedAt:
+    """Tests for Job.created_at."""
+
+    def test_created_at_defaults_on_job_creation(self, job_factory):
+        """New jobs record a creation timestamp."""
+        job = job_factory()
+
+        assert job.created_at is not None
