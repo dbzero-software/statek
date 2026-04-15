@@ -196,8 +196,10 @@ class TestDelegateTask:
         result = delegate_task(supervised_agent)
 
         # Verify result is TaskFutureResult with a Job
-        assert result.job.model_family == "OPENAI"
-        assert result.job.model == "gpt-4"
+        assert result.job.model_family is None
+        assert result.job.model == "test-model"
+        assert result.job.job_def.model_family is None
+        assert result.job.job_def.model == "test-model"
         assert result.job.job_def.agent is supervised_agent
         # Prompt comes from agent's __prompt_template
         assert result.job.job_def.prompt() == "Test task"
@@ -230,7 +232,7 @@ class TestDelegateTask:
         agent = SupervisedAgent(
             role="test",
             _system_prompt="Test agent",
-            _metadata={'prompt_template': 'Process {data_type} for {user}'},
+            _metadata={'prompt_template': 'Process {data_type} for {user}', 'MODEL': 'test-model'},
             _tools=[]
         )
 
@@ -378,19 +380,19 @@ class TestStartDialog:
 
     def test_returns_job(self, db0_fixture, mock_settings):
         """start_dialog returns a Job instance."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hello")
         assert isinstance(job, Job)
 
     def test_job_agent_is_dialog_agent(self, db0_fixture, mock_settings):
         """Job's agent is the supplied DialogAgent."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hi")
         assert job.job_def.agent is agent
 
     def test_initial_message_in_chat_log(self, db0_fixture, mock_settings):
         """Initial message is pushed into the job via push_user_message."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hello world")
         # First message stored as str in chat_log (MD_DIALOG) or push_log
         has_msg = any(
@@ -406,7 +408,7 @@ class TestStartDialog:
 
     def test_kwargs_passed_as_job_params(self, db0_fixture, mock_settings):
         """Extra kwargs become job_params on the JobDef."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(
             agent, message="hi", topic="weather")
         assert job.job_def.job_params["topic"] == "weather"
@@ -415,7 +417,7 @@ class TestStartDialog:
         self, db0_fixture, mock_settings
     ):
         """Error handlers from parent_job are inherited by the dialog job."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         parent_job = start_dialog(agent, message="parent")
         parent_job.add_error_handler(_noop_error_handler, "ctx")
 
@@ -427,7 +429,7 @@ class TestStartDialog:
         self, db0_fixture, mock_settings
     ):
         """Dict shared_vars populate the dialog job's local_state."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(
             agent, message="hi", shared_vars={"alpha": 42, "label": "test"}
         )
@@ -438,7 +440,7 @@ class TestStartDialog:
         self, db0_fixture, mock_settings
     ):
         """Dict shared_vars surface their names in the job_def's job_params."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(
             agent, message="hi", shared_vars={"alpha": 1, "beta": 2}
         )
@@ -448,7 +450,7 @@ class TestStartDialog:
         self, db0_fixture, mock_settings
     ):
         """shared_vars should not produce ad-hoc print() warmup_code."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hi", shared_vars={"alpha": 1})
         assert job.job_def.warmup_code is None
 
@@ -456,7 +458,7 @@ class TestStartDialog:
         self, db0_fixture, mock_settings
     ):
         """shared_vars and warmup_code can be supplied together."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         x = 5  # picked up by warmup_code via frame inspection
         job = start_dialog(
             agent,
@@ -471,7 +473,7 @@ class TestStartDialog:
         self, db0_fixture, mock_settings
     ):
         """Without shared_vars or warmup_code, local_state stays empty."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hi")
         assert not job.py_env.local_state
 
@@ -484,7 +486,7 @@ class TestStartDialog:
             lang_code=StatekLangCode.EN,
             country_code=StatekCountryCode.GB,
         )
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hello", locale=locale)
         assert job.job_def.locale is locale
 
@@ -492,7 +494,7 @@ class TestStartDialog:
         self, db0_fixture, mock_settings
     ):
         """Without locale, JobDef.locale is None."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hi")
         assert job.job_def.locale is None
 
@@ -502,13 +504,13 @@ class TestDialogAgentCreateJobDefChatStyle:
 
     def test_default_chat_style_is_md_dialog(self, db0_fixture):
         """Without explicit chat_style, jobs default to MD_DIALOG."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job_def = agent.create_job_def()
         assert job_def.chat_style == ChatStyle.MD_DIALOG
 
     def test_explicit_chat_style_overrides_default(self, db0_fixture):
         """Passing chat_style overrides the MD_DIALOG default."""
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job_def = agent.create_job_def(chat_style=ChatStyle.DIRECT)
         assert job_def.chat_style == ChatStyle.DIRECT
 
@@ -519,7 +521,7 @@ class TestDialogAgentCreateJobDefChatStyle:
             lang_code=StatekLangCode.FR,
             country_code=StatekCountryCode.FR,
         )
-        agent = DialogAgent(send_message=_make_send_message)
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job_def = agent.create_job_def(locale=locale)
         assert job_def.locale is locale
 
@@ -558,7 +560,7 @@ class TestSubmitNewJob:
         agent = SupervisedAgent(
             role="test",
             _system_prompt="Test",
-            _metadata={'prompt_template': 'Handle {kind}'},
+            _metadata={'prompt_template': 'Handle {kind}', 'MODEL': 'test-model'},
             _tools=[]
         )
         job = submit_new_job(agent, kind="invoice")

@@ -7,7 +7,12 @@ from statek.statek_push_queue import StatekPushQueue
 
 
 def _make_job(db0_fixture):  # pylint: disable=unused-argument
-    agent = Agent(role="test", _system_prompt="test", _tools=[])
+    agent = Agent(
+        role="test",
+        _system_prompt="test",
+        _metadata={"MODEL": "test-model"},
+        _tools=[],
+    )
     job_def = JobDef(agent=agent)
     return Job(job_def=job_def, model_family="test", model="test-model",
                job_status=JobStatus.READY)  # pylint: disable=no-member
@@ -15,7 +20,12 @@ def _make_job(db0_fixture):  # pylint: disable=unused-argument
 
 def _make_job_on_current_prefix():
     """Create a Job (with its own Agent/JobDef) on whatever prefix is currently active."""
-    agent = Agent(role="test", _system_prompt="test", _tools=[])
+    agent = Agent(
+        role="test",
+        _system_prompt="test",
+        _metadata={"MODEL": "test-model"},
+        _tools=[],
+    )
     job_def = JobDef(agent=agent)
     return Job(job_def=job_def, model_family="test", model="test-model",
                job_status=JobStatus.READY)  # pylint: disable=no-member

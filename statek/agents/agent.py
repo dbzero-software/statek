@@ -416,12 +416,23 @@ class SupervisedAgent(Agent):
             job_params = None
 
         combined = self._combine_warmup_code(warmup_code)
+        metadata = self._metadata or {}
+        model = metadata.get('MODEL')
+        if model is None:
+            raise ValueError(
+                f"Agent '{self.role}' is missing required metadata field 'MODEL'"
+            )
+        model_family = metadata.get('MODEL_FAMILY')
+        if model_family is None and '/' in model:
+            model_family = model.split('/', 1)[0]
 
         return JobDef(
             agent=self,
             job_params=job_params,
             warmup_code=combined,
-            locale=locale
+            locale=locale,
+            model_family=model_family,
+            model=model,
         )
 
     def _combine_warmup_code(self, warmup_code):

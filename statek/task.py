@@ -10,7 +10,18 @@ from .agents.agent import SupervisedAgent
 from .agents.dialog_agent import DialogAgent
 from .executors.job import Job, JobStatus
 from .pyenv import PyEnv
-from .settings import get_provider_settings, get_statek_settings
+from .settings import get_provider_settings as _get_provider_settings
+from .settings import get_statek_settings as _get_statek_settings
+
+
+def get_provider_settings(provider=None):
+    """Compatibility shim for tests patching task-level settings access."""
+    return _get_provider_settings(provider)
+
+
+def get_statek_settings():
+    """Compatibility shim for tests patching task-level settings access."""
+    return _get_statek_settings()
 
 
 def copy_locals(code: str, dest: Dict, local_vars: Optional[Dict] = None):
@@ -95,7 +106,10 @@ def delegate_task(agent: SupervisedAgent,
     """
 
     job_def = agent.create_job_def(
-        warmup_code=warmup_code, shared_vars=shared_vars, locale=locale, **kwargs
+        warmup_code=warmup_code,
+        shared_vars=shared_vars,
+        locale=locale,
+        **kwargs,
     )
 
     env = PyEnv()
@@ -115,8 +129,6 @@ def delegate_task(agent: SupervisedAgent,
 
     job = Job(
         job_def=job_def,
-        model_family=get_statek_settings().default_llm_api_provider,
-        model=get_provider_settings().default_model,
         job_status=JobStatus.READY,
         py_env=env
     )
@@ -156,7 +168,10 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
         The newly created Job instance.
     """
     job_def = agent.create_job_def(
-        warmup_code=warmup_code, shared_vars=shared_vars, locale=locale, **kwargs
+        warmup_code=warmup_code,
+        shared_vars=shared_vars,
+        locale=locale,
+        **kwargs,
     )
 
     env = PyEnv()
@@ -174,8 +189,6 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
 
     job = Job(
         job_def=job_def,
-        model_family=get_statek_settings().default_llm_api_provider,
-        model=get_provider_settings().default_model,
         job_status=JobStatus.READY,
         py_env=env
     )
@@ -211,7 +224,9 @@ def submit_new_job(
         The newly created :class:`Job` instance.
     """
     job_def = agent.create_job_def(
-        shared_vars=shared_vars, locale=locale, **kwargs
+        shared_vars=shared_vars,
+        locale=locale,
+        **kwargs,
     )
 
     env = PyEnv()
@@ -220,8 +235,6 @@ def submit_new_job(
 
     return Job(
         job_def=job_def,
-        model_family=get_statek_settings().default_llm_api_provider,
-        model=get_provider_settings().default_model,
         job_status=JobStatus.READY,
         py_env=env,
     )

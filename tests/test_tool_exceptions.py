@@ -48,7 +48,12 @@ class TestToolErrorInToolLog:
 
 
 def _make_job(role, tools=None, context_extras=None):
-    agent = Agent(role=role, _system_prompt="Test", _tools=tools or [])
+    agent = Agent(
+        role=role,
+        _system_prompt="Test",
+        _metadata={"MODEL": "test-model"},
+        _tools=tools or [],
+    )
     if context_extras:
         agent.context.update(context_extras)
     job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
@@ -111,7 +116,12 @@ class TestRunJobStepRecordsToolErrors:
 
     @staticmethod
     def _make_warmup_job(role, warmup_code, context_extras=None):
-        agent = Agent(role=role, _system_prompt="Test", _tools=[])
+        agent = Agent(
+            role=role,
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
         if context_extras:
             agent.context.update(context_extras)
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)

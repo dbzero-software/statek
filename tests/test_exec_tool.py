@@ -75,6 +75,7 @@ def _make_job(role, tools=None, context_extras=None):
     agent = Agent(
         role=role,
         _system_prompt="Test",
+        _metadata={"MODEL": "test-model"},
         _tools=tools or [],
     )
     if context_extras:
@@ -301,7 +302,12 @@ class TestExecToolStatekCtx:  # pylint: disable=too-few-public-methods
     @pytest.mark.asyncio
     async def test_statek_ctx_agent_available_in_exec_tool(self, db0_fixture):  # pylint: disable=unused-argument
         """_STATEK_CTX with 'agent' key is available to tools via _local_context."""
-        agent_obj = Agent(role="ctx_tool_test", _system_prompt="Test", _tools=[_ctx_checker_tool])
+        agent_obj = Agent(
+            role="ctx_tool_test",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model"},
+            _tools=[_ctx_checker_tool],
+        )
         job_def = JobDef(agent=agent_obj, job_params=None, warmup_code=None)
         job = Job(
             job_def=job_def,

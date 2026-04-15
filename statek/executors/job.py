@@ -97,10 +97,39 @@ class JobDef:
     _chat_style: Optional[ChatStyle] = None
     # Optional locale for language-specific behaviour
     locale: Optional["StatekLocale"] = None
+    # Frozen LLM model family for jobs created from this definition
+    model_family: Optional[str] = None
+    # Frozen LLM model for jobs created from this definition
+    model: Optional[str] = None
 
     def __post_init__(self):
         if self.agent is not None:
             db0.tags(self).add(self.agent)
+        metadata = (
+            self.agent._metadata
+            if self.agent is not None and self.agent._metadata
+            else {}
+        )
+        metadata_model = metadata.get('MODEL')
+        metadata_model_family = metadata.get('MODEL_FAMILY')
+        if self.model is None and metadata_model is None:
+            role = self.agent.role if self.agent is not None else '<unknown>'
+            raise ValueError(
+                f"JobDef for agent '{role}' requires metadata field 'MODEL'"
+            )
+        if self.model_family is None:
+            self.model_family = (
+                metadata_model_family
+                or (
+                    (self.model or metadata_model).split('/', 1)[0]
+                    if (self.model or metadata_model) and '/' in (self.model or metadata_model)
+                    else None
+                )
+            )
+        if self.model is None:
+            self.model = metadata_model
+        if metadata_model_family is None and self.model_family is None and self.model and '/' in self.model:
+            self.model_family = self.model.split('/', 1)[0]
 
     def set_error(self, error: Exception, collect_traceback: bool = True) -> None:
         """Create a JobDefError from the given exception and associate it with this JobDef."""
@@ -204,8 +233,8 @@ class Job:
     def __init__(
         self,
         job_def: JobDef,
-        model_family: str,
-        model: str,
+        model_family: Optional[str] = None,
+        model: Optional[str] = None,
         job_status: JobStatus = JobStatus.READY,
         session_id: str = None,
         py_env: PyEnv = None,
@@ -215,13 +244,10 @@ class Job:
         warmup_block_num: Optional[int] = None,
         error: Optional[JobDefError] = None
     ):
+        del model_family, model  # backward-compatible init args; source of truth is JobDef
         self.job_def = job_def
         if self.job_def.agent is not None:
             db0.tags(self).add(self.job_def.agent)
-        # The LLM model family assigned to this job (e.g. Gemini)
-        self.model_family = model_family
-        # The LLM model assigned to this job (includes version)
-        self.model = model
         # Private job status attribute
         self.__job_status = None
         self.set_status(job_status)
@@ -254,6 +280,16 @@ class Job:
         if self.logs_path and self.job_def.agent is not None:
             self._log(self.job_def.agent.system_prompt(job_params=self.job_def.job_params))
             self._log(self.job_def.prompt())
+
+    @property
+    def model_family(self) -> Optional[str]:
+        """Return the frozen model family stored on the job definition."""
+        return self.job_def.model_family if self.job_def is not None else None
+
+    @property
+    def model(self) -> Optional[str]:
+        """Return the frozen model stored on the job definition."""
+        return self.job_def.model if self.job_def is not None else None
 
     def add_error_handler(self, error_handler: Callable, context: Any) -> None:
         """Register an error handler with this job.
@@ -742,6 +778,8 @@ class Job:
             dict(self.job_def.agent._metadata)  # pylint: disable=protected-access
             if self.job_def.agent._metadata else {}
         )
+        if self.job_def.model is not None:
+            metadata["MODEL"] = self.job_def.model
         system_prompt = (
             self.job_def.agent.system_prompt(job_params=self.job_def.job_params)
             if self.job_def.agent is not None else ""

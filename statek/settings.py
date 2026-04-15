@@ -17,13 +17,11 @@ class LLM_API_Settings(BaseSettings):
     Attributes:
         api_url: The base URL for the LLM API
         api_key: The API key for authentication
-        default_model: Optional default chat model name (e.g. gpt-4, gpt-3.5-turbo)
         response_format_file: Optional path to a JSON file with custom response_format schema
         use_prompt_caching: Whether to enable prompt caching (Claude-specific)
     """
     api_url: str
     api_key: str
-    default_model: Optional[str] = None
     response_format_file: Optional[str] = None
     use_prompt_caching: bool = False
 
@@ -36,10 +34,8 @@ class StatekSettings(BaseSettings):
     Environment variables should be prefixed with the provider name:
     - OPENROUTER_API_URL
     - OPENROUTER_API_KEY
-    - OPENROUTER_DEFAULT_MODEL (optional)
     - OPENAI_API_URL
     - OPENAI_API_KEY
-    - OPENAI_DEFAULT_MODEL (optional)
     - STATEK_PROMPT_FILES_DIR (optional, for prompt definition files)
 
     Attributes:
@@ -159,7 +155,7 @@ class StatekSettings(BaseSettings):
         """Parse environment variables to extract LLM provider settings.
 
         Looks for environment variables with the pattern:
-        {PROVIDER}_API_URL, {PROVIDER}_API_KEY, {PROVIDER}_DEFAULT_MODEL
+        {PROVIDER}_API_URL, {PROVIDER}_API_KEY
 
         Returns:
             Dictionary mapping provider names to their LLM_API_Settings
@@ -183,11 +179,6 @@ class StatekSettings(BaseSettings):
                 if provider not in providers:
                     providers[provider] = {}
                 providers[provider]['response_format_file'] = value
-            elif '_DEFAULT_MODEL' in key:
-                provider = key.replace('_DEFAULT_MODEL', '')
-                if provider not in providers:
-                    providers[provider] = {}
-                providers[provider]['default_model'] = value
             elif '_USE_PROMPT_CACHING' in key:
                 provider = key.replace('_USE_PROMPT_CACHING', '')
                 if provider not in providers:

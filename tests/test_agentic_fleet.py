@@ -1,8 +1,6 @@
 """Tests for AgentLoopDef and run_agentic_fleet."""
 # pylint: disable=no-member
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 import dbzero as db0
 
@@ -11,20 +9,13 @@ from statek.executors.job import Job, JobDef
 from statek.executors.utils import AgentLoopDef, run_agentic_fleet, find_existing_job_def
 
 
-def _mock_provider_settings(model="test-model"):
-    settings = MagicMock()
-    settings.default_model = model
-    return settings
-
-
-_PROVIDER_PATCH = patch(
-    "statek.executors.utils.get_provider_settings",
-    return_value=_mock_provider_settings(),
-)
-
-
 def _make_supervised_agent(role="fleet_agent"):
-    return SupervisedAgent(role=role, _system_prompt="Test", _tools=[])
+    return SupervisedAgent(
+        role=role,
+        _system_prompt="Test",
+        _metadata={"MODEL": "test-model"},
+        _tools=[],
+    )
 
 
 class TestAgentLoopDef:

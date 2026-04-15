@@ -8,7 +8,12 @@ from statek.executors.utils import process_push_notifications
 
 
 def _make_started_job():
-    agent = Agent(role="test", _system_prompt="test", _tools=[])
+    agent = Agent(
+        role="test",
+        _system_prompt="test",
+        _metadata={"MODEL": "test-model"},
+        _tools=[],
+    )
     job_def = JobDef(agent=agent)
     return Job(job_def=job_def, model_family="test", model="test-model",
                job_status=JobStatus.STARTED)  # pylint: disable=no-member

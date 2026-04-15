@@ -2,7 +2,7 @@
 
 import inspect
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Callable, Dict, Iterable, Optional
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.chat_style import ChatStyle
@@ -60,6 +60,7 @@ class DialogAgent(SupervisedAgent):
         send_message: Callable,
         tools: Iterable[Callable] = None,
         role: str = "dialog_agent",
+        _metadata: Optional[Dict[str, str]] = None,
     ):
         _validate_send_message(send_message)
 
@@ -72,6 +73,7 @@ class DialogAgent(SupervisedAgent):
             role=role,
             _system_prompt=None,
             _tools=basic_tools,
+            _metadata=_metadata,
         )
 
         # Register send_message as an internal tool under a private name
