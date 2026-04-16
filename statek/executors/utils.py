@@ -604,7 +604,7 @@ async def exec_tool(call_spec: CallSpec, job: Job,
     with _setup_execution_context(job, global_context, local_context, print_fn=_private_print):
         # Re-wrap the original tool with a combined context (global + local) so that
         # _bind_by_name / find_locals can resolve string arguments to actual objects
-        # (e.g. docs(what='some_tool') → the actual callable, not the string).
+        # (e.g. docstr(what='some_tool') → the actual callable, not the string).
         agent = job.job_def.agent
         original_tool = None
         if agent:

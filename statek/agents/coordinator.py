@@ -4,7 +4,7 @@ from typing import Dict
 from dataclasses import dataclass
 import dbzero as db0
 from statek.agents.agent import Agent, SupervisedAgent
-from statek.system import create_tool, docs
+from statek.system import create_tool, docstr
 
 
 
@@ -40,7 +40,7 @@ class Coordinator(SupervisedAgent):
         self.task_agents = task_agents if task_agents is not None else {}
 
         # Initialize with basic tools that will be expanded in context property
-        basic_tools = [docs, delegate_task]
+        basic_tools = [docstr, delegate_task]
 
         # Call parent constructor
         super().__init__(

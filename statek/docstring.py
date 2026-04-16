@@ -5,7 +5,7 @@ import inspect
 import re
 from collections import namedtuple
 from dataclasses import dataclass, fields as dataclass_fields
-from typing import Callable, Dict, List, Optional, Any, get_type_hints, Union
+from typing import Callable, Dict, List, Optional, Any, get_type_hints, Union, ForwardRef
 
 
 _VARIANT_SEP_RE = re.compile(r'/([A-Za-z0-9]{0,8}):')
@@ -928,6 +928,10 @@ def _extract_complement_return_type(func: Callable) -> Optional[str]:
 def _format_type_hint(type_hint) -> str:
     """Format a type hint into a readable string."""
     from typing import get_origin, get_args  # pylint: disable=import-outside-toplevel
+
+    # Handle ForwardRef objects
+    if isinstance(type_hint, ForwardRef):
+        return type_hint.__forward_arg__
 
     origin = get_origin(type_hint)
     args = get_args(type_hint)

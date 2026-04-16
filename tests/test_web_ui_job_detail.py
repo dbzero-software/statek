@@ -830,7 +830,7 @@ class TestBuildMdContentHistory:
     def test_creates_warmup_title_for_tool_only_block_without_content_src(self):
         """Tool-only warmup blocks should still render as warmup sections."""
         cs = MagicMock()
-        cs.format.return_value = 'docs("topic")'
+        cs.format.return_value = 'docstr("topic")'
         block = MagicMock()
         block.tool_calls = [cs]
         job = _make_job(warmup_code=[block])

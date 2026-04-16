@@ -73,8 +73,8 @@ def test_parse_func_call_bool_arg():
 
 def test_parse_func_call_variable_name_arg():
     """Variable names in args/kwargs are preserved as strings."""
-    result = parse_func_call('docs(OnCallCalendar)')
-    assert result == ParsedFuncCall(name='docs', args=['OnCallCalendar'], kwargs=None)
+    result = parse_func_call('docstr(OnCallCalendar)')
+    assert result == ParsedFuncCall(name='docstr', args=['OnCallCalendar'], kwargs=None)
 
 
 def test_parse_func_call_variable_name_kwarg():

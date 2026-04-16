@@ -4,7 +4,7 @@ from typing import Callable
 from dataclasses import dataclass
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
-from statek.system import create_tool, docs
+from statek.system import create_tool, docstr
 
 
 @db0.memo
@@ -45,7 +45,7 @@ class MessageDispatcher(SupervisedAgent):
         self.dispatch_to = dispatch_to
 
         # Initialize with basic tools; routing tools are registered below by name
-        basic_tools = [docs, chat_history, start_new_thread, dispatch_to]
+        basic_tools = [docstr, chat_history, start_new_thread, dispatch_to]
         # Call parent constructor
         super().__init__(
             role=role,

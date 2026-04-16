@@ -8,7 +8,7 @@ from statek.executors.utils import exec_tool
 from statek.utils import CallSpec
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
-from statek.system import tool, docs as docs_tool, brief as brief_tool
+from statek.system import tool, docstr as docs_tool, brief as brief_tool
 from statek.future import FutureResult
 from tests.test_exec_step import (
     create_future_ready, create_future_not_ready, MemoObject,
@@ -250,8 +250,8 @@ class TestExecTool:
     async def test_string_tool_name_resolved_to_callable(self, db0_fixture):  # pylint: disable=unused-argument
         """String tool name resolved to callable when annotation is a non-str union type.
 
-        Reproduces the bug where docs(what='get_user_calendar') returns str's docstring
-        because _bind_by_name skips union-type annotations and docs falls back to
+        Reproduces the bug where docstr(what='get_user_calendar') returns str's docstring
+        because _bind_by_name skips union-type annotations and docstr falls back to
         type(what)=str.
         """
         job = _make_job("role_resolve", tools=[_resolver_tool, _lookup_target])
@@ -326,16 +326,16 @@ class _SimpleDocClass:  # pylint: disable=too-few-public-methods
 
 
 class TestDocsAgentIntegration:
-    """Tests that docs and brief pass the current agent name to format_docstring."""
+    """Tests that docstr and brief pass the current agent name to format_docstring."""
 
     @pytest.mark.asyncio
     async def test_docs_passes_agent_type_name_to_format_docstring(self, db0_fixture):  # pylint: disable=unused-argument
-        """docs tool passes current agent's type name as agent= to format_docstring."""
+        """docstr tool passes current agent's type name as agent= to format_docstring."""
         job = _make_job("doc_test_agent", tools=[docs_tool],
                         context_extras={"_SimpleDocClass": _SimpleDocClass})
 
         with patch('statek.system.format_docstring', return_value="") as mock_fmt:
-            await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
+            await exec_tool(_call_spec("docstr", kwargs={"what": "_SimpleDocClass"}), job)
 
         assert mock_fmt.called
         _, call_kwargs = mock_fmt.call_args
@@ -356,11 +356,11 @@ class TestDocsAgentIntegration:
 
     @pytest.mark.asyncio
     async def test_docs_output_does_not_start_with_extra_quote(self, db0_fixture):  # pylint: disable=unused-argument
-        """docs tool output must not be wrapped in extra double quotes."""
+        """docstr tool output must not be wrapped in extra double quotes."""
         job = _make_job("doc_format_test", tools=[docs_tool],
                         context_extras={"_SimpleDocClass": _SimpleDocClass})
 
-        result, _ = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
+        result, _ = await exec_tool(_call_spec("docstr", kwargs={"what": "_SimpleDocClass"}), job)
 
         assert result.startswith("class "), (
             f"Output should start with 'class ', got: {result[:60]!r}"
@@ -368,11 +368,11 @@ class TestDocsAgentIntegration:
 
     @pytest.mark.asyncio
     async def test_docs_output_does_not_end_with_extra_quote(self, db0_fixture):  # pylint: disable=unused-argument
-        """docs tool output closing triple-quote must not gain an extra trailing quote."""
+        """docstr tool output closing triple-quote must not gain an extra trailing quote."""
         job = _make_job("doc_format_test2", tools=[docs_tool],
                         context_extras={"_SimpleDocClass": _SimpleDocClass})
 
-        result, _ = await exec_tool(_call_spec("docs", kwargs={"what": "_SimpleDocClass"}), job)
+        result, _ = await exec_tool(_call_spec("docstr", kwargs={"what": "_SimpleDocClass"}), job)
 
         assert not result.endswith('""""'), (
             f"Output should end with '\"\"\"', not '\"\"\"\"', got tail: {result[-20:]!r}"

@@ -730,7 +730,7 @@ class TestAgentAllTools:
         """all_tools includes both system and application tools added via append_tool."""
         from statek.system import find_tools  # pylint: disable=import-outside-toplevel
         # Use two already-registered tools known to have different system flags
-        sys_t = next(t for t in find_tools("SYSTEM") if t.__name__ == "docs")
+        sys_t = next(t for t in find_tools("SYSTEM") if t.__name__ == "docstr")
         app_t = next(t for t in find_tools("APPLICATION") if t.__name__ == "get_any")
         agent.append_tool(sys_t)
         agent.append_tool(app_t)

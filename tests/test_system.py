@@ -5,46 +5,46 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import (docs, brief, tool, create_tool, inject_context, find_tools,
+from statek.system import (docstr, brief, tool, create_tool, inject_context, find_tools,
                            select_tools, error_handler)
 from statek.chat_style import ChatStyle
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.utils import format_callable_decl
 
 class TestDocs:
-    """Test cases for docs function."""
+    """Test cases for docstr function."""
 
     def test_docs_with_function(self, capsys):
-        """Test docs with a function that has a docstring."""
+        """Test docstr with a function that has a docstring."""
         def sample_func():
             """This is a sample function."""
 
-        docs(sample_func)
+        docstr(sample_func)
         captured = capsys.readouterr()
         assert "This is a sample function." in captured.out
 
     def test_docs_with_class(self, capsys):
-        """Test docs with a class that has a docstring."""
+        """Test docstr with a class that has a docstring."""
         class SampleClass:
             """This is a sample class."""
 
-        docs(SampleClass)
+        docstr(SampleClass)
         captured = capsys.readouterr()
         assert "This is a sample class." in captured.out
 
     def test_docs_with_class_method(self, capsys):
-        """Test docs with a class method that has a docstring."""
+        """Test docstr with a class method that has a docstring."""
         class SampleClass:
             """This is a sample class."""
             def sample_method(self):
                 """This is a sample method."""
 
-        docs(SampleClass, "sample_method")
+        docstr(SampleClass, "sample_method")
         captured = capsys.readouterr()
         assert "This is a sample method." in captured.out
 
     def test_docs_with_multiline_docstring(self, capsys):
-        """Test docs with a multiline docstring."""
+        """Test docstr with a multiline docstring."""
         def complex_func():
             """
             This is a complex function.
@@ -53,61 +53,61 @@ class TestDocs:
             Including detailed explanations.
             """
 
-        docs(complex_func)
+        docstr(complex_func)
         captured = capsys.readouterr()
         assert "This is a complex function." in captured.out
         assert "It has multiple lines in its docstring." in captured.out
 
     def test_docs_with_no_docstring(self, capsys):
-        """Test docs with a function that has no docstring prints error."""
+        """Test docstr with a function that has no docstring prints error."""
         def no_doc_func():
             pass
 
-        docs(no_doc_func)
+        docstr(no_doc_func)
         captured = capsys.readouterr()
         assert "no docstring" in captured.out
 
     def test_docs_with_class_no_docstring(self, capsys):
-        """Test docs with a class that has no docstring prints error."""
+        """Test docstr with a class that has no docstring prints error."""
         class NoDocClass:
             pass
 
-        docs(NoDocClass)
+        docstr(NoDocClass)
         captured = capsys.readouterr()
         assert "no docstring" in captured.out
 
     def test_docs_with_method_no_docstring(self, capsys):
-        """Test docs with a method that has no docstring prints error."""
+        """Test docstr with a method that has no docstring prints error."""
         class SampleClass:
             """Sample class."""
             def no_doc_method(self):
                 pass
 
-        docs(SampleClass, "no_doc_method")
+        docstr(SampleClass, "no_doc_method")
         captured = capsys.readouterr()
         assert "no docstring" in captured.out
 
     def test_docs_with_non_existent_method(self, capsys):
-        """Test docs with a method that doesn't exist."""
+        """Test docstr with a method that doesn't exist."""
         class SampleClass:
             """Sample class."""
 
-        docs(SampleClass, "non_existent_method")
+        docstr(SampleClass, "non_existent_method")
         captured = capsys.readouterr()
         assert "SampleClass has no method 'non_existent_method'" in captured.out
 
     def test_docs_with_method_on_non_class(self, capsys):
-        """Test docs with method_name provided but tool_or_class is not a class."""
+        """Test docstr with method_name provided but tool_or_class is not a class."""
         def regular_function():
             """Just a function."""
 
-        docs(regular_function, "some_method")
+        docstr(regular_function, "some_method")
         captured = capsys.readouterr()
         assert "Error:" in captured.out
         assert "is not a class" in captured.out
 
     def test_docs_with_staticmethod(self, capsys):
-        """Test docs with a static method."""
+        """Test docstr with a static method."""
         class SampleClass:
             """Sample class."""
             @staticmethod
@@ -115,12 +115,12 @@ class TestDocs:
                 """This is a static method."""
                 return "static"
 
-        docs(SampleClass, "static_method")
+        docstr(SampleClass, "static_method")
         captured = capsys.readouterr()
         assert "This is a static method." in captured.out
 
     def test_docs_with_classmethod(self, capsys):
-        """Test docs with a class method."""
+        """Test docstr with a class method."""
         class SampleClass:
             """Sample class."""
             @classmethod
@@ -128,18 +128,18 @@ class TestDocs:
                 """This is a class method."""
                 return "classmethod"
 
-        docs(SampleClass, "class_method")
+        docstr(SampleClass, "class_method")
         captured = capsys.readouterr()
         assert "This is a class method." in captured.out
 
     def test_docs_with_builtin_function(self, capsys):
-        """Test docs with a built-in function prints error (no parseable docstring)."""
-        docs(len)
+        """Test docstr with a built-in function prints error (no parseable docstring)."""
+        docstr(len)
         captured = capsys.readouterr()
         assert "Error" in captured.out or "error" in captured.out.lower()
 
     def test_docs_with_tool_function(self, capsys):
-        """Test docs with a function decorated by @tool."""
+        """Test docstr with a function decorated by @tool."""
         @tool
         def decorated_func(x: int, **kwargs):  # pylint: disable=unused-argument
             """This function is decorated.
@@ -151,14 +151,14 @@ class TestDocs:
                 None: No return value.
             """
 
-        docs(decorated_func)
+        docstr(decorated_func)
         captured = capsys.readouterr()
         assert "This function is decorated." in captured.out
         # kwargs should not appear in output
         assert "kwargs" not in captured.out
 
     def test_docs_with_temporal_function(self, capsys):
-        """Test docs with a temporal function shows complement return type and description."""
+        """Test docstr with a temporal function shows complement return type and description."""
         def get_result(fut: FutureResult) -> str:  # pylint: disable=unused-argument
             """Retrieve the completed result.
 
@@ -182,7 +182,7 @@ class TestDocs:
             """
             return FutureResult(deps=None, state_num=0)
 
-        docs(my_temporal_func)
+        docstr(my_temporal_func)
         captured = capsys.readouterr()
 
         # Should show complement's return type (str), not FutureResult
@@ -199,15 +199,15 @@ class TestDocs:
 
 
     def test_docs_with_string_prints_name_error(self, capsys):
-        """Test docs with a string prints NameError (likely unresolved name)."""
-        docs("unknown_tool")
+        """Test docstr with a string prints NameError (likely unresolved name)."""
+        docstr("unknown_tool")
         captured = capsys.readouterr()
         assert "NameError" in captured.out
         assert "unknown_tool" in captured.out
 
     def test_docs_with_int_instance(self, capsys):
-        """Test docs with an int instance shows int class docs."""
-        docs(42)
+        """Test docstr with an int instance shows int class docs."""
+        docstr(42)
         captured = capsys.readouterr()
         assert "int" in captured.out
 
@@ -333,13 +333,13 @@ class TestCreateTool:
         assert tool_func() == 'Name: Alice, Age: 30'
 
     def test_create_tool_with_docs(self, capsys):
-        """Test that created tool works with docs function."""
+        """Test that created tool works with docstr function."""
         def sample_func(x):
             return x * 2
 
         tool_func = create_tool('sample_tool', sample_func, 'Doubles a number', {}, 5)
 
-        docs(tool_func)
+        docstr(tool_func)
         captured = capsys.readouterr()
         assert 'Doubles a number' in captured.out
 
@@ -679,15 +679,15 @@ class TestFindTools:
         assert all(not t.tool_system for t in app_tools)
 
     def test_tools_in_system_scope(self):
-        """docs appears in find_tools("SYSTEM")."""
+        """docstr appears in find_tools("SYSTEM")."""
         system_tools = list(find_tools("SYSTEM"))
-        assert docs in system_tools
+        assert docstr in system_tools
         assert brief in system_tools
 
     def test_tools_not_in_application_scope(self):
-        """docs does not appear in find_tools("APPLICATION")."""
+        """docstr does not appear in find_tools("APPLICATION")."""
         app_tools = list(find_tools("APPLICATION"))
-        assert docs not in app_tools
+        assert docstr not in app_tools
         assert brief not in app_tools
 
     def test_list_of_examples_and_show_example_in_system_scope(self):

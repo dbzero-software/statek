@@ -62,3 +62,6 @@ env/
 Thumbs.db
 
 AGENTS.md
+
+MagicMock
+.nicegui
