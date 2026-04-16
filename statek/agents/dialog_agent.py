@@ -54,18 +54,21 @@ class DialogAgent(SupervisedAgent):
 
     send_message: Callable = None
     additional_tools: Iterable[Callable] = None
+    add_answer_tool: bool = True
 
     def __init__(
         self,
         send_message: Callable,
         tools: Iterable[Callable] = None,
         role: str = "dialog_agent",
+        add_answer_tool: bool = True,
         _metadata: Optional[Dict[str, str]] = None,
     ):
         _validate_send_message(send_message)
 
         self.send_message = send_message
         self.additional_tools = tools if tools is not None else []
+        self.add_answer_tool = add_answer_tool
 
         basic_tools = list(self.additional_tools)
 
@@ -76,11 +79,21 @@ class DialogAgent(SupervisedAgent):
             _metadata=_metadata,
         )
 
-        # Register send_message as an internal tool under a private name
-        self._register_send_message()
+        # Register dynamic tools by name; their implementations are populated
+        # in init_context() so they survive db0 persistence/reload.
+        self.append_tool('_send_message')
+        if add_answer_tool:
+            self.append_tool('answer')
 
-    def _register_send_message(self):
-        """Wrap and register ``send_message`` as ``_send_message`` internal tool."""
+    def init_context(self):
+        if self._X__context is None:
+            super().init_context()
+            self._create_send_message_tool()
+            if self.add_answer_tool:
+                self._create_answer_tool()
+
+    def _create_send_message_tool(self):
+        """Populate ``_send_message`` impl in agent context."""
         original = self.send_message
 
         def _send_message(body: str, media=None):
@@ -88,7 +101,29 @@ class DialogAgent(SupervisedAgent):
 
         _send_message.__name__ = "_send_message"
         _send_message.__doc__ = getattr(original, "__doc__", None)
-        self.append_tool(_send_message)
+        self._X__context['_send_message'] = _send_message
+
+    def _create_answer_tool(self):
+        """Populate ``answer`` impl in agent context.
+
+        Mirrors ``send_message``'s interface (``body``, optional ``media``)
+        but is exposed to the LLM (and python_cli) as ``answer``. After
+        forwarding the message it terminates the job via ``exit("Success")``.
+        """
+        original = self.send_message
+
+        def answer(body: str, media=None):
+            """Deliver the final message to the user and end the dialog.
+
+            Args:
+                body (required): The final message text to send to the user.
+                media: Optional media attachment forwarded to send_message.
+            """
+            original(body=body, media=media)
+            exit("Success")  # pylint: disable=consider-using-sys-exit
+
+        answer.__name__ = "answer"
+        self._X__context['answer'] = answer
 
     def create_job_def(  # pylint: disable=no-member,arguments-renamed,too-many-arguments,too-many-positional-arguments
         self, tools=None, warmup_code=None, shared_vars=None, chat_style=None,

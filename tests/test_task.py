@@ -1,4 +1,5 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable
+import builtins
 from unittest.mock import Mock, patch
 import pytest
 
@@ -345,6 +346,15 @@ class TestDelegateTask:
         assert result.job.job_def.locale is None
 
 
+_recorded_send_calls = []
+
+
+def _recording_send_message(body: str, media=None):
+    """Module-level send_message that records invocations."""
+    _recorded_send_calls.append((body, media))
+    return "ok"
+
+
 def _make_send_message(body: str, media=None):
     """Mock send_message for DialogAgent tests.
 
@@ -494,6 +504,45 @@ class TestStartDialog:
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hi")
         assert job.job_def.locale is None
+
+
+class TestDialogAgentAddAnswerTool:
+    """Tests for DialogAgent's add_answer_tool parameter."""
+
+    def test_answer_tool_registered_by_default(self, db0_fixture):
+        """By default, an 'answer' tool is registered on the agent."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        tool_names = [t.__name__ for t in agent.all_tools]
+        assert "answer" in tool_names
+
+    def test_answer_tool_absent_when_disabled(self, db0_fixture):
+        """When add_answer_tool=False, no 'answer' tool is registered."""
+        agent = DialogAgent(
+            send_message=_make_send_message,
+            add_answer_tool=False,
+            _metadata={"MODEL": "test-model"},
+        )
+        tool_names = [t.__name__ for t in agent.all_tools]
+        assert "answer" not in tool_names
+
+    def test_answer_tool_forwards_body_and_media_and_exits(self, db0_fixture):
+        """answer forwards body/media to send_message then signals exit."""
+        _recorded_send_calls.clear()
+        agent = DialogAgent(
+            send_message=_recording_send_message, _metadata={"MODEL": "test-model"}
+        )
+        answer = next(t for t in agent.all_tools if t.__name__ == "answer")
+
+        exit_calls = []
+        original_exit = builtins.exit
+        builtins.exit = lambda status=None: exit_calls.append(status)
+        try:
+            answer(body="final", media="img.png")
+        finally:
+            builtins.exit = original_exit
+
+        assert _recorded_send_calls == [("final", "img.png")]
+        assert exit_calls == ["Success"]
 
 
 class TestDialogAgentCreateJobDefChatStyle:

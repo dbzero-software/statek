@@ -76,6 +76,8 @@ def show_document(key, topic=None, start_from: int = 0, limit: int = 50, **kwarg
 def show_example(example_id: Optional[int] = None, **kwargs):  # pylint: disable=unused-argument
     """Shows the content of a specific example by its index.
 
+    Uses the default example if no index is provided.
+
     Args:
         example_id: Optional index of the example to show (as listed by list_of_examples).
             If not provided, uses default_example_id from the local context.
