@@ -771,43 +771,39 @@ class TestJobGetChatHistoryWithWarmup:
     """Test get_chat_history yields warmup as ASSISTANT + USER (console) pairs."""
 
     def test_warmup_no_chat_log_single_block(self, job_factory):
-        """One warmup block, no LLM turns: [SYSTEM, asst(code), user(console)]."""
+        """One warmup block, no LLM turns: [asst(code), user(console)]."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup output"]
         set_warmup_positions(job, [1])
 
         history = list(job.get_chat_history())
 
-        assert len(history) == 3
-        assert history[0].role == ChatRole.SYSTEM
-        assert history[0].content == "Test agent"
-        assert history[1].role == ChatRole.ASSISTANT
-        assert history[1].content == "x = 1"
-        assert history[1].content_src == ContentSource.SYSTEM
-        assert history[2].role == ChatRole.USER
-        assert history[2].content == "warmup output"
-        assert history[2].content_src == ContentSource.CONSOLE
+        assert len(history) == 2
+        assert history[0].role == ChatRole.ASSISTANT
+        assert history[0].content == "x = 1"
+        assert history[0].content_src == ContentSource.SYSTEM
+        assert history[1].role == ChatRole.USER
+        assert history[1].content == "warmup output"
+        assert history[1].content_src == ContentSource.CONSOLE
 
     def test_warmup_no_chat_log_two_blocks(self, job_factory):
-        """Two warmup blocks: [SYSTEM, asst1, user1, asst2, user2]."""
+        """Two warmup blocks: [asst1, user1, asst2, user2]."""
         job = job_factory(warmup_code=["block1", "block2"])
         job.py_env.console = ["out1", "out2"]
         set_warmup_positions(job, [1, 2])
 
         history = list(job.get_chat_history())
 
-        assert len(history) == 5
-        assert history[0].role == ChatRole.SYSTEM
-        assert history[0].content == "Test agent"
-        assert history[1].content == "block1"
-        assert history[1].content_src == ContentSource.SYSTEM
-        assert history[2].content == "out1"
-        assert history[2].content_src == ContentSource.CONSOLE
-        assert history[3].content == "block2"
-        assert history[4].content == "out2"
+        assert len(history) == 4
+        assert history[0].content == "block1"
+        assert history[0].content_src == ContentSource.SYSTEM
+        assert history[1].content == "out1"
+        assert history[1].content_src == ContentSource.CONSOLE
+        assert history[2].content == "block2"
+        assert history[3].content == "out2"
 
     def test_warmup_with_chat_log(self, job_factory):
-        """Warmup followed by an LLM turn: [SYSTEM, asst_w, user_w, asst_llm, user_llm]."""
+        """Warmup followed by an LLM turn: [asst_w, user_w, asst_llm, user_llm]."""
         job = job_factory(warmup_code="x = 1")
         job.py_env.console = ["warmup out", "post-warmup out"]
         set_warmup_positions(job, [1])
@@ -815,13 +811,11 @@ class TestJobGetChatHistoryWithWarmup:
 
         history = list(job.get_chat_history())
 
-        assert len(history) == 5
-        assert history[0].role == ChatRole.SYSTEM
-        assert history[0].content == "Test agent"
-        assert history[1].content == "x = 1"        # warmup asst
-        assert history[2].content == "warmup out"   # warmup user
-        assert history[3].content == "resp1"        # llm asst
-        assert history[4].content == "post-warmup out"  # llm user
+        assert len(history) == 4
+        assert history[0].content == "x = 1"        # warmup asst
+        assert history[1].content == "warmup out"   # warmup user
+        assert history[2].content == "resp1"        # llm asst
+        assert history[3].content == "post-warmup out"  # llm user
 
     def test_tool_only_warmup_keeps_system_content_source(self, job_factory):
         """Tool-only warmup assistant items should still be marked as SYSTEM."""
@@ -832,14 +826,12 @@ class TestJobGetChatHistoryWithWarmup:
 
         history = list(job.get_chat_history())
 
-        assert history[0].role == ChatRole.SYSTEM
-        assert history[0].content == "Test agent"
-        assert history[1].role == ChatRole.ASSISTANT
-        assert history[1].content is None
-        assert history[1].content_src == ContentSource.SYSTEM
-        assert history[1].tool_calls == [call_spec]
-        assert history[2].role == ChatRole.TOOL
-        assert history[2].content == "tool result"
+        assert history[0].role == ChatRole.ASSISTANT
+        assert history[0].content is None
+        assert history[0].content_src == ContentSource.SYSTEM
+        assert history[0].tool_calls == [call_spec]
+        assert history[1].role == ChatRole.TOOL
+        assert history[1].content == "tool result"
 
     def test_warmup_not_in_subsequent_messages(self, job_factory):
         """Warmup code does not appear in console items after the first LLM turn."""
@@ -1005,7 +997,7 @@ class TestAppendChatLogDirect:
         assert job.chat_log[0].llm_resp == "Hello user!"
 
     def test_direct_preserves_tool_calls(self, job_factory):
-        """DIRECT style: tool calls are preserved even though code is discarded."""
+        """DIRECT style: tool calls are preserved; code holds dialog text only."""
         from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
         job = job_factory()
         mock_settings = MagicMock()
@@ -1027,17 +1019,16 @@ class TestAppendChatLogDirect:
 
         stored = job.chat_log[0].llm_resp
         assert isinstance(stored, CodeBlock)
+        # Fenced code is stripped — no dialog text outside fences
         assert stored.code is None
         assert len(stored.tool_calls) == 1
 
-    def test_direct_prose_with_tool_calls_discards_prose_as_code(self, job_factory):
-        """DIRECT: prose response with tool calls must NOT be stored as code.
+    def test_direct_prose_with_tool_calls_stores_dialog_text(self, job_factory):
+        """DIRECT: prose response with tool calls stores dialog in code field.
 
-        Reproduces the bug where the LLM responds with English prose (no
-        fences) plus a python_cli tool call. ``extract_dialog`` returned the
-        prose, which was then stored as ``CodeBlock.code`` and later passed
-        to ``ast.parse`` — raising SyntaxError, swallowing the exception,
-        and losing the python_cli output entirely.
+        The dialog text is stored in ``CodeBlock.code`` for chat history
+        reconstruction.  ``exec_all_steps`` skips code execution in DIRECT
+        mode so the prose is never passed to ``ast.parse``.
         """
         from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
         job = job_factory()
@@ -1061,8 +1052,7 @@ class TestAppendChatLogDirect:
 
         stored = job.chat_log[0].llm_resp
         assert isinstance(stored, CodeBlock)
-        # The prose must NOT be stored as executable code.
-        assert stored.code is None
+        assert stored.code == "You have 3 preference points remaining for April."
         assert len(stored.tool_calls) == 1
 
     def test_direct_plain_text_response_stored_as_none(self, job_factory):
@@ -1109,6 +1099,50 @@ class TestPushUserMessageDirect:
         job.push_user_message("second")
         assert isinstance(job.chat_log[1], UserLogItem)
         assert job.chat_log[1].message == "second"
+
+
+class TestPushUserMessageNumCompletions:
+    """Tests for num_completions tracking in push_user_message."""
+
+    def test_num_completions_starts_as_none(self, job_factory):
+        """New job has num_completions=None."""
+        job = job_factory()
+        assert job.num_completions is None
+
+    def test_done_to_started_sets_num_completions_to_1(self, job_factory):
+        """First DONE->STARTED transition sets num_completions from None to 1."""
+        job = job_factory()
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        job.push_user_message("hi")
+        assert job.num_completions == 1
+
+    def test_second_completion_increments_to_2(self, job_factory):
+        """Second DONE->STARTED transition increments num_completions to 2."""
+        job = job_factory()
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        job.push_user_message("first")
+        # Job is now STARTED; transition back to DONE
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        job.push_user_message("second")
+        assert job.num_completions == 2
+
+    def test_no_increment_when_not_done(self, job_factory):
+        """push_user_message on a non-DONE job does not change num_completions."""
+        job = job_factory()
+        assert job.status == JobStatus.READY  # pylint: disable=no-member
+        job.push_user_message("msg")
+        assert job.num_completions is None
+
+    def test_returns_true_on_done_to_started(self, job_factory):
+        """push_user_message returns True when DONE->STARTED transition occurs."""
+        job = job_factory()
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+        assert job.push_user_message("hi") is True
+
+    def test_returns_false_when_not_done(self, job_factory):
+        """push_user_message returns False when no transition occurs."""
+        job = job_factory()
+        assert job.push_user_message("hi") is False
 
 
 class TestJobDefErrors:
@@ -1377,10 +1411,10 @@ class TestGetNextRequestUserMessages:
 
         history = list(job.get_next_request()["chat_history"])
 
-        # [SYSTEM, USER(initial), ASSISTANT(resp), USER(console)]
-        assert history[1].role == ChatRole.USER
-        assert history[1].content == "initial user message"
-        assert history[1].content_src == ContentSource.USER
+        # [USER(initial), ASSISTANT(resp), USER(console)]
+        assert history[0].role == ChatRole.USER
+        assert history[0].content == "initial user message"
+        assert history[0].content_src == ContentSource.USER
 
     def test_str_in_chat_log_yields_initial_user_item_with_hint(self, job_def_factory):
         """Leading chat_log str in request history gets the language hint."""
@@ -1400,8 +1434,8 @@ class TestGetNextRequestUserMessages:
 
         history = list(job.get_next_request()["chat_history"])
 
-        assert history[1].role == ChatRole.USER
-        assert "initial user message (PAMIĘTAJ:" in history[1].content
+        assert history[0].role == ChatRole.USER
+        assert "initial user message (PAMIĘTAJ:" in history[0].content
 
     def test_user_log_item_in_chat_log_yields_user_item(self, job_factory):
         """A UserLogItem in chat_log is yielded as a USER ChatHistoryItem."""

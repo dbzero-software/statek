@@ -265,6 +265,8 @@ class Job:
         self.total_cost = 0.0
         # Persistent execution context (created on demand by perm_ctx_set)
         self.perm_ctx: Optional[dict] = None
+        # Number of completed DONE transitions (None until first completion)
+        self.num_completions: Optional[int] = None
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
@@ -582,17 +584,6 @@ class Job:
             [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
         ) if warmup else []
 
-        # When warmup is present, the system prompt moves out of the current
-        # user message and needs to stay anchored at the head of the history.
-        if warmup_blocks:
-            sys_prompt = self.job_def.system_prompt
-            if sys_prompt:
-                yield ChatHistoryItem(
-                    role=ChatRole.SYSTEM,
-                    content=sys_prompt,
-                    content_src=ContentSource.SYSTEM,
-                )
-
         # 1) Initial user message — chat_log[0] (str) and/or push_log[0].
         initial_parts: List[str] = []
         if (
@@ -781,22 +772,8 @@ class Job:
             if lang_rule:
                 system_prompt = f"{system_prompt}\n\n{lang_rule}"
 
-        def _request_chat_history() -> Iterable[ChatHistoryItem]:
-            history = list(self.get_chat_history())
-            if (
-                history
-                and history[0].role == ChatRole.USER
-                and system_prompt
-            ):
-                yield ChatHistoryItem(
-                    role=ChatRole.SYSTEM,
-                    content=system_prompt,
-                    content_src=ContentSource.SYSTEM,
-                )
-            yield from history
-
         request_params: Dict[str, Any] = {
-            "chat_history": _request_chat_history(),
+            "chat_history": self.get_chat_history(),
             "system_prompt": system_prompt,
             "metadata": metadata,
             "available_tools": self.job_def.agent.all_tools,
@@ -834,16 +811,15 @@ class Job:
 
         if llm_resp.call_requests:
             # When tool calls are present we build a CodeBlock and need to
-            # decide what (if anything) goes into its `code` field — i.e.
-            # what will later be exec'd as Python.
-            #   - DIRECT: response is NEVER code (only dialog + tool calls),
-            #     so leave it as None to avoid passing prose to ast.parse.
+            # decide what (if anything) goes into its `code` field.
+            #   - DIRECT: dialog text (not Python) — stored for chat history,
+            #     never executed (exec_all_steps skips code in DIRECT mode).
             #   - MARKDOWN/MD_DIALOG: code MUST be inside ```python fences,
             #     so extract only those; never feed surrounding prose to
             #     ast.parse.
             #   - other styles: pass the response through as-is.
             if is_direct:
-                response_code = None
+                response_code = extract_dialog(llm_resp.text or "")
             elif is_md_style:
                 response_code = strip_markup(llm_resp.text, strict=True)
             else:
@@ -1196,6 +1172,7 @@ class Job:
                 self.py_env.push_log[key] = [existing, message]
 
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
+            self.num_completions = 1 if self.num_completions is None else self.num_completions + 1
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
             self.chat_log.append(LLM_LogItem(
                 console_pos=len(self.py_env.console) if self.py_env.console else 0,
