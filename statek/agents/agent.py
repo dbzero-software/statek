@@ -73,11 +73,12 @@ def show_document(key, topic=None, start_from: int = 0, limit: int = 50, **kwarg
 
 
 @tool(system=True)
-def show_example(example_id: int, **kwargs):  # pylint: disable=unused-argument
+def show_example(example_id: Optional[int] = None, **kwargs):  # pylint: disable=unused-argument
     """Shows the content of a specific example by its index.
 
     Args:
-        example_id: Index of the example to show (as listed by list_of_examples).
+        example_id: Optional index of the example to show (as listed by list_of_examples).
+            If not provided, uses default_example_id from the local context.
     """
     from statek.agents.list_of_examples import show_example as _impl  # pylint: disable=import-outside-toplevel
     agent = get_current_agent()
@@ -295,6 +296,19 @@ class Agent:
                 if fn is not None:
                     result.append(fn)
         return result
+
+    def get_examples(self) -> List[str]:
+        """Return the list of example names accessible to this agent.
+
+        The list index corresponds to the example ID (0-based), matching
+        the numbering used by list_of_examples and show_example.
+
+        Returns:
+            List of example name strings. Empty list if no examples are
+            configured or the agent's examples directory does not exist.
+        """
+        from statek.agents.list_of_examples import get_example_names  # pylint: disable=import-outside-toplevel
+        return get_example_names(self.role)
 
     def _find_tool(self, name: str):
         """Find a tool by name in _tools.
