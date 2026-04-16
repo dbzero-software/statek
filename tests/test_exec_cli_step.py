@@ -31,7 +31,6 @@ class TestExecCliStep:
         outputs = []
         await exec_cli_step('print("hello")', job, outputs.append)
         assert outputs == ["hello"]
-        assert not job.py_env.console
 
     @pytest.mark.asyncio
     async def test_returns_true_on_exit(self, job_factory):
@@ -54,7 +53,6 @@ class TestExecCliStep:
         outputs = []
         await exec_cli_step('var = 123\nvar', job, outputs.append)
         assert outputs == ["123"]
-        assert not job.py_env.console
 
     @pytest.mark.asyncio
     async def test_expression_string_output(self, job_factory):
@@ -63,7 +61,6 @@ class TestExecCliStep:
         outputs = []
         await exec_cli_step('text = "hello"\ntext', job, outputs.append)
         assert outputs == ['hello']
-        assert not job.py_env.console
 
     @pytest.mark.asyncio
     async def test_expression_none_output(self, job_factory):
@@ -186,4 +183,3 @@ class TestExecCliStep:
         with pytest.raises(NameError):
             await exec_cli_step('undefined_var', job, outputs.append)
         assert any("NameError" in o for o in outputs)
-        assert not job.py_env.console

@@ -520,10 +520,15 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
         if exited:
             return True
 
-    # --- CLI tool calls ---
+    # --- CLI tool calls (at most 1 per invocation) ---
     cli_calls = code.get_cli_tool_calls()
     if not cli_calls:
         return job.py_env.exit_status is not None
+
+    if len(cli_calls) > 1:
+        raise ValueError(
+            f"Only 1 python_cli call is allowed per step, got {len(cli_calls)}"
+        )
 
     for cli_idx, call_spec in enumerate(cli_calls):
         if cli_idx < cli_start_idx:
@@ -814,6 +819,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         def _cli_console_append(cli_idx, text):
             cli_outputs.setdefault(cli_idx, []).append(text)
+            job.py_env.console_append(text)
 
         try:
             await exec_all_steps(code_block, job, _cli_console_append, job.next_instr_num,
