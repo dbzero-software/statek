@@ -244,7 +244,7 @@ def clock():
     return None
 
 
-def docs(class_name: type, method_name: str = None) -> str:  # pylint: disable=unused-argument
+def docstr(class_name: type, method_name: str = None) -> str:  # pylint: disable=unused-argument
     """Print documentation for a class or method.
 
     Args:
@@ -274,6 +274,6 @@ def mock_tools():
     """Provide common mock tools for testing."""
     return {
         'clock': clock,
-        'docs': docs,
+        'docstr': docstr,
         'exit_tool': exit_tool
     }

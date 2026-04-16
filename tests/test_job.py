@@ -825,7 +825,7 @@ class TestJobGetChatHistoryWithWarmup:
 
     def test_tool_only_warmup_keeps_system_content_source(self, job_factory):
         """Tool-only warmup assistant items should still be marked as SYSTEM."""
-        call_spec = CallSpec(id="T", func_name="docs", args=["topic"])
+        call_spec = CallSpec(id="T", func_name="docstr", args=["topic"])
         job = job_factory(warmup_code=CodeBlock(code=None, tool_calls=[call_spec]))
         warmup_item = WarmupLogItem(console_pos=0, warmup_block_num=0, tool_log="tool result")
         job.chat_log.append(warmup_item)

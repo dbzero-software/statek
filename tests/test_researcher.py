@@ -3,7 +3,7 @@
 import pytest
 from statek.agents.researcher import Researcher
 from statek.future import FutureResult, temporal
-from statek.system import docs
+from statek.system import docstr
 
 
 # Mock send_message functions for testing
@@ -71,7 +71,7 @@ class TestResearcher:
         assert researcher.role == "researcher"
         assert researcher.send_message is sync_send_message
         assert mock_tool in researcher._tools  # pylint: disable=protected-access
-        assert docs in researcher._tools  # pylint: disable=protected-access
+        assert docstr in researcher._tools  # pylint: disable=protected-access
 
     def test_researcher_initialization_async(self, db0_fixture):  # pylint: disable=unused-argument
         """Test Researcher initialization with asynchronous send_message."""
@@ -205,7 +205,7 @@ class TestResearcher:
         researcher = Researcher(send_message=sync_send_message)
 
         # Should have docs + list_of_examples + show_example tools
-        assert docs in researcher._tools  # pylint: disable=protected-access
+        assert docstr in researcher._tools  # pylint: disable=protected-access
 
     def test_researcher_multiple_tools_initialization(self, db0_fixture):  # pylint: disable=unused-argument
         """Test Researcher initialization with multiple additional tools."""
@@ -214,7 +214,7 @@ class TestResearcher:
             tools=[tool1, tool2, tool3]
         )
 
-        assert docs in researcher._tools  # pylint: disable=protected-access
+        assert docstr in researcher._tools  # pylint: disable=protected-access
         assert tool1 in researcher._tools  # pylint: disable=protected-access
         assert tool2 in researcher._tools  # pylint: disable=protected-access
         assert tool3 in researcher._tools  # pylint: disable=protected-access

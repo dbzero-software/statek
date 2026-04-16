@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
-from tests.conftest import clock, docs, exit_tool
+from tests.conftest import clock, docstr, exit_tool
 
 
 def _internal_tool(**kwargs):  # pylint: disable=unused-argument
@@ -37,7 +37,7 @@ class TestAgent:
     def test_system_prompt_formatting_multiple_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with multiple tools."""
         system_prompt = "You have access to these tools:\n{tools}"
-        tools = [clock, docs, exit_tool]
+        tools = [clock, docstr, exit_tool]
 
         agent = Agent(
             role="test",
@@ -47,7 +47,7 @@ class TestAgent:
         )
 
         assert "clock()" in agent.system_prompt()
-        assert "docs(class_name, method_name" in agent.system_prompt()
+        assert "docstr(class_name, method_name" in agent.system_prompt()
         assert "exit_tool(reason)" in agent.system_prompt()
         assert "You have access to these tools:" in agent.system_prompt()
 

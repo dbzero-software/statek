@@ -177,7 +177,7 @@ def _convert_enum_args(f, args, kwargs):
 
 
 def docs_style(f=None, *, brief_types: bool = False):
-    """Customizes how docstring tools (brief, docs) display a function.
+    """Customizes how docstring tools (brief, docstr) display a function.
 
     Args:
         brief_types: When True, the ``brief`` tool includes parameter type
@@ -455,7 +455,7 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
 
 
 @tool(system=True)
-def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
+def docstr(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
     """Prints the docstring associated with a tool, class, object instance or method.
 
     Args:
@@ -466,9 +466,9 @@ def docs(what: type | Callable | Any, method_name: str = None, **kwargs):  # pyl
         None. Prints the documentation directly to console.
 
     Examples:
-        docs(add)  # Get documentation for the 'add' function
-        docs(user)  # Get documentation for an object's class
-        docs(User, "send_message")  # Get documentation for User.send_message method
+        docstr(add)  # Get documentation for the 'add' function
+        docstr(user)  # Get documentation for an object's class
+        docstr(User, "send_message")  # Get documentation for User.send_message method
     """
     # A string passed to docs is almost certainly an unresolved name
     if isinstance(what, str):

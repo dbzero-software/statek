@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import sys
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
-from statek.system import docs
+from statek.system import docstr
 
 
 
@@ -48,8 +48,8 @@ class Researcher(SupervisedAgent):
         self.send_message = send_message
         self.additional_tools = tools if tools is not None else []
 
-        # Initialize with basic tools (docs + additional tools)
-        basic_tools = [docs] + list(self.additional_tools)
+        # Initialize with basic tools (docstr + additional tools)
+        basic_tools = [docstr] + list(self.additional_tools)
 
         # Call parent constructor
         super().__init__(

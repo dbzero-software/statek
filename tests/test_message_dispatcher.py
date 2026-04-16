@@ -88,7 +88,7 @@ class TestMessageDispatcher:
         assert 'chat_history' in context
         assert 'start_new_chat_thread' in context
         assert 'dispatch_to' in context
-        assert 'docs' not in context  # docs is in _tools, not context
+        assert 'docstr' not in context  # docstr is in _tools, not context
 
     def test_message_dispatcher_chat_history_tool(self, db0_fixture, create_dispatcher):  # pylint: disable=unused-argument,redefined-outer-name
         """Test that chat_history tool works correctly."""
