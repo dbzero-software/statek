@@ -53,9 +53,6 @@ class FiFoQueue:
         """
         scanned = 0
         for item in self.__items.select():
-            if not isinstance(item, FQ_Item):
-                continue
-
             if scanned >= max_scan:
                 return None
 
