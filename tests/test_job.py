@@ -1664,6 +1664,36 @@ class TestGetResponseTimes:
         assert list(job.get_response_times()) == [(t0, 10.0)]
 
 
+class TestGetChatResponses:
+    """Tests for Job.get_chat_responses."""
+
+    def test_yields_llm_string_responses_in_order(self, job_factory):
+        """Multiple LLM string responses are yielded oldest first."""
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="first"))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="second"))
+        assert list(job.get_chat_responses()) == ["first", "second"]
+
+    def test_direct_style_tool_call_response_is_not_yielded(self, job_factory):
+        """DIRECT style: CodeBlock responses are not yielded, only plain text."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
+        ))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="done"))
+        assert list(job.get_chat_responses()) == ["done"]
+
+    def test_md_dialog_script_response_is_not_yielded(self, job_factory):
+        """MD_DIALOG style: responses without markdown headers are not yielded."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="x = 1"))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="# Answer"))
+        assert list(job.get_chat_responses()) == ["# Answer"]
+
+
 class TestGetLlmResponseTimes:
     """Tests for Job.get_llm_response_times."""
 

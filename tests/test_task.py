@@ -4,9 +4,10 @@ from unittest.mock import Mock, patch
 import pytest
 
 from statek.task import (
-    copy_locals, delegate_task, start_dialog,
+    copy_locals, delegate_task, delegate_mute_task, start_dialog,
     submit_new_job, submit_new_jobs_batch,
 )
+from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import UserLogItem
 from statek.agents.dialog_agent import DialogAgent
@@ -344,6 +345,50 @@ class TestDelegateTask:
         """Without locale, JobDef.locale is None."""
         result = delegate_task(supervised_agent)
         assert result.job.job_def.locale is None
+
+
+class TestDelegateMuteTask:
+    """Tests for delegate_mute_task and get_mute_job_result."""
+
+    @pytest.fixture
+    def mock_settings(self):
+        """Mock settings functions."""
+        with patch('statek.task.get_statek_settings') as mock_statek, \
+             patch('statek.task.get_provider_settings') as mock_provider:
+            mock_statek_settings = Mock()
+            mock_statek_settings.default_llm_api_provider = "OPENAI"
+            mock_statek.return_value = mock_statek_settings
+            mock_provider_settings = Mock()
+            mock_provider_settings.default_model = "gpt-4"
+            mock_provider.return_value = mock_provider_settings
+            yield
+
+    def test_result_returns_chat_responses_on_success(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """On successful completion, value is the agent's chat responses joined by newlines."""
+        result = delegate_mute_task(supervised_agent)
+        result.job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="Hello"))
+        result.job.chat_log.append(LLM_LogItem(console_pos=1, llm_resp="World"))
+        result.job.set_status(JobStatus.DONE)
+        assert result.value == "Hello\nWorld"
+
+    def test_result_returns_error_on_failure(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """On failure, value is the exit_status if set, otherwise the error message."""
+        from statek.executors.job import JobDefError  # pylint: disable=import-outside-toplevel
+        result = delegate_mute_task(supervised_agent)
+        result.job.set_status(JobStatus.DONE)
+        try:
+            raise RuntimeError("something broke")
+        except RuntimeError as exc:
+            result.job.error = JobDefError(exc, collect_traceback=False)
+        # Without exit_status, falls back to error_message
+        assert result.value == "something broke"
+        # exit_status takes precedence when set
+        result.job.py_env.exit_status = "aborted: quota exceeded"
+        assert result.value == "aborted: quota exceeded"
 
 
 _recorded_send_calls = []
