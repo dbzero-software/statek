@@ -6,9 +6,6 @@ from typing import Callable, Dict, Iterable, Optional
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.chat_style import ChatStyle
-from statek.settings import get_statek_logger
-
-STATEK_LOGGER = get_statek_logger()
 
 
 def _validate_send_message(send_message: Callable) -> None:
@@ -124,10 +121,6 @@ class DialogAgent(SupervisedAgent):
             """
             # This is LLM-facing log
             print(f"log: answer(body={body!r}, media={media!r})")
-            STATEK_LOGGER.debug(
-                "TOOL_LOG: DialogAgent.answer invoked: agent=%s body=%r media=%r",
-                self.role, body, media,
-            )
             original(body=body, media=media)
             exit("Success")  # pylint: disable=consider-using-sys-exit
 
