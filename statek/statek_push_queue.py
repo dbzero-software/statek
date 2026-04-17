@@ -32,6 +32,18 @@ class StatekPushQueue:
         """
         self.__job_console_queue.push_back(job_uuid=job_uuid, message=message)
 
+    def has_job(self, job_uuid: str, max_scan: int = 100) -> Optional[bool]:
+        """Check whether a job UUID is present in the job-console queue.
+
+        Scanning uses the queue's underlying index iteration order. Returns
+        ``None`` when answering would require scanning more than *max_scan*
+        queued elements.
+        """
+        return self.__job_console_queue.has_item(
+            filter=lambda **kwargs: kwargs.get("job_uuid") == job_uuid,
+            max_scan=max_scan,
+        )
+
     @db0_rpc.remote
     def pop_from_job_console(
         self,
