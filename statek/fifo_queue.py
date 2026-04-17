@@ -47,11 +47,12 @@ class FiFoQueue:
     def has_item(self, filter: Callable, max_scan: int = 100) -> Optional[bool]:  # pylint: disable=redefined-builtin
         """Check whether any queued item matches *filter* without mutating the queue.
 
-        Items are scanned in FIFO order. Returns ``None`` when determining the
-        answer would require scanning beyond *max_scan* queue entries.
+        Items are scanned in the underlying index iteration order. Returns
+        ``None`` when determining the answer would require scanning beyond
+        *max_scan* queue entries.
         """
         scanned = 0
-        for item in self.__items.sort(self.__items.select()):
+        for item in self.__items.select():
             if not isinstance(item, FQ_Item):
                 continue
 
