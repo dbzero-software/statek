@@ -166,6 +166,18 @@ def _get_job_model(job) -> str:
         return '—'
 
 
+def _get_job_temperature(job) -> str:
+    """Return explicit job temperature override, or an empty string when defaulted."""
+    try:
+        if not job.job_def or not job.job_def.agent:
+            return ''
+        metadata = job.job_def.agent._metadata or {}  # pylint: disable=protected-access
+        temperature = metadata.get('TEMPERATURE')
+        return str(temperature) if temperature is not None else ''
+    except Exception:  # pylint: disable=broad-except
+        return ''
+
+
 def _get_tool_data_for_block(code_block, chat_log_item) -> list:
     """Return [(call_spec, result_str, error_str|None), ...] for a code block's tool calls.
 
@@ -682,6 +694,7 @@ def _build_md_content(
     sections = _build_history_sections(job)
     errors = _get_exception_messages(job)
     locale_str = _get_locale_str(job)
+    temperature_str = _get_job_temperature(job)
 
     # ── Header ──────────────────────────────────────────────────────────────
     parts.append('# Job Detail\n')
@@ -693,6 +706,8 @@ def _build_md_content(
     parts.append(f'| **Model** | `{_escape_md(model)}` |')
     if locale_str:
         parts.append(f'| **Locale** | `{_escape_md(locale_str)}` |')
+    if temperature_str:
+        parts.append(f'| **Temperature** | `{_escape_md(temperature_str)}` |')
     parts.append(f'| **Cost** | `${total_cost:.4f}` |')
     parts.append(f'| **Turns** | {num_turns} |')
     if chat_style:
@@ -1226,6 +1241,7 @@ def create_job_detail_dialog(job) -> None:
 
     model = _get_job_model(job)
     locale_str = _get_locale_str(job)
+    temperature_str = _get_job_temperature(job)
     chat_style_str = ''
     try:
         if job.job_def and job.job_def.chat_style is not None:
@@ -1267,6 +1283,10 @@ def create_job_detail_dialog(job) -> None:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('language').classes('text-sm text-gray-500')
                                 ui.label(locale_str).classes('text-xs font-mono text-gray-600')
+                        if temperature_str:
+                            with ui.row().classes('items-center gap-1'):
+                                ui.icon('device_thermostat').classes('text-sm text-gray-500')
+                                ui.label(temperature_str).classes('text-xs font-mono text-gray-600')
                         if chat_style_str:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('forum').classes('text-sm text-gray-500')
