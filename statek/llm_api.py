@@ -256,6 +256,24 @@ class LLM_API(ABC):
         """Provider-specific request implementation. Called by process_request."""
 
     @staticmethod
+    def _extract_temperature(metadata: Optional[Dict[str, str]]) -> Optional[float]:
+        """Extract and validate TEMPERATURE from metadata.
+
+        Returns:
+            The temperature as a float, or None if not specified.
+
+        Raises:
+            ValueError: If the value is outside the 0.0–1.0 range.
+        """
+        if not metadata or "TEMPERATURE" not in metadata:
+            return None
+        value = float(metadata["TEMPERATURE"])
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(
+                f"TEMPERATURE must be between 0.0 and 1.0, got {value}")
+        return value
+
+    @staticmethod
     def _load_response_format(settings: LLM_API_Settings) -> Optional[dict]:
         """Load response_format from the JSON file specified in settings.
 
@@ -383,6 +401,7 @@ class OpenRouter_API(LLM_API):
             chat_style=chat_style,
         )
         model = metadata.get('MODEL', self.model) if metadata else self.model
+        temperature = self._extract_temperature(metadata)
 
         # Prepare the request payload
         payload = {
@@ -393,6 +412,8 @@ class OpenRouter_API(LLM_API):
             payload["tools"] = [format_tool_spec(t) for t in tools]
         if self.response_format:
             payload["response_format"] = self.response_format
+        if temperature is not None:
+            payload["temperature"] = temperature
         # set any additional parameters from kwargs
         payload.update(self.kwargs)
         # Prepare headers
@@ -689,6 +710,7 @@ class Claude_API(LLM_API):
 
         messages = self.build_messages(chat_history, chat_style=chat_style)
         model = metadata.get('MODEL', self.model) if metadata else self.model
+        temperature = self._extract_temperature(metadata)
 
         # Prepare the request payload
         payload = {
@@ -706,6 +728,9 @@ class Claude_API(LLM_API):
         # Add system prompt if provided (Claude uses a separate 'system' field)
         if system_prompt:
             payload["system"] = self._build_system_prompt(system_prompt)
+
+        if temperature is not None:
+            payload["temperature"] = temperature
 
         # Prepare headers for Claude API
         headers = {

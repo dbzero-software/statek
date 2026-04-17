@@ -59,6 +59,8 @@ class StatekSettings(BaseSettings):
     max_consecutive_exceptions: int = 1
     """Maximum allowed total number of tokens per conversation"""
     max_token_usage: int = 10000
+    """Fraction by which limits are extended after each job completion"""
+    limit_extension_per_completion: float = 0.0
     chat_style: Optional[ChatStyle]= None  # pylint: disable=no-member
     """Optional style for formatting examples (overrides chat_style when set)"""
     examples_style: Optional[ChatStyle] = None  # pylint: disable=no-member
@@ -103,15 +105,16 @@ class StatekSettings(BaseSettings):
             self.documents_dir = os.environ.get('STATEK_DOCUMENTS_DIR')
 
         # Parse STATEK_ prefixed env vars for harness settings
-        for attr, env_var in [
-            ('max_turns', 'STATEK_MAX_TURNS'),
-            ('max_exceptions', 'STATEK_MAX_EXCEPTIONS'),
-            ('max_consecutive_exceptions', 'STATEK_MAX_CONSECUTIVE_EXCEPTIONS'),
-            ('max_token_usage', 'STATEK_MAX_TOKEN_USAGE'),
+        for attr, env_var, conv in [
+            ('max_turns', 'STATEK_MAX_TURNS', int),
+            ('max_exceptions', 'STATEK_MAX_EXCEPTIONS', int),
+            ('max_consecutive_exceptions', 'STATEK_MAX_CONSECUTIVE_EXCEPTIONS', int),
+            ('max_token_usage', 'STATEK_MAX_TOKEN_USAGE', int),
+            ('limit_extension_per_completion', 'STATEK_LIMIT_EXTENSION_PER_COMPLETION', float),
         ]:
             env_val = os.environ.get(env_var)
             if env_val is not None and attr not in data:
-                setattr(self, attr, int(env_val))
+                setattr(self, attr, conv(env_val))
 
         env_val = os.environ.get('STATEK_CHAT_STYLE')
         if env_val is not None:

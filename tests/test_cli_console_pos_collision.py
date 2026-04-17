@@ -1,13 +1,13 @@
 """Tests for console_pos collision bug in DIRECT chat style.
 
-In DIRECT style, python_cli output was routed only to tool_log (via
-cli_outputs) and never to job.py_env.console.  This meant the console never
-advanced between LLM turns, so multiple LLM_LogItems shared the same
-console_pos.  A single exception stored at that shared position was then
-attributed to every item, inflating max_consecutive_exceptions.
+In DIRECT style, python_cli output must reach job.py_env.console so the
+console position advances between LLM turns.  Without this, multiple
+LLM_LogItems share the same console_pos and a single exception stored at
+that shared position is attributed to every item, inflating
+max_consecutive_exceptions.
 
-The fix adds job.py_env.console_append(text) inside _cli_console_append
-(run_job_step) so the job console advances with each CLI execution.
+In run_job_step the CLI output is captured during execution and pushed
+to job.py_env.console at the end of the step (not during).
 """
 
 import pytest

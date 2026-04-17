@@ -378,6 +378,134 @@ class TestOpenRouterToolsPayload:
 
 
 # ---------------------------------------------------------------------------
+# TEMPERATURE metadata handling
+# ---------------------------------------------------------------------------
+
+class TestOpenRouterTemperature:
+    """Tests that OpenRouter_API passes TEMPERATURE from metadata to payload."""
+
+    @pytest.mark.asyncio
+    async def test_temperature_added_to_payload(self, openrouter_api):
+        """TEMPERATURE in metadata is forwarded as 'temperature' in the payload."""
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"choices":[{"message":{"content":"ok"}}]}'
+            mock_resp.json.return_value = {
+                "choices": [{"message": {"content": "ok"}}]
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await openrouter_api._process_request(
+                metadata={"TEMPERATURE": "0.3"})
+
+        assert captured_payload["temperature"] == 0.3
+
+    @pytest.mark.asyncio
+    async def test_no_temperature_when_absent(self, openrouter_api):
+        """When TEMPERATURE is not in metadata, 'temperature' is absent from payload."""
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"choices":[{"message":{"content":"ok"}}]}'
+            mock_resp.json.return_value = {
+                "choices": [{"message": {"content": "ok"}}]
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await openrouter_api._process_request(metadata={"MODEL": "gpt-4o"})
+
+        assert "temperature" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_temperature_out_of_range_raises(self, openrouter_api):
+        """TEMPERATURE outside 0.0-1.0 raises ValueError."""
+        with pytest.raises(ValueError, match="TEMPERATURE"):
+            await openrouter_api._process_request(
+                metadata={"TEMPERATURE": "1.5"})
+
+    @pytest.mark.asyncio
+    async def test_no_temperature_when_no_metadata(self, openrouter_api):
+        """When metadata is None, 'temperature' is absent from payload."""
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"choices":[{"message":{"content":"ok"}}]}'
+            mock_resp.json.return_value = {
+                "choices": [{"message": {"content": "ok"}}]
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await openrouter_api._process_request(metadata=None)
+
+        assert "temperature" not in captured_payload
+
+
+class TestClaudeTemperature:
+    """Tests that Claude_API passes TEMPERATURE from metadata to payload."""
+
+    @pytest.mark.asyncio
+    async def test_temperature_added_to_payload(self, claude_api):
+        """TEMPERATURE in metadata is forwarded as 'temperature' in the payload."""
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"content":[{"type":"text","text":"ok"}]}'
+            mock_resp.json.return_value = {
+                "content": [{"type": "text", "text": "ok"}]
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await claude_api._process_request(
+                metadata={"TEMPERATURE": "0.7"})
+
+        assert captured_payload["temperature"] == 0.7
+
+    @pytest.mark.asyncio
+    async def test_no_temperature_when_absent(self, claude_api):
+        """When TEMPERATURE is not in metadata, 'temperature' is absent from payload."""
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"content":[{"type":"text","text":"ok"}]}'
+            mock_resp.json.return_value = {
+                "content": [{"type": "text", "text": "ok"}]
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await claude_api._process_request(metadata={"MODEL": "claude-3"})
+
+        assert "temperature" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_temperature_out_of_range_raises(self, claude_api):
+        """TEMPERATURE outside 0.0-1.0 raises ValueError."""
+        with pytest.raises(ValueError, match="TEMPERATURE"):
+            await claude_api._process_request(
+                metadata={"TEMPERATURE": "-0.1"})
+
+
+# ---------------------------------------------------------------------------
 # Claude_API: tools in Anthropic format
 # ---------------------------------------------------------------------------
 

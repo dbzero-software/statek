@@ -514,7 +514,9 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
     cli_instr_num = instr_num[1] if skip_regular else None
 
     # --- regular code ---
-    if not skip_regular and not _is_empty_code(code.code):
+    # DIRECT mode: code field holds dialog text for history, not Python — skip execution.
+    is_direct = job.job_def.chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
+    if not skip_regular and not is_direct and not _is_empty_code(code.code):
         exited = not await exec_step(code.code, job, instr_num=regular_instr_num,
                                      local_context=local_context)
         if exited:
@@ -819,7 +821,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         def _cli_console_append(cli_idx, text):
             cli_outputs.setdefault(cli_idx, []).append(text)
-            job.py_env.console_append(text)
 
         try:
             await exec_all_steps(code_block, job, _cli_console_append, job.next_instr_num,
@@ -849,16 +850,15 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Non-warmup exception: already printed to console by exec_step
             pass
         finally:
-            # Push CLI tool results into tool_log — one entry per python_cli
-            # call so that _make_tool_calls can match results by index.
-            # Must run even on exception (error text) and even when the code
-            # produced no output (empty string) so the tool call is not lost
-            # from the LLM chat history.
+            # Push CLI output to job console (batched at end of step).
+            # Must run even on exception so the console position advances
+            # between LLM turns, preventing console_pos collisions.
             cli_calls = code_block.get_cli_tool_calls()
-            if cli_calls and last_chat_log_item is not None:
+            if cli_calls:
                 for cli_idx in range(len(cli_calls)):
                     joined = "\n".join(cli_outputs.get(cli_idx, []))
-                    last_chat_log_item.push_tool_result(joined)
+                    if joined:
+                        job.py_env.console_append(joined)
 
 
         # Step 6 & 7: Check if code has finished (exit_status not None)
