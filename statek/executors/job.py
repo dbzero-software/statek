@@ -887,6 +887,16 @@ class Job:
 
         return True
 
+    def get_chat_responses(self) -> Iterable[str]:
+        """Yield user-facing LLM responses from the chat log, oldest first."""
+        for item in self.chat_log:
+            if isinstance(item, LLM_LogItem) and self._is_user_facing_llm_response(item):
+                resp = item.llm_resp
+                if isinstance(resp, str):
+                    yield resp
+                elif isinstance(resp, CodeBlock) and resp.code:
+                    yield resp.code
+
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
         """Return user-message timestamps paired with time-to-first user reply.
 

@@ -9,6 +9,7 @@ from .system import tool
 from .agents.agent import SupervisedAgent
 from .agents.dialog_agent import DialogAgent
 from .executors.job import Job, JobStatus
+from .locale import StatekLocale
 from .pyenv import PyEnv
 from .settings import get_provider_settings as _get_provider_settings
 from .settings import get_statek_settings as _get_statek_settings
@@ -83,7 +84,43 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
     return task_future.job.status == JobStatus.DONE
 
 
-@temporal(complement = get_task_result, condition=is_job_completed)
+def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    agent: SupervisedAgent,
+    warmup_code: Optional[Union[str, Sequence[str]]],
+    parent_job: Optional[Job],
+    shared_vars: Optional[Dict[str, Any]],
+    locale,
+    caller_frame,
+    **kwargs,
+) -> TaskFutureResult:
+    job_def = agent.create_job_def(
+        warmup_code=warmup_code,
+        shared_vars=shared_vars,
+        locale=locale,
+        **kwargs,
+    )
+
+    env = PyEnv()
+    if warmup_code and caller_frame is not None:
+        caller_locals = caller_frame.f_locals
+        if isinstance(warmup_code, str):
+            copy_locals(warmup_code, env.local_state, caller_locals)
+        else:
+            for block in warmup_code:
+                copy_locals(block, env.local_state, caller_locals)
+
+    if shared_vars:
+        env.local_state.update(shared_vars)
+
+    job = Job(job_def=job_def, job_status=JobStatus.READY, py_env=env)
+
+    if parent_job is not None:
+        job.add_error_handlers_from(parent_job)
+
+    return TaskFutureResult(job, deps=None, state_num=0)
+
+
+@temporal(complement=get_task_result, condition=is_job_completed)
 @tool
 def delegate_task(agent: SupervisedAgent,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
@@ -104,39 +141,53 @@ def delegate_task(agent: SupervisedAgent,
         locale: Optional locale for job execution.
         kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
+    # Skip @tool and @temporal decorator frames to reach the actual caller
+    caller_frame = inspect.currentframe().f_back.f_back.f_back if warmup_code else None
+    return _create_task_job(
+        agent, warmup_code, parent_job, shared_vars, locale, caller_frame, **kwargs)
 
-    job_def = agent.create_job_def(
-        warmup_code=warmup_code,
-        shared_vars=shared_vars,
-        locale=locale,
-        **kwargs,
-    )
 
-    env = PyEnv()
-    if warmup_code:
-        # Go to caller frame (skip decorators)
-        caller_frame = inspect.currentframe().f_back.f_back.f_back
-        caller_locals = caller_frame.f_locals
-        # Copy locals from all warmup blocks
-        if isinstance(warmup_code, str):
-            copy_locals(warmup_code, env.local_state, caller_locals)
-        else:
-            for block in warmup_code:
-                copy_locals(block, env.local_state, caller_locals)
+def get_mute_job_result(future: TaskFutureResult) -> str:
+    """Retrieve chat responses from a completed mute job, or exit status on failure."""
+    if future.job.status != JobStatus.DONE:
+        raise FutureError(future)
+    job = future.job
+    if job.error is None:
+        return "\n".join(job.get_chat_responses())
+    if job.py_env.exit_status is not None:
+        return job.py_env.exit_status
+    return job.error.error_message
 
-    if shared_vars:
-        env.local_state.update(shared_vars)
 
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,
-        py_env=env
-    )
+@temporal(complement=get_mute_job_result, condition=is_job_completed)
+@tool
+def delegate_mute_task(agent: SupervisedAgent,
+    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    parent_job: Optional[Job] = None,
+    shared_vars: Optional[Dict[str, Any]] = None,
+    locale: Optional[StatekLocale] = None,
+    **kwargs) -> TaskFutureResult:
+    """Create a new job delegated to a mute agent.
 
-    if parent_job is not None:
-        job.add_error_handlers_from(parent_job)
+    Like :func:`delegate_task`, but the underlying agent is assumed to be mute
+    — its messages are not delivered to the end-user. Instead, they are retrieved
+    on job completion and returned as the result string.
 
-    return TaskFutureResult(job, deps=None, state_num=0)
+    Args:
+        agent: The `Agent` to delegate task to
+        warmup_code: Optional Python code (single block or sequence of blocks)
+                    to be executed prior to task start
+        parent_job: Optional parent job — when provided, the child job
+                    inherits the parent's error handlers.
+        shared_vars: Optional ``{var_name: value}`` mapping of variables to
+                    be additionally shared with the child job's context.
+        locale: Optional locale for job execution.
+        kwargs: job specific parameters for prompt formatting (i.e. job_params)
+    """
+    # Skip @tool and @temporal decorator frames to reach the actual caller
+    caller_frame = inspect.currentframe().f_back.f_back.f_back if warmup_code else None
+    return _create_task_job(
+        agent, warmup_code, parent_job, shared_vars, locale, caller_frame, **kwargs)
 
 
 def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
