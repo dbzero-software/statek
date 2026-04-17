@@ -271,8 +271,10 @@ class TestJob:
             lang_code=StatekLangCode.PL,
             country_code=StatekCountryCode.PL,
         )
-        job_def = job_def_factory(locale=locale)
-        job_def.agent.update_metadata({"AUTO_LANG_HINT": "False"})
+        job_def = job_def_factory(
+            locale=locale,
+            metadata={"MODEL": "test-model", "AUTO_LANG_HINT": "False"},
+        )
         job = Job(
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
@@ -409,8 +411,10 @@ class TestJobGetChatHistory:
             lang_code=StatekLangCode.PL,
             country_code=StatekCountryCode.PL,
         )
-        job_def = job_def_factory(locale=locale)
-        job_def.agent.update_metadata({"AUTO_LANG_HINT": "False"})
+        job_def = job_def_factory(
+            locale=locale,
+            metadata={"MODEL": "test-model", "AUTO_LANG_HINT": "False"},
+        )
         job = Job(
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
@@ -458,8 +462,10 @@ class TestJobGetChatHistory:
             lang_code=StatekLangCode.PL,
             country_code=StatekCountryCode.PL,
         )
-        job_def = job_def_factory(locale=locale)
-        job_def.agent.update_metadata({"AUTO_LANG_HINT": "False"})
+        job_def = job_def_factory(
+            locale=locale,
+            metadata={"MODEL": "test-model", "AUTO_LANG_HINT": "False"},
+        )
         job = Job(
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
@@ -487,10 +493,11 @@ class TestJobGetNextRequest:
 
         assert "chat_history" in request
         assert request["system_prompt"] == "Test agent"
+        assert request["model"] == "test-model"
         assert "prompt" not in request
         assert "metadata" in request
         assert "available_tools" in request
-        assert "session_id" not in request  # not set
+        assert "session_id" not in request
 
     def test_get_next_request_chat_history_excludes_system(self, job_factory):
         """The system prompt is not embedded in chat_history."""
@@ -498,13 +505,6 @@ class TestJobGetNextRequest:
         history = list(job.get_next_request()["chat_history"])
 
         assert not history
-
-    def test_get_next_request_with_session_id(self, job_factory):
-        """get_next_request includes session_id when set."""
-        job = job_factory()
-        job.session_id = "test-session-123"
-        request = job.get_next_request()
-        assert request["session_id"] == "test-session-123"
 
     def test_get_next_request_with_chat_history(self, job_factory):
         """chat_history contains ChatHistoryItems for SYSTEM + each turn."""
@@ -525,14 +525,13 @@ class TestJobGetNextRequest:
     def test_get_next_request_structure(self, job_factory):
         """get_next_request returns a dict whose chat_history is a lazy generator."""
         job = job_factory()
-        job.session_id = "session-abc"
         request = job.get_next_request()
 
         assert isinstance(request, dict)
         assert "prompt" not in request
         assert request["system_prompt"] == "Test agent"
         assert isinstance(request["chat_history"], types.GeneratorType)
-        assert isinstance(request["session_id"], str)
+        assert "session_id" not in request
 
     def test_get_next_request_no_chat_style_when_none(self, job_factory):
         """get_next_request omits CHAT_STYLE from metadata when chat_style is None."""
@@ -590,8 +589,10 @@ class TestJobGetNextRequest:
             lang_code=StatekLangCode.PL,
             country_code=StatekCountryCode.PL,
         )
-        job_def = job_def_factory(locale=locale)
-        job_def.agent.update_metadata({"AUTO_LANG_RULE": "False"})
+        job_def = job_def_factory(
+            locale=locale,
+            metadata={"MODEL": "test-model", "AUTO_LANG_RULE": "False"},
+        )
         job = Job(
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
@@ -619,7 +620,61 @@ class TestJobGetNextRequest:
 
         assert job.job_def.model == "deepseek/deepseek-v3.2"
         assert job.model == "deepseek/deepseek-v3.2"
+        assert request["model"] == "deepseek/deepseek-v3.2"
         assert request["metadata"]["MODEL"] == "deepseek/deepseek-v3.2"
+
+    def test_get_next_request_extracts_temperature_from_metadata(
+        self, job_def_factory
+    ):
+        """TEMPERATURE metadata is exposed as an explicit request parameter."""
+        job_def = job_def_factory(metadata={"MODEL": "test-model", "TEMPERATURE": "0.3"})
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+        request = job.get_next_request()
+
+        assert request["temperature"] == 0.3
+        assert request["metadata"]["TEMPERATURE"] == "0.3"
+
+    def test_get_next_request_extracts_enable_reasoning_from_metadata(
+        self, job_def_factory
+    ):
+        """REASONING metadata is exposed as an explicit boolean request parameter."""
+        job_def = job_def_factory(metadata={"MODEL": "test-model", "REASONING": "true"})
+        job = Job(
+            job_def=job_def, model_family="test",
+            model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+        request = job.get_next_request()
+
+        assert request["enable_reasoning"] is True
+        assert request["metadata"]["REASONING"] == "true"
+
+    def test_get_next_request_uses_job_def_metadata_snapshot_after_agent_update(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """Existing jobs keep the metadata captured by their JobDef."""
+        from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+
+        agent = SupervisedAgent(
+            role="test",
+            _system_prompt="Test agent",
+            _metadata={"MODEL": "test-model", "TEMPERATURE": "0.3", "REASONING": "true"},
+            _tools=[],
+        )
+        job_def = agent.create_job_def()
+        agent.update_metadata({"MODEL": "test-model", "TEMPERATURE": "0.1"})
+
+        job = Job(job_def=job_def, job_status=JobStatus.READY)
+        request = job.get_next_request()
+
+        assert request["temperature"] == 0.3
+        assert request["enable_reasoning"] is True
+        assert request["metadata"]["TEMPERATURE"] == "0.3"
+        assert request["metadata"]["REASONING"] == "true"
 
     def test_last_response_empty_chat_log(self, job_factory):
         """Test last_response returns None when chat_log is empty."""
@@ -881,7 +936,6 @@ class TestJobAppendChatLog:
         request = job.get_next_request()
         llm_resp = LLM_Response(
             text="print('hello')",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -902,7 +956,6 @@ class TestJobAppendChatLog:
         request = job.get_next_request()
         llm_resp = LLM_Response(
             text="x = 5",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -919,7 +972,7 @@ class TestJobAppendChatLog:
         job.py_env.console_append("Step 1 output")
         request1 = job.get_next_request()
         job.append_chat_log(request1, LLM_Response(
-            text="code_block_1", session_id=None,
+            text="code_block_1",
             stats=LLM_Stats(0, 0, None), call_requests=None,
         ))
 
@@ -927,14 +980,14 @@ class TestJobAppendChatLog:
         job.py_env.console_append("Step 2 more output")
         request2 = job.get_next_request()
         job.append_chat_log(request2, LLM_Response(
-            text="code_block_2", session_id=None,
+            text="code_block_2",
             stats=LLM_Stats(0, 0, None), call_requests=None,
         ))
 
         job.py_env.console_append("Step 3 output")
         request3 = job.get_next_request()
         job.append_chat_log(request3, LLM_Response(
-            text="code_block_3", session_id=None,
+            text="code_block_3",
             stats=LLM_Stats(0, 0, None), call_requests=None,
         ))
 
@@ -963,7 +1016,6 @@ class TestAppendChatLogDirect:
         request = job.get_next_request()
         llm_resp = LLM_Response(
             text="Oto Twoj grafik na kwiecien 2026 roku.",
-            session_id=None,
             stats=LLM_Stats(0, 0, None),
             call_requests=None,
         )
@@ -984,7 +1036,6 @@ class TestAppendChatLogDirect:
         request = job.get_next_request()
         llm_resp = LLM_Response(
             text="```python\nx = 42\n```\nHello user!",
-            session_id=None,
             stats=LLM_Stats(0, 0, None),
             call_requests=None,
         )
@@ -1007,7 +1058,6 @@ class TestAppendChatLogDirect:
         call = CallParams(call_id="c1", name="python_cli", args=[], kwargs={"code": "x=1"})
         llm_resp = LLM_Response(
             text="```python\nx = 42\n```",
-            session_id=None,
             stats=LLM_Stats(0, 0, None),
             call_requests=[call],
         )
@@ -1040,7 +1090,6 @@ class TestAppendChatLogDirect:
                           kwargs={"code": "x=1"})
         llm_resp = LLM_Response(
             text="You have 3 preference points remaining for April.",
-            session_id=None,
             stats=LLM_Stats(0, 0, None),
             call_requests=[call],
         )
@@ -1064,7 +1113,6 @@ class TestAppendChatLogDirect:
         request = job.get_next_request()
         llm_resp = LLM_Response(
             text="Hello, how can I help?",
-            session_id=None,
             stats=LLM_Stats(0, 0, None),
             call_requests=None,
         )

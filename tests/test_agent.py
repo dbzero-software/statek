@@ -160,6 +160,21 @@ class TestAgent:
         assert result is True
         assert agent.description == "New"
 
+    def test_update_metadata_no_change_keeps_existing_dict(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_metadata avoids replacing metadata when the content is unchanged."""
+        agent = Agent(
+            role="test",
+            _system_prompt="test",
+            _tools=[],
+            _metadata={"MODEL": "test-model", "TEMPERATURE": "0.1"},
+        )
+        original_metadata = agent._metadata  # pylint: disable=protected-access
+
+        result = agent.update_metadata({"MODEL": "test-model", "TEMPERATURE": "0.1"})
+
+        assert result is False
+        assert agent._metadata is original_metadata  # pylint: disable=protected-access
+
     def test_shared_var_names_resolved_from_job_params(self, db0_fixture):  # pylint: disable=unused-argument
         """shared_var_names placeholder is resolved to comma-delimited shared_vars keys."""
         agent = Agent(
@@ -308,6 +323,25 @@ class TestCreateJobDefWarmup:
         job_def = agent.create_job_def()
         assert job_def.model == "deepseek/deepseek-v3.2"
         assert job_def.model_family == "deepseek"
+        assert job_def.metadata == {"MODEL": "deepseek/deepseek-v3.2"}
+
+    def test_metadata_is_frozen_by_replacing_agent_metadata_dict(self, db0_fixture):  # pylint: disable=unused-argument
+        """Existing JobDefs keep their metadata object when the agent metadata changes."""
+        agent = SupervisedAgent(
+            role="test",
+            _system_prompt="test",
+            _metadata={"MODEL": "deepseek/deepseek-v3.2", "TEMPERATURE": "0.3"},
+            _tools=[],
+        )
+
+        job_def = agent.create_job_def()
+        original_metadata = job_def.metadata
+
+        agent.update_metadata({"MODEL": "openai/gpt-4o", "TEMPERATURE": "0.1"})
+
+        assert job_def.metadata is original_metadata
+        assert job_def.metadata == {"MODEL": "deepseek/deepseek-v3.2", "TEMPERATURE": "0.3"}
+        assert agent._metadata == {"MODEL": "openai/gpt-4o", "TEMPERATURE": "0.1"}  # pylint: disable=protected-access
 
     def test_create_job_def_requires_model_metadata(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def fails fast when MODEL metadata is missing."""

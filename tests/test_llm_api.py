@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from statek.llm_api import (
-    LLM_Response, LLM_Stats, OpenRouter_API, Claude_API, CallParams, extract_call_params,
+    LLM_API, LLM_Response, LLM_Stats, OpenRouter_API, Claude_API, CallParams, extract_call_params,
 )
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.exceptions import InvalidFormat
@@ -25,7 +25,7 @@ def _make_stats():
 
 
 def _make_response(text="ok"):
-    return LLM_Response(text=text, session_id=None, stats=_make_stats(), call_requests=None)
+    return LLM_Response(text=text, stats=_make_stats(), call_requests=None)
 
 
 @pytest.fixture()
@@ -60,7 +60,7 @@ def openrouter_api():
         api_url="https://openrouter.ai/api/v1/chat/completions",
         api_key="test-key",
     )
-    return OpenRouter_API(settings=settings, model="gpt-4o")
+    return OpenRouter_API(settings=settings)
 
 
 @pytest.fixture()
@@ -69,8 +69,7 @@ def claude_api():
         api_url="https://api.anthropic.com/v1/messages",
         api_key="test-key",
     )
-    return Claude_API(settings=settings, model="claude-3-5-sonnet-20241022",
-                      use_prompt_caching=False)
+    return Claude_API(settings=settings, use_prompt_caching=False)
 
 
 # ---------------------------------------------------------------------------
@@ -86,15 +85,17 @@ class TestProcessRequestToolScope:
         """Without LLM_TOOLS_SCOPE in metadata, tools=None is passed."""
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[app_tool, sys_tool],
-                metadata={"MODEL": "gpt-4o"},
+                metadata={},
             )
 
         assert captured["tools"] is None
@@ -105,13 +106,15 @@ class TestProcessRequestToolScope:
         """LLM_TOOLS_SCOPE=SYSTEM passes only system tools to _process_request."""
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[app_tool, sys_tool],
                 metadata={"LLM_TOOLS_SCOPE": "SYSTEM"},
             )
@@ -128,13 +131,15 @@ class TestProcessRequestToolScope:
         """LLM_TOOLS_SCOPE=APPLICATION passes only non-system tools."""
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[app_tool, sys_tool],
                 metadata={"LLM_TOOLS_SCOPE": "APPLICATION"},
             )
@@ -147,13 +152,15 @@ class TestProcessRequestToolScope:
         """LLM_TOOLS_SCOPE=ALL passes every available tool."""
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[app_tool, sys_tool],
                 metadata={"LLM_TOOLS_SCOPE": "ALL"},
             )
@@ -170,13 +177,15 @@ class TestProcessRequestToolScope:
         """When LLM_TOOLS_SCOPE is set but available_tools is None, tools=None."""
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=None,
                 metadata={"LLM_TOOLS_SCOPE": "ALL"},
             )
@@ -184,22 +193,13 @@ class TestProcessRequestToolScope:
         assert captured["tools"] is None
 
     @pytest.mark.asyncio
-    async def test_no_metadata_passes_tools_none(self, openrouter_api, app_tool):
-        """When metadata is None entirely, tools=None is passed."""
-        captured = {}
-
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
-            captured["tools"] = tools
-            return _make_response()
-
-        with patch.object(OpenRouter_API, "_process_request", fake_process):
+    async def test_no_model_raises(self, openrouter_api, app_tool):
+        """process_request fails fast when model is omitted."""
+        with pytest.raises(ValueError, match="model"):
             await openrouter_api.process_request(
                 available_tools=[app_tool],
                 metadata=None,
             )
-
-        assert captured["tools"] is None
 
     @pytest.mark.asyncio
     async def test_chat_style_parameter_filters_tools_by_target(self, openrouter_api):
@@ -235,13 +235,15 @@ class TestProcessRequestToolScope:
 
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[sys_direct_only, sys_console_only, sys_universal],
                 metadata={"LLM_TOOLS_SCOPE": "SYSTEM"},
                 chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
@@ -258,14 +260,16 @@ class TestProcessRequestToolScope:
 
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         # DIRECT style — python_cli must be present
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[],
                 metadata={"LLM_TOOLS_SCOPE": "SYSTEM"},
                 chat_style=ChatStyle.DIRECT,
@@ -276,6 +280,7 @@ class TestProcessRequestToolScope:
         # MARKDOWN style — python_cli must NOT be present
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[],
                 metadata={"LLM_TOOLS_SCOPE": "SYSTEM"},
                 chat_style=ChatStyle.MARKDOWN,
@@ -288,13 +293,15 @@ class TestProcessRequestToolScope:
         """Registry tools with the same name are not duplicated in the merged list."""
         captured = {}
 
-        async def fake_process(self_, *, system_prompt=None, metadata=None, tools=None,
-                               chat_history=None, session_id=None, chat_style=None):
+        async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
+                               tools=None, chat_history=None, chat_style=None,
+                               temperature=None, enable_reasoning=False):
             captured["tools"] = tools
             return _make_response()
 
         with patch.object(OpenRouter_API, "_process_request", fake_process):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 available_tools=[sys_tool],
                 metadata={"LLM_TOOLS_SCOPE": "SYSTEM"},
             )
@@ -327,7 +334,8 @@ class TestOpenRouterToolsPayload:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await openrouter_api._process_request(tools=[app_tool])
+            await openrouter_api._process_request(
+                model="gpt-4o", tools=[app_tool], metadata={})
 
         assert "tools" in captured_payload
         tool_spec = captured_payload["tools"][0]
@@ -350,7 +358,8 @@ class TestOpenRouterToolsPayload:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await openrouter_api._process_request(tools=None)
+            await openrouter_api._process_request(
+                model="gpt-4o", tools=None, metadata={})
 
         assert "tools" not in captured_payload
 
@@ -371,7 +380,8 @@ class TestOpenRouterToolsPayload:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await openrouter_api._process_request(tools=[app_tool, sys_tool])
+            await openrouter_api._process_request(
+                model="gpt-4o", tools=[app_tool, sys_tool], metadata={})
 
         names = {t["function"]["name"] for t in captured_payload["tools"]}
         assert names == {"my_app_tool", "my_sys_tool"}
@@ -401,7 +411,7 @@ class TestOpenRouterTemperature:
 
         with patch("httpx.AsyncClient.post", fake_post):
             await openrouter_api._process_request(
-                metadata={"TEMPERATURE": "0.3"})
+                model="gpt-4o", temperature=0.3, metadata={})
 
         assert captured_payload["temperature"] == 0.3
 
@@ -421,7 +431,7 @@ class TestOpenRouterTemperature:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await openrouter_api._process_request(metadata={"MODEL": "gpt-4o"})
+            await openrouter_api._process_request(model="gpt-4o", metadata={})
 
         assert "temperature" not in captured_payload
 
@@ -429,12 +439,17 @@ class TestOpenRouterTemperature:
     async def test_temperature_out_of_range_raises(self, openrouter_api):
         """TEMPERATURE outside 0.0-1.0 raises ValueError."""
         with pytest.raises(ValueError, match="TEMPERATURE"):
-            await openrouter_api._process_request(
-                metadata={"TEMPERATURE": "1.5"})
+            LLM_API.parse_temperature("1.5")
 
     @pytest.mark.asyncio
-    async def test_no_temperature_when_no_metadata(self, openrouter_api):
-        """When metadata is None, 'temperature' is absent from payload."""
+    async def test_model_required_in_metadata(self, openrouter_api):
+        """MODEL is mandatory on every request."""
+        with pytest.raises(ValueError, match="model"):
+            await openrouter_api._process_request(metadata=None)
+
+    @pytest.mark.asyncio
+    async def test_reasoning_added_to_payload(self, openrouter_api):
+        """REASONING in metadata is forwarded as 'reasoning' in the payload."""
         captured_payload = {}
 
         async def fake_post(self_, url, json=None, headers=None):
@@ -448,9 +463,10 @@ class TestOpenRouterTemperature:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await openrouter_api._process_request(metadata=None)
+            await openrouter_api._process_request(
+                model="gpt-4o", enable_reasoning=True, metadata={})
 
-        assert "temperature" not in captured_payload
+        assert captured_payload["reasoning"] == {}
 
 
 class TestClaudeTemperature:
@@ -473,7 +489,7 @@ class TestClaudeTemperature:
 
         with patch("httpx.AsyncClient.post", fake_post):
             await claude_api._process_request(
-                metadata={"TEMPERATURE": "0.7"})
+                model="claude-3", temperature=0.7, metadata={})
 
         assert captured_payload["temperature"] == 0.7
 
@@ -493,7 +509,7 @@ class TestClaudeTemperature:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await claude_api._process_request(metadata={"MODEL": "claude-3"})
+            await claude_api._process_request(model="claude-3", metadata={})
 
         assert "temperature" not in captured_payload
 
@@ -501,8 +517,34 @@ class TestClaudeTemperature:
     async def test_temperature_out_of_range_raises(self, claude_api):
         """TEMPERATURE outside 0.0-1.0 raises ValueError."""
         with pytest.raises(ValueError, match="TEMPERATURE"):
+            LLM_API.parse_temperature("-0.1")
+
+    @pytest.mark.asyncio
+    async def test_model_required_in_metadata(self, claude_api):
+        """MODEL is mandatory on every request."""
+        with pytest.raises(ValueError, match="model"):
+            await claude_api._process_request(metadata=None)
+
+    @pytest.mark.asyncio
+    async def test_reasoning_added_to_payload(self, claude_api):
+        """REASONING in metadata is forwarded as 'thinking' in the payload."""
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"content":[{"type":"text","text":"ok"}]}'
+            mock_resp.json.return_value = {
+                "content": [{"type": "text", "text": "ok"}]
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
             await claude_api._process_request(
-                metadata={"TEMPERATURE": "-0.1"})
+                model="claude-3", enable_reasoning=True, metadata={})
+
+        assert captured_payload["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +591,8 @@ class TestClaudeToolConversion:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await claude_api._process_request(tools=[app_tool])
+            await claude_api._process_request(
+                model="claude-3", tools=[app_tool], metadata={})
 
         assert "tools" in captured_payload
         tool_entry = captured_payload["tools"][0]
@@ -575,7 +618,8 @@ class TestClaudeToolConversion:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            await claude_api._process_request(tools=None)
+            await claude_api._process_request(
+                model="claude-3", tools=None, metadata={})
 
         assert "tools" not in captured_payload
 
@@ -616,7 +660,8 @@ class TestOpenRouterCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await openrouter_api._process_request(tools=[app_tool])
+            result = await openrouter_api._process_request(
+                model="gpt-4o", tools=[app_tool], metadata={})
 
         assert result.call_requests is not None
         assert len(result.call_requests) == 1
@@ -639,7 +684,7 @@ class TestOpenRouterCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await openrouter_api._process_request()
+            result = await openrouter_api._process_request(model="gpt-4o", metadata={})
 
         assert result.call_requests is None
         assert result.text == "just text"
@@ -668,7 +713,8 @@ class TestOpenRouterCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await openrouter_api._process_request(tools=[app_tool, sys_tool])
+            result = await openrouter_api._process_request(
+                model="gpt-4o", tools=[app_tool, sys_tool], metadata={})
 
         assert len(result.call_requests) == 2
         names = {cp.name for cp in result.call_requests}
@@ -695,7 +741,7 @@ class TestOpenRouterCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await openrouter_api._process_request()
+            result = await openrouter_api._process_request(model="gpt-4o", metadata={})
 
         assert result.text == ""
         assert result.call_requests is not None
@@ -729,7 +775,8 @@ class TestClaudeCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await claude_api._process_request(tools=[app_tool])
+            result = await claude_api._process_request(
+                model="claude-3", tools=[app_tool], metadata={})
 
         assert result.call_requests is not None
         assert len(result.call_requests) == 1
@@ -752,7 +799,7 @@ class TestClaudeCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await claude_api._process_request()
+            result = await claude_api._process_request(model="claude-3", metadata={})
 
         assert result.call_requests is None
         assert result.text == "hello"
@@ -774,7 +821,8 @@ class TestClaudeCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await claude_api._process_request(tools=[app_tool])
+            result = await claude_api._process_request(
+                model="claude-3", tools=[app_tool], metadata={})
 
         assert result.text == "I will call "
         assert len(result.call_requests) == 1
@@ -798,7 +846,8 @@ class TestClaudeCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await claude_api._process_request(tools=[app_tool, sys_tool])
+            result = await claude_api._process_request(
+                model="claude-3", tools=[app_tool, sys_tool], metadata={})
 
         assert len(result.call_requests) == 2
         names = {cp.name for cp in result.call_requests}
@@ -822,7 +871,8 @@ class TestClaudeCallRequests:
             return mock_resp
 
         with patch("httpx.AsyncClient.post", fake_post):
-            result = await claude_api._process_request(tools=[app_tool])
+            result = await claude_api._process_request(
+                model="claude-3", tools=[app_tool], metadata={})
 
         assert result.call_requests[0].kwargs == nested
 
@@ -1325,7 +1375,7 @@ class TestClaudeBuildMessages:
             api_key="test-key",
             use_prompt_caching=True,
         )
-        api = Claude_API(settings=settings, model="claude-3-5-sonnet-20241022")
+        api = Claude_API(settings=settings)
         history = [_user("initial"), _asst_code("code1"), _console("current")]
         msgs = api.build_messages(chat_history=history, chat_style=_MD())
         asst_msg = msgs[1]
@@ -1399,7 +1449,7 @@ class TestProcessRequestDirectChatStyle:
         async def fake_process_request(self, **kwargs):
             captured["chat_history"] = list(kwargs.get("chat_history", []))
             return LLM_Response(
-                text="ok", session_id=None, stats=_make_stats(), call_requests=None)
+                text="ok", stats=_make_stats(), call_requests=None)
 
         history = [
             _user("prompt"),
@@ -1409,7 +1459,9 @@ class TestProcessRequestDirectChatStyle:
 
         with patch.object(OpenRouter_API, "_process_request", fake_process_request):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 chat_history=iter(history),
+                metadata={},
                 chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
             )
 
@@ -1431,13 +1483,15 @@ class TestProcessRequestDirectChatStyle:
         async def fake_process_request(self, **kwargs):
             captured["chat_history"] = list(kwargs.get("chat_history", []))
             return LLM_Response(
-                text="ok", session_id=None, stats=_make_stats(), call_requests=None)
+                text="ok", stats=_make_stats(), call_requests=None)
 
         history = [_asst_code("warmup_code()"), _console("> result")]
 
         with patch.object(OpenRouter_API, "_process_request", fake_process_request):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 chat_history=iter(history),
+                metadata={},
                 chat_style=ChatStyle.MD_DIALOG,  # pylint: disable=no-member
             )
 
@@ -1455,7 +1509,7 @@ class TestProcessRequestDirectChatStyle:
         async def fake_process_request(self, **kwargs):
             captured["chat_history"] = list(kwargs.get("chat_history", []))
             return LLM_Response(
-                text="ok", session_id=None, stats=_make_stats(), call_requests=None)
+                text="ok", stats=_make_stats(), call_requests=None)
 
         history = [
             _user("prompt"),
@@ -1464,7 +1518,9 @@ class TestProcessRequestDirectChatStyle:
 
         with patch.object(OpenRouter_API, "_process_request", fake_process_request):
             await openrouter_api.process_request(
+                model="gpt-4o",
                 chat_history=iter(history),
+                metadata={},
                 chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
             )
 

@@ -7,17 +7,16 @@ import dbzero as db0
 from statek.agents.agent import Agent
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.job import parse_warmup_code
-from statek.executors.utils import _make_start_jobs_func, find_existing_job_def
+from statek.executors.utils import _make_start_jobs_func, find_existing_job_def, run_agentic_loop
 from statek.pyenv import PyEnv
 
 
 def _make_job_def(agent, warmup_code=None):
     return JobDef(
         agent=agent,
+        metadata={"MODEL": "test-model", "MODEL_FAMILY": "test"},
         job_params=None,
         warmup_code=warmup_code,
-        model_family="test",
-        model="test-model",
     )
 
 
@@ -153,10 +152,9 @@ def _make_tagged_job_def(agent, warmup_code=None):
     parsed = parse_warmup_code(warmup_code)
     return JobDef(
         agent=agent,
+        metadata={"MODEL": "test-model", "MODEL_FAMILY": "test"},
         job_params=None,
         warmup_code=parsed,
-        model_family="test",
-        model="test-model",
     )
 
 
@@ -206,3 +204,28 @@ class TestFindExistingJobDef:
         # The same code passed as a raw string should resolve to the same parsed form
         result = find_existing_job_def(agent, "x = 1\nprint(x)")
         assert result is not None
+
+
+class TestRunAgenticLoop:
+    """Tests for run_agentic_loop."""
+
+    @pytest.mark.asyncio
+    async def test_new_job_def_initially_shares_agent_metadata(self, db0_fixture):  # pylint: disable=unused-argument
+        """Loop-created JobDefs initially reference the agent metadata dict."""
+        agent = Agent(
+            role="loop_agent",
+            _system_prompt="Test",
+            _metadata={"MODEL": "test-model", "TEMPERATURE": "0.3"},
+            _tools=[],
+        )
+
+        await run_agentic_loop(
+            agent=agent,
+            warmup_code=None,
+            task_queue_size_func=lambda: 0,
+            auto_terminate=True,
+        )
+
+        job_def = find_existing_job_def(agent, None)
+        assert job_def is not None
+        assert job_def.metadata is agent._metadata  # pylint: disable=protected-access

@@ -88,6 +88,22 @@ class TestRunAgenticFleet:
         assert find_existing_job_def(agent_b, None) is not None
 
     @pytest.mark.asyncio
+    async def test_new_job_def_initially_shares_agent_metadata(self, db0_fixture):  # pylint: disable=unused-argument
+        """Fleet-created JobDefs initially reference the agent metadata dict."""
+        agent = _make_supervised_agent("fleet_agent_metadata")
+        loop_def = AgentLoopDef(
+            agent=agent,
+            warmup_code=None,
+            task_queue_size_func=lambda: 0,
+        )
+
+        await run_agentic_fleet([loop_def], auto_terminate=True)
+
+        job_def = find_existing_job_def(agent, None)
+        assert job_def is not None
+        assert job_def.metadata is agent._metadata  # pylint: disable=protected-access
+
+    @pytest.mark.asyncio
     async def test_combined_start_jobs_func_creates_jobs_for_all_agents(self, db0_fixture):  # pylint: disable=unused-argument
         """Fleet calls start_jobs_func for all agents on each loop iteration."""
         agent_a = _make_supervised_agent("fleet_agent_d")
