@@ -169,13 +169,29 @@ def _get_job_model(job) -> str:
 def _get_job_temperature(job) -> str:
     """Return explicit job temperature override, or an empty string when defaulted."""
     try:
-        if not job.job_def or not job.job_def.agent:
+        if not job.job_def:
             return ''
-        metadata = job.job_def.agent._metadata or {}  # pylint: disable=protected-access
+        metadata = job.job_def.metadata or {}
         temperature = metadata.get('TEMPERATURE')
         return str(temperature) if temperature is not None else ''
     except Exception:  # pylint: disable=broad-except
         return ''
+
+
+def _job_uses_reasoning(job) -> bool:
+    """Return whether the job explicitly enabled reasoning."""
+    try:
+        if not job.job_def:
+            return False
+        metadata = job.job_def.metadata or {}
+        value = metadata.get('REASONING')
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+    except Exception:  # pylint: disable=broad-except
+        return False
 
 
 def _get_tool_data_for_block(code_block, chat_log_item) -> list:
@@ -695,6 +711,7 @@ def _build_md_content(
     errors = _get_exception_messages(job)
     locale_str = _get_locale_str(job)
     temperature_str = _get_job_temperature(job)
+    uses_reasoning = _job_uses_reasoning(job)
 
     # ── Header ──────────────────────────────────────────────────────────────
     parts.append('# Job Detail\n')
@@ -708,6 +725,8 @@ def _build_md_content(
         parts.append(f'| **Locale** | `{_escape_md(locale_str)}` |')
     if temperature_str:
         parts.append(f'| **Temperature** | `{_escape_md(temperature_str)}` |')
+    if uses_reasoning:
+        parts.append('| **Reasoning** | Enabled |')
     parts.append(f'| **Cost** | `${total_cost:.4f}` |')
     parts.append(f'| **Turns** | {num_turns} |')
     if chat_style:
@@ -1242,6 +1261,7 @@ def create_job_detail_dialog(job) -> None:
     model = _get_job_model(job)
     locale_str = _get_locale_str(job)
     temperature_str = _get_job_temperature(job)
+    uses_reasoning = _job_uses_reasoning(job)
     chat_style_str = ''
     try:
         if job.job_def and job.job_def.chat_style is not None:
@@ -1287,6 +1307,11 @@ def create_job_detail_dialog(job) -> None:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('device_thermostat').classes('text-sm text-gray-500')
                                 ui.label(temperature_str).classes('text-xs font-mono text-gray-600')
+                        if uses_reasoning:
+                            with ui.row().classes('items-center'):
+                                ui.icon('psychology_alt').classes(
+                                    'text-lg text-orange-500 bg-orange-50 rounded-full p-1'
+                                ).tooltip('Reasoning was enabled for this job.')
                         if chat_style_str:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('forum').classes('text-sm text-gray-500')

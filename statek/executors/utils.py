@@ -887,7 +887,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 9: Get LLM API provider
     if provider is None:
         provider = get_statek_settings().default_llm_api_provider
-    llm_api = LLM_API.get(provider_name=provider, model=job.model)
+    llm_api = LLM_API.get(provider_name=provider)
 
     # Step 10: Get next request parameters — log pending console batch first
     _log_pending_console(job)
@@ -905,10 +905,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     job.context_bytes = job.total_bytes_sent + job.total_bytes_received
     if response.stats.cost is not None:
         job.total_cost += response.stats.cost
-
-    # Update session_id if returned by the LLM API
-    if response.session_id:
-        job.session_id = response.session_id
 
     # Step 12: Add new log item using append_chat_log
     job.append_chat_log(request, response)
@@ -1208,6 +1204,18 @@ def _resolve_job_def_model(agent, provider: Optional[str]) -> tuple[Optional[str
     return model_family, model
 
 
+def _ensure_shared_job_def_metadata(agent, model_family: Optional[str], model_to_use: str) -> dict:
+    """Ensure loop-created JobDefs reuse the agent metadata dict."""
+    metadata = agent._metadata  # pylint: disable=protected-access
+    if metadata is None:
+        metadata = {}
+        agent._metadata = metadata  # pylint: disable=protected-access
+    metadata["MODEL"] = model_to_use
+    if model_family is not None:
+        metadata["MODEL_FAMILY"] = model_family
+    return metadata
+
+
 @dataclass
 class AgentLoopDef:
     """Definition for a single agent loop within a fleet.
@@ -1269,12 +1277,12 @@ async def run_agentic_loop(agent: 'Agent',
         job_def.clear_errors()
     else:
         parsed_warmup_code = parse_warmup_code(warmup_code)
+        metadata = _ensure_shared_job_def_metadata(agent, model_family, model_to_use)
         job_def = JobDef(
             agent=agent,
+            metadata=metadata,
             job_params=None,
             warmup_code=parsed_warmup_code,
-            model_family=model_family,
-            model=model_to_use,
         )
     
     start_jobs_func = _make_start_jobs_func(agent, job_def, task_queue_size_func, provider)
@@ -1322,12 +1330,12 @@ async def run_agentic_fleet(
             job_def.clear_errors()
         else:
             parsed_warmup_code = parse_warmup_code(warmup_code)
+            metadata = _ensure_shared_job_def_metadata(agent, model_family, model_to_use)
             job_def = JobDef(
                 agent=agent,
+                metadata=metadata,
                 job_params=None,
                 warmup_code=parsed_warmup_code,
-                model_family=model_family,
-                model=model_to_use,
             )
 
         start_jobs_funcs.append(_make_start_jobs_func(agent, job_def, task_queue_size_func, provider))

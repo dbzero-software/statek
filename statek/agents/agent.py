@@ -163,9 +163,10 @@ class Agent:
         Returns:
             True if metadata was updated, False if it was already up to date.
         """
-        if self._metadata == new_metadata:
+        copied_metadata = dict(new_metadata)
+        if self._metadata == copied_metadata:
             return False
-        self._metadata = new_metadata
+        self._metadata = copied_metadata
         STATEK_LOGGER.debug("Agent '%s' metadata updated: %s", self.role, self._metadata)
         return True
 
@@ -448,11 +449,10 @@ class SupervisedAgent(Agent):
 
         return JobDef(
             agent=self,
+            metadata=self._metadata,
             job_params=job_params,
             warmup_code=combined,
             locale=locale,
-            model_family=model_family,
-            model=model,
         )
 
     def _combine_warmup_code(self, warmup_code):

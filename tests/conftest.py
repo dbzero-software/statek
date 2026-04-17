@@ -176,14 +176,17 @@ def job_def_factory(agent):
         warmup_code=None,
         model_family="test",
         model="test-model",
+        metadata=None,
         **kwargs,
     ):
+        metadata = dict(metadata) if metadata is not None else {"MODEL": model}
+        if model_family is not None:
+            metadata.setdefault("MODEL_FAMILY", model_family)
         return JobDef(
             agent=agent,
+            metadata=metadata,
             job_params=job_params,
             warmup_code=warmup_code,
-            model_family=model_family,
-            model=model,
             **kwargs
         )
     return _create_job_def

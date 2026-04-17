@@ -155,7 +155,6 @@ class TestRunJobStepToolCallResponse:
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={"x": 1})
         mock_response = LLM_Response(
             text="",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=[call_params],
         )
@@ -173,6 +172,7 @@ class TestRunJobStepToolCallResponse:
             mock_llm_api_cls.get.return_value = mock_api
             await run_job_step(job, provider="OPENROUTER")
 
+        mock_llm_api_cls.get.assert_called_once_with(provider_name="OPENROUTER")
         assert len(job.chat_log) == 1
         llm_resp = job.chat_log[0].llm_resp
         assert isinstance(llm_resp, CodeBlock)
@@ -194,7 +194,6 @@ class TestRunJobStepToolCallResponse:
 
         mock_response = LLM_Response(
             text="x = 42",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -251,7 +250,6 @@ class TestRunJobStepHarnessIsolation:
                 api_url="https://openrouter.ai/api/v1/chat/completions",
                 api_key="test-key",
             ),
-            model="gpt-4o",
         )
 
         target_totals = [1000, 1200]
@@ -830,7 +828,6 @@ class TestRunJobStepWarmupException:
 
         mock_response = MagicMock()
         mock_response.text = "exit('done')"
-        mock_response.session_id = None
         mock_response.stats = MagicMock(total_bytes_sent=0, total_bytes_received=0, cost=None)
         mock_response.call_requests = None
 
@@ -896,7 +893,7 @@ class TestRunJobStepEmptyLLMSubmission:
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=""))
 
         mock_response = LLM_Response(
-            text="exit('done')", session_id=None,
+            text="exit('done')",
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -935,7 +932,7 @@ class TestRunJobStepEmptyLLMSubmission:
             console_pos=0, llm_resp=comment_code))
 
         mock_response = LLM_Response(
-            text="exit('done')", session_id=None,
+            text="exit('done')",
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -974,7 +971,7 @@ class TestRunJobStepEmptyLLMSubmission:
             console_pos=0, llm_resp=block_comment))
 
         mock_response = LLM_Response(
-            text="exit('done')", session_id=None,
+            text="exit('done')",
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1284,7 +1281,6 @@ class TestRunJobStepMdDialog:
 
         mock_response = LLM_Response(
             text="Hello, how can I help?",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1315,7 +1311,6 @@ class TestRunJobStepMdDialog:
 
         mock_response = LLM_Response(
             text="Here is the result:\n```python\ntest_var = 99\n```",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1352,7 +1347,6 @@ class TestRunJobStepMdDialog:
         # Next LLM response is text-only (job will exit after this)
         mock_response = LLM_Response(
             text="Done.",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1385,7 +1379,6 @@ class TestRunJobStepMdDialog:
 
         mock_response = LLM_Response(
             text="Warmup complete.",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1419,7 +1412,6 @@ class TestRunJobStepMdDialog:
         # LLM response with code so job would normally continue
         mock_response = LLM_Response(
             text="Here is the result:\n```python\ntest_var = 99\n```",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1458,7 +1450,6 @@ class TestRunJobStepMdDialog:
         # Text-only response — normally would exit job
         mock_response = LLM_Response(
             text="Hello, how can I help?",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1511,7 +1502,6 @@ class TestRunJobStepDirect:
 
         mock_response = LLM_Response(
             text="Dzisiejsza data to 3 kwietnia 2026 roku.",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -1608,7 +1598,6 @@ class TestHandleDialogMarkdownMedia:
 
         mock_response = LLM_Response(
             text="Let me run that for you.",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=[CallParams(
                 call_id="call-1", name="python_cli",
@@ -1639,7 +1628,6 @@ class TestHandleDialogMarkdownMedia:
 
         mock_response = LLM_Response(
             text="Hello!",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )

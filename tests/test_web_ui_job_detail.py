@@ -19,6 +19,7 @@ from web_ui.pages.job_detail import (
     _get_exception_messages,
     _get_job_model,
     _get_job_temperature,
+    _job_uses_reasoning,
     _get_locale_str,
     _get_latency_samples,
     _summarize_latencies,
@@ -90,18 +91,21 @@ def _make_warmup_log_item(block_num, tool_log=None):
     return item
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def _make_job(
     warmup_code=None,
     warmup_console_positions=None,
     chat_log=None,
     console=None,
     chat_style=None,
+    metadata=None,
 ):
     job = MagicMock()
     job_def = MagicMock()
     job_def.warmup_code = warmup_code
     job_def.chat_style = chat_style
     job_def.model = None
+    job_def.metadata = metadata or {}
     agent = MagicMock()
     agent._metadata = {}  # pylint: disable=protected-access
     job_def.agent = agent
@@ -231,8 +235,7 @@ class TestLatencyHelpers:
 
 class TestGetJobTemperature:
     def test_reads_temperature_from_agent_metadata(self):
-        job = _make_job()
-        job.job_def.agent._metadata = {'TEMPERATURE': '0.3'}  # pylint: disable=protected-access
+        job = _make_job(metadata={'TEMPERATURE': '0.3'})
 
         assert _get_job_temperature(job) == '0.3'
 
@@ -240,6 +243,23 @@ class TestGetJobTemperature:
         job = _make_job()
 
         assert _get_job_temperature(job) == ''
+
+
+class TestJobUsesReasoning:
+    def test_reads_reasoning_flag_from_agent_metadata(self):
+        job = _make_job(metadata={'REASONING': 'true'})
+
+        assert _job_uses_reasoning(job) is True
+
+    def test_false_reasoning_flag_returns_false(self):
+        job = _make_job(metadata={'REASONING': 'false'})
+
+        assert _job_uses_reasoning(job) is False
+
+    def test_missing_reasoning_flag_returns_false(self):
+        job = _make_job()
+
+        assert _job_uses_reasoning(job) is False
 
 
 class TestGetWarmupBlocks:
@@ -533,7 +553,7 @@ class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
 
     def test_includes_temperature_when_present(self, db0_fixture):
         job = _make_job_for_md()
-        job.job_def.agent._metadata = {'TEMPERATURE': '0.3'}  # pylint: disable=protected-access
+        job.job_def.metadata = {'TEMPERATURE': '0.3'}
 
         md = _call_build_md(job)
 
@@ -542,11 +562,28 @@ class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
 
     def test_omits_temperature_when_missing(self, db0_fixture):
         job = _make_job_for_md()
-        job.job_def.agent._metadata = {}  # pylint: disable=protected-access
+        job.job_def.metadata = {}
 
         md = _call_build_md(job)
 
         assert 'Temperature' not in md
+
+    def test_includes_reasoning_when_present(self, db0_fixture):
+        job = _make_job_for_md()
+        job.job_def.metadata = {'REASONING': 'true'}
+
+        md = _call_build_md(job)
+
+        assert 'Reasoning' in md
+        assert 'Enabled' in md
+
+    def test_omits_reasoning_when_missing(self, db0_fixture):
+        job = _make_job_for_md()
+        job.job_def.metadata = {}
+
+        md = _call_build_md(job)
+
+        assert 'Reasoning' not in md
 
     def test_includes_chat_style_when_present(self, db0_fixture):
         job = _make_job_for_md()

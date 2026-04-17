@@ -19,10 +19,9 @@ STATEK_LOGGER = get_statek_logger()
 
 LLM_Stats = namedtuple("LLM_Stats", ["total_bytes_sent", "total_bytes_received", "cost"])
 # text: response text from the LLM (empty string when the LLM made tool calls instead)
-# session_id: optional provider-managed session identifier
 # stats: byte/cost accounting
 # call_requests: list of CallParams when the LLM requested tool calls, else None
-LLM_Response = namedtuple("LLM_Response", ["text", "session_id", "stats", "call_requests"])
+LLM_Response = namedtuple("LLM_Response", ["text", "stats", "call_requests"])
 
 class CallParams:
     """Parameters for a single function/tool call requested by the LLM.
@@ -167,14 +166,16 @@ class LLM_API(ABC):
     A single LLM_API instance is intended for a single session with the LLM agent.
     """
 
-    async def process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    async def process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         available_tools: Optional[Sequence[Callable]] = None,
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
-        session_id: Optional[str] = None,
-        chat_style=None
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
     ) -> LLM_Response:
         """Process a request to the LLM API.
 
@@ -191,19 +192,21 @@ class LLM_API(ABC):
         Args:
             system_prompt: Optional system prompt to pass separately from the
                 conversational history.
-            metadata: Optional metadata key/value pairs. ``"MODEL"`` overrides
-                the default model. ``"LLM_TOOLS_SCOPE"`` selects tools from
-                ``available_tools`` to send to the provider.
+            model: Required provider model for this request.
+            metadata: Optional metadata key/value pairs. ``"LLM_TOOLS_SCOPE"``
+                selects tools from ``available_tools`` to send to the provider.
             available_tools: All tools available in the agent's local context.
                 Only used when ``"LLM_TOOLS_SCOPE"`` is set in metadata.
             chat_history: Conversation history as ``ChatHistoryItem`` objects.
-            session_id: Provider-specific session ID (if continuation).
             chat_style: Optional ChatStyle. Threaded through for tool selection
                 and message formatting; in DIRECT mode the history is rewritten
                 so assistant code becomes ``python_cli`` tool calls.
+            temperature: Optional provider temperature.
+            enable_reasoning: Whether provider reasoning / thinking should be
+                enabled for this request.
 
         Returns:
-            LLM_Response containing the response text, optional session_id, and stats.
+            LLM_Response containing the response text, stats, and call requests.
         """
         from .system import select_tools, find_tools  # pylint: disable=import-outside-toplevel
 
@@ -213,6 +216,8 @@ class LLM_API(ABC):
             self.__class__.__name__,
             [t.__name__ for t in available_tools] if available_tools else None
         )
+
+        model = self.require_model(model)
 
         tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
         if tools_scope and available_tools is not None:
@@ -228,11 +233,13 @@ class LLM_API(ABC):
 
         response = await self._process_request(
             system_prompt=system_prompt,
+            model=model,
             metadata=metadata,
             tools=tools,
             chat_history=chat_history,
-            session_id=session_id,
             chat_style=chat_style,
+            temperature=temperature,
+            enable_reasoning=enable_reasoning,
         )
         STATEK_LOGGER.debug("%s response: %s", self.__class__.__name__, response.text)
         if response.call_requests:
@@ -247,31 +254,43 @@ class LLM_API(ABC):
     async def _process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
-        session_id: Optional[str] = None,
         chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
     ) -> LLM_Response:
         """Provider-specific request implementation. Called by process_request."""
 
     @staticmethod
-    def _extract_temperature(metadata: Optional[Dict[str, str]]) -> Optional[float]:
-        """Extract and validate TEMPERATURE from metadata.
-
-        Returns:
-            The temperature as a float, or None if not specified.
-
-        Raises:
-            ValueError: If the value is outside the 0.0–1.0 range.
-        """
-        if not metadata or "TEMPERATURE" not in metadata:
+    def parse_temperature(value: Optional[str]) -> Optional[float]:
+        """Validate a temperature value that may have come from metadata."""
+        if value is None:
             return None
-        value = float(metadata["TEMPERATURE"])
+        value = float(value)
         if not 0.0 <= value <= 1.0:
             raise ValueError(
                 f"TEMPERATURE must be between 0.0 and 1.0, got {value}")
         return value
+
+    @staticmethod
+    def require_model(model: Optional[str]) -> str:
+        """Validate the explicit model argument."""
+        if not model:
+            raise ValueError("model must be provided to process_request")
+        return model
+
+    @staticmethod
+    def parse_enable_reasoning(value: Optional[str]) -> bool:
+        """Convert metadata REASONING values into a boolean flag."""
+        if value is None:
+            return False
+        normalized = value.strip().upper()
+        if normalized in ("", "FALSE", "0", "NO", "OFF", "DISABLED", "NONE"):
+            return False
+        return True
 
     @staticmethod
     def _load_response_format(settings: LLM_API_Settings) -> Optional[dict]:
@@ -287,7 +306,7 @@ class LLM_API(ABC):
 
     @staticmethod
     @lru_cache
-    def get(provider_name: str = None, model: str = None, **kwargs):  # pylint: disable=unused-argument
+    def get(provider_name: str = None, **kwargs):
         """
         Factory method to get an LLM_API instance for a specific provider.
         """
@@ -295,12 +314,12 @@ class LLM_API(ABC):
             settings = get_provider_settings('OPENROUTER')
             if not settings:
                 raise ValueError("No settings found for OpenRouter provider.")
-            return OpenRouter_API(settings=settings, model=model)
+            return OpenRouter_API(settings=settings, **kwargs)
         if provider_name.upper() in ('CLAUDE', 'ANTHROPIC'):
             settings = get_provider_settings('CLAUDE')
             if not settings:
                 raise ValueError("No settings found for Claude provider.")
-            return Claude_API(settings=settings, model=model, **kwargs)
+            return Claude_API(settings=settings, **kwargs)
         raise ValueError(f"Unsupported LLM API provider: {provider_name}")
 
 
@@ -311,25 +330,16 @@ class OpenRouter_API(LLM_API):
     which acts as a gateway to multiple LLM providers.
     """
 
-    def __init__(self, settings: LLM_API_Settings, model: Optional[str] = None, **kwargs):
+    def __init__(self, settings: LLM_API_Settings, **kwargs):
         """Initialize OpenRouter API client.
 
         Args:
             settings: LLM_API_Settings containing API URL and key
-            model: Specific model to use.
-
-        Raises:
-            ValueError: If no model is specified
         """
         self.settings = settings
-        self.model = model
         self.response_format = LLM_API._load_response_format(settings)
         # additional kwargs that will be passed to request if needed
         self.kwargs = kwargs
-        if not self.model:
-            raise ValueError(
-                "No model specified. Please provide a model name."
-            )
 
         self.api_url = settings.api_url
         self.api_key = settings.api_key
@@ -368,26 +378,27 @@ class OpenRouter_API(LLM_API):
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
-        session_id: Optional[str] = None,
         chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
     ) -> LLM_Response:
         """Process a request to the OpenRouter API.
 
         Args:
             system_prompt: Optional system prompt
-            metadata: Optional metadata. If it contains the "MODEL" key it overrides
-                     the instance-level default model for this request.
+            model: Required provider model.
+            metadata: Optional metadata unrelated to provider model selection.
             tools: Optional list of tool callables to include as formal tool definitions
                    in the OpenAI function-calling format.
             chat_history: Conversation history including the latest user message as
                          the final element
-            session_id: Not used by OpenRouter (stateless)
 
         Returns:
-            LLM_Response with the generated text and None for session_id
+            LLM_Response with the generated text, stats, and tool calls
 
         Raises:
             httpx.HTTPError: If the API request fails
@@ -400,8 +411,7 @@ class OpenRouter_API(LLM_API):
             chat_history=chat_history,
             chat_style=chat_style,
         )
-        model = metadata.get('MODEL', self.model) if metadata else self.model
-        temperature = self._extract_temperature(metadata)
+        model = self.require_model(model)
 
         # Prepare the request payload
         payload = {
@@ -414,6 +424,8 @@ class OpenRouter_API(LLM_API):
             payload["response_format"] = self.response_format
         if temperature is not None:
             payload["temperature"] = temperature
+        if enable_reasoning:
+            payload["reasoning"] = {}
         # set any additional parameters from kwargs
         payload.update(self.kwargs)
         # Prepare headers
@@ -473,9 +485,8 @@ class OpenRouter_API(LLM_API):
                 cost=cost
             )
 
-            # OpenRouter is stateless, so session_id is None
             return LLM_Response(
-                text=response_text, session_id=None, stats=stats,
+                text=response_text, stats=stats,
                 call_requests=call_requests
             )
 
@@ -487,33 +498,24 @@ class Claude_API(LLM_API):
     using the Anthropic Python SDK with prompt caching for multi-turn conversations.
     """
 
-    def __init__(self, settings: LLM_API_Settings, model: Optional[str] = None,
+    def __init__(self, settings: LLM_API_Settings,
                  use_prompt_caching: Optional[bool] = None, **kwargs):
         """Initialize Claude API client.
 
         Args:
             settings: LLM_API_Settings containing API URL and key
-            model: Specific model to use.
             use_prompt_caching: Whether to enable prompt caching for system prompts
                                and conversation history (reduces cost and latency).
                                If None, uses value from settings
                                (env var CLAUDE_USE_PROMPT_CACHING).
-
-        Raises:
-            ValueError: If no model is specified
         """
         self.settings = settings
-        self.model = model
         self.response_format = LLM_API._load_response_format(settings)
         self.use_prompt_caching = (
             use_prompt_caching if use_prompt_caching is not None
             else settings.use_prompt_caching
         )
         self.kwargs = kwargs
-        if not self.model:
-            raise ValueError(
-                "No model specified. Please provide a model name."
-            )
         self.api_key = settings.api_key
 
     @staticmethod
@@ -699,18 +701,19 @@ class Claude_API(LLM_API):
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         tools: Optional[List[Callable]] = None,
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
-        session_id: Optional[str] = None,
         chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
     ) -> LLM_Response:
         """Process a request to the Claude API using the Messages API."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
         messages = self.build_messages(chat_history, chat_style=chat_style)
-        model = metadata.get('MODEL', self.model) if metadata else self.model
-        temperature = self._extract_temperature(metadata)
+        model = self.require_model(model)
 
         # Prepare the request payload
         payload = {
@@ -731,6 +734,11 @@ class Claude_API(LLM_API):
 
         if temperature is not None:
             payload["temperature"] = temperature
+        if enable_reasoning:
+            payload["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": 1024,
+            }
 
         # Prepare headers for Claude API
         headers = {
@@ -793,8 +801,7 @@ class Claude_API(LLM_API):
                 cost=cost
             )
 
-            # Claude Messages API is stateless, so session_id is None
             return LLM_Response(
-                text=response_text, session_id=None, stats=stats,
+                text=response_text, stats=stats,
                 call_requests=call_requests
             )
