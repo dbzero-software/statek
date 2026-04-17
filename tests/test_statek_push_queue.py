@@ -200,3 +200,50 @@ def test_pop_from_job_console_prefix_uuid_non_matching_stay_in_queue(db0_fixture
     remaining = queue.pop_from_job_console(10)
     assert len(remaining) == 1
     assert remaining[0][1] == "from-b"
+
+
+def test_has_job_returns_true_when_job_uuid_exists(db0_fixture):
+    job = _make_job(db0_fixture)
+    queue = StatekPushQueue()
+    job_uuid = db0.uuid(job)
+
+    queue.push_to_job_console(job_uuid=job_uuid, message="hello")
+
+    assert queue.has_job(job_uuid) is True
+
+
+def test_has_job_returns_false_when_job_uuid_does_not_exist(db0_fixture):
+    job = _make_job(db0_fixture)
+    other_job = _make_job(db0_fixture)
+    queue = StatekPushQueue()
+
+    queue.push_to_job_console(job_uuid=db0.uuid(job), message="hello")
+
+    assert queue.has_job(db0.uuid(other_job)) is False
+
+
+def test_has_job_returns_none_when_max_scan_is_exceeded(db0_fixture):
+    queue = StatekPushQueue()
+    jobs = [_make_job(db0_fixture) for _ in range(3)]
+
+    for index, job in enumerate(jobs):
+        queue.push_to_job_console(job_uuid=db0.uuid(job), message=f"msg{index}")
+
+    assert queue.has_job(db0.uuid(jobs[2]), max_scan=2) is None
+
+
+def test_has_job_does_not_remove_items_from_queue(db0_fixture):
+    first_job = _make_job(db0_fixture)
+    second_job = _make_job(db0_fixture)
+    queue = StatekPushQueue()
+    first_uuid = db0.uuid(first_job)
+    second_uuid = db0.uuid(second_job)
+
+    queue.push_to_job_console(job_uuid=first_uuid, message="first")
+    queue.push_to_job_console(job_uuid=second_uuid, message="second")
+
+    assert queue.has_job(first_uuid) is True
+    assert queue.pop_from_job_console(10) == [
+        (first_uuid, "first"),
+        (second_uuid, "second"),
+    ]

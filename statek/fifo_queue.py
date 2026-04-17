@@ -1,6 +1,6 @@
 """FiFoQueue - a first-in first-out queue backed by a db0.index."""
 # pylint: disable=no-member
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 import dbzero as db0
 
@@ -43,6 +43,26 @@ class FiFoQueue:
         prefix = db0.get_prefix_of(self).name
         self.__items.add(self.__next_key, FQ_Item(self.__next_key,prefix=prefix, **kwargs))
         self.__next_key += 1
+
+    def has_item(self, filter: Callable, max_scan: int = 100) -> Optional[bool]:  # pylint: disable=redefined-builtin
+        """Check whether any queued item matches *filter* without mutating the queue.
+
+        Items are scanned in FIFO order. Returns ``None`` when determining the
+        answer would require scanning beyond *max_scan* queue entries.
+        """
+        scanned = 0
+        for item in self.__items.sort(self.__items.select()):
+            if not isinstance(item, FQ_Item):
+                continue
+
+            if scanned >= max_scan:
+                return None
+
+            scanned += 1
+            if filter(**item.to_dict()):
+                return True
+
+        return False
 
     def pop_front(self, count, filter: Callable = None) -> List[Dict]:  # pylint: disable=redefined-builtin
         """Retrieve and remove up to *count* first elements from the queue.
