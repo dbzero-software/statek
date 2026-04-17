@@ -119,6 +119,8 @@ class DialogAgent(SupervisedAgent):
                 body (required): The final message text to send to the user.
                 media: Optional media attachment forwarded to send_message.
             """
+            # This is LLM-facing log
+            print(f"log: answer(body={body!r}, media={media!r})")
             original(body=body, media=media)
             exit("Success")  # pylint: disable=consider-using-sys-exit
 

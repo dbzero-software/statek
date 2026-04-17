@@ -514,9 +514,11 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
     cli_instr_num = instr_num[1] if skip_regular else None
 
     # --- regular code ---
-    # DIRECT mode: code field holds dialog text for history, not Python — skip execution.
+    # DIRECT mode: LLM-generated code field holds dialog text for history, not Python.
+    # Warmup blocks, however, are real setup code and must still execute.
     is_direct = job.job_def.chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
-    if not skip_regular and not is_direct and not _is_empty_code(code.code):
+    is_warmup = job.status == JobStatus.WARMING_UP
+    if not skip_regular and (is_warmup or not is_direct) and not _is_empty_code(code.code):
         exited = not await exec_step(code.code, job, instr_num=regular_instr_num,
                                      local_context=local_context)
         if exited:
@@ -864,9 +866,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
             job.set_status(JobStatus.DONE)
-            # Log any pending console output before the exit marker
             _log_pending_console(job)
-            job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
             return True
 
         # Step 8: Handle warmup block progression or transition to STARTED
@@ -936,7 +936,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             custom_exit(job)
             job.set_status(JobStatus.DONE)
             _log_pending_console(job)
-            job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
             return True
 
     # Step 14: Check harness constraints after step
@@ -1034,10 +1033,6 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             # Log cost after each LLM request
             statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
                        f"cost: ${job.total_cost:.4f}")
-            # Log exit status if job completed successfully
-            if job.status == JobStatus.DONE and job.py_env.exit_status is not None:
-                exit_msg = f"exit: {job.py_env.exit_status}"
-                job.console_append(exit_msg)
         except LLM_HarnessError as e:
             error_msg = f"LLM_HarnessError: {e}"
             statek_log(error_msg, level='debug')

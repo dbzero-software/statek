@@ -98,6 +98,20 @@ def _normalise_tool_calls(
     return list(tool_calls)
 
 
+def _json_default(obj):
+    """Fallback encoder for ``json.dumps`` handling db0 persistent collections."""
+    if isinstance(obj, (set, frozenset)):
+        return list(obj)
+    if hasattr(obj, "items") and callable(obj.items):
+        return dict(obj.items())
+    try:
+        return list(obj)
+    except TypeError as exc:
+        raise TypeError(
+            f"Object of type {obj.__class__.__name__} is not JSON serializable"
+        ) from exc
+
+
 def _format_tool_call(cs: CallSpec) -> Dict:
     """Convert a CallSpec to an OpenAI-format ``tool_calls`` entry.
 
@@ -114,7 +128,7 @@ def _format_tool_call(cs: CallSpec) -> Dict:
         "type": "function",
         "function": {
             "name": cs.func_name,
-            "arguments": json.dumps(kwargs),
+            "arguments": json.dumps(kwargs, default=_json_default),
         },
     }
 

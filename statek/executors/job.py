@@ -1184,6 +1184,7 @@ class Job:
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
             self.num_completions = 1 if self.num_completions is None else self.num_completions + 1
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+            self.py_env.exit_status = None
             self.chat_log.append(LLM_LogItem(
                 console_pos=len(self.py_env.console) if self.py_env.console else 0,
                 llm_resp=None
