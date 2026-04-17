@@ -160,6 +160,21 @@ class TestAgent:
         assert result is True
         assert agent.description == "New"
 
+    def test_update_metadata_no_change_keeps_existing_dict(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_metadata avoids replacing metadata when the content is unchanged."""
+        agent = Agent(
+            role="test",
+            _system_prompt="test",
+            _tools=[],
+            _metadata={"MODEL": "test-model", "TEMPERATURE": "0.1"},
+        )
+        original_metadata = agent._metadata  # pylint: disable=protected-access
+
+        result = agent.update_metadata({"MODEL": "test-model", "TEMPERATURE": "0.1"})
+
+        assert result is False
+        assert agent._metadata is original_metadata  # pylint: disable=protected-access
+
     def test_shared_var_names_resolved_from_job_params(self, db0_fixture):  # pylint: disable=unused-argument
         """shared_var_names placeholder is resolved to comma-delimited shared_vars keys."""
         agent = Agent(

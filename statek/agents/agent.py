@@ -163,10 +163,9 @@ class Agent:
         Returns:
             True if metadata was updated, False if it was already up to date.
         """
-        copied_metadata = dict(new_metadata)
-        if self._metadata == copied_metadata:
+        if self._metadata == new_metadata:
             return False
-        self._metadata = copied_metadata
+        self._metadata = dict(new_metadata)
         STATEK_LOGGER.debug("Agent '%s' metadata updated: %s", self.role, self._metadata)
         return True
 
