@@ -970,7 +970,7 @@ def process_push_notifications(step_size=100, max_count=500):
             for job_uuid, message in items:
                 try:
                     job = db0.fetch(job_uuid)
-                    job.push_user_message(message)
+                    job.push_user_message(str(message))
                 except Exception:  # pylint: disable=broad-except
                     pass
                 processed += 1
