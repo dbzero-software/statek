@@ -52,6 +52,15 @@ def _job_model(job) -> str:
         return '—'
 
 
+def _job_tps_label(job) -> str:
+    """Return formatted tokens-per-second label for a job, or '—' on any error."""
+    try:
+        tps = job.tokens_per_sec()
+        return f'{tps:.0f} tok/s' if tps else '—'
+    except Exception:  # pylint: disable=broad-except
+        return '—'
+
+
 def _render_job_row(job) -> None:
     """Render a single job as a table-style row."""
     uuid_str = _job_uuid(job)
@@ -61,6 +70,7 @@ def _render_job_row(job) -> None:
     num_turns = getattr(job, 'num_turns', 0)
     total_cost = getattr(job, 'total_cost', 0.0)
     cost_label = f'${total_cost:.4f}' if total_cost else '—'
+    tps_label = _job_tps_label(job)
 
     with ui.row().classes(
         'w-full items-center gap-4 px-4 py-2 border-b border-gray-100 hover:bg-gray-50'
@@ -72,6 +82,7 @@ def _render_job_row(job) -> None:
         ui.label(model).classes('text-xs text-gray-500 font-mono w-40 shrink-0 truncate')
         ui.label(str(num_turns)).classes('text-xs text-gray-600 w-12 text-right shrink-0')
         ui.label(cost_label).classes('text-xs text-gray-600 font-mono w-20 text-right shrink-0')
+        ui.label(tps_label).classes('text-xs text-gray-600 font-mono w-24 text-right shrink-0')
         ui.icon('open_in_full').classes('text-xs text-gray-300 shrink-0')
 
 
@@ -118,6 +129,9 @@ def create_jobs_page() -> None:
                 )
                 ui.label('Cost').classes(
                     'text-xs font-semibold text-gray-500 uppercase tracking-wide w-20 text-right shrink-0'
+                )
+                ui.label('Speed').classes(
+                    'text-xs font-semibold text-gray-500 uppercase tracking-wide w-24 text-right shrink-0'
                 )
 
             for job in page_jobs:

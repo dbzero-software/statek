@@ -1271,6 +1271,10 @@ def create_job_detail_dialog(job) -> None:
     total_cost = getattr(job, 'total_cost', 0.0) or 0.0
     num_turns = getattr(job, 'num_turns', 0) or 0
     exception_count = getattr(job, 'exception_count', 0) or 0
+    try:
+        tps = job.tokens_per_sec()
+    except Exception:  # pylint: disable=broad-except
+        tps = 0.0
     status_str = '—'
     try:
         status_str = str(job.status) if job.status else '—'
@@ -1324,6 +1328,10 @@ def create_job_detail_dialog(job) -> None:
                             ui.label(f'{num_turns} turn{"s" if num_turns != 1 else ""}').classes(
                                 'text-xs text-gray-600'
                             )
+                        if tps:
+                            with ui.row().classes('items-center gap-1'):
+                                ui.icon('bolt').classes('text-sm text-gray-500')
+                                ui.label(f'{tps:.0f} tok/s').classes('text-xs font-mono text-gray-600')
                         if exception_count:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('error_outline').classes('text-sm text-red-500')
