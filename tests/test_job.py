@@ -120,6 +120,7 @@ class TestJob:
         job = job_factory()
         ext_ref = JobExtRefThing("message")
         assert job.contains_ext_ref(ext_ref) is False
+        assert job._Job__ext_ref is None  # pylint: disable=protected-access
 
     def test_add_ext_ref_registers_memo_object(self, job_factory):
         """Job remembers memo objects registered as external refs."""

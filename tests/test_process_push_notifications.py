@@ -113,7 +113,7 @@ class TestProcessPushNotifications:
         assert job1.py_env.push_log[0] == "for-job1"
         assert job2.py_env.push_log[0] == "for-job2"
 
-    def test_filters_notifications_to_current_prefix_uuid(self, db0_fixture):
+    def test_filters_notifications_to_requested_prefix_uuid(self, db0_fixture):
         prefix_a = db0.get_current_prefix()
         job_a = _make_started_job()
         job_a_uuid = db0.uuid(job_a)
@@ -125,15 +125,13 @@ class TestProcessPushNotifications:
 
         queue.push_to_job_console(job_uuid=job_a_uuid, message="for-a")
         queue.push_to_job_console(job_uuid=job_b_uuid, message="for-b")
-        db0.open(prefix_a.name, "rw")
 
-        process_push_notifications()
+        process_push_notifications(prefix=prefix_a.uuid)
 
         assert job_a.py_env.push_log[0] == "for-a"
         assert job_b.py_env.push_log is None
         remaining = queue.pop_from_job_console(10, prefix=None)
         assert remaining == [(job_b_uuid, "for-b")]
-        assert db0.get_current_prefix().uuid == prefix_a.uuid
 
     def test_respects_max_count(self, db0_fixture):
         job = _make_started_job()

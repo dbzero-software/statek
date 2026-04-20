@@ -305,8 +305,8 @@ class Job:
         self.perm_ctx: Optional[dict] = None
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
-        # Application-specific external memo references held weakly.
-        self.__ext_ref = db0.weak_set()
+        # Application-specific external memo references, created lazily.
+        self.__ext_ref = None
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
@@ -324,7 +324,7 @@ class Job:
 
     def _ensure_ext_ref_storage(self):
         """Return external-reference storage, creating it for older persisted jobs."""
-        if not hasattr(self, "_Job__ext_ref"):
+        if not hasattr(self, "_Job__ext_ref") or self.__ext_ref is None:
             self.__ext_ref = db0.weak_set()
         return self.__ext_ref
 
@@ -341,7 +341,9 @@ class Job:
         if not db0.is_memo(obj):
             return False
 
-        storage = self._ensure_ext_ref_storage()
+        storage = getattr(self, "_Job__ext_ref", None)
+        if storage is None:
+            return False
         return obj in storage
 
     def add_error_handler(self, error_handler: Callable, context: Any) -> None:
