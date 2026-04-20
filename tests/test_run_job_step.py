@@ -1681,7 +1681,6 @@ class TestProviderRouting:
     def _make_mock_api(self):
         mock_response = LLM_Response(
             text="x = 1",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )

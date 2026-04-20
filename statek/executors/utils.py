@@ -886,7 +886,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 9: Get LLM API provider
     if provider is None:
-        provider = get_statek_settings().default_llm_api_provider
+        metadata = job.job_def.agent._metadata or {}  # pylint: disable=protected-access
+        provider = metadata.get("PROVIDER") or get_statek_settings().default_llm_api_provider
     llm_api = LLM_API.get(provider_name=provider)
 
     # Step 10: Get next request parameters — log pending console batch first

@@ -526,6 +526,17 @@ class Claude_API(LLM_API):
         self.kwargs = kwargs
         self.api_key = settings.api_key
 
+
+    @staticmethod
+    def _content_text_for_item(item: "ChatHistoryItem", chat_style, settings) -> str:
+        """Return the text content for ``item`` after applying chat-style wrapping.
+        Reuses ``format_chat_history_item`` for consistent formatting and
+        extracts the resulting ``content`` string.
+        """
+        formatted = format_chat_history_item(item, chat_style, settings)
+        content = formatted.get("content")
+        return content if isinstance(content, str) else ""
+
     def build_messages(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         self,
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
@@ -800,209 +811,5 @@ class Claude_API(LLM_API):
 
             return LLM_Response(
                 text=response_text, stats=stats,
-                call_requests=call_requests
-            )
-
-
-class VertexAI_API(LLM_API):
-    """Google Gemini / Vertex AI API implementation of LLM_API.
-
-    Uses the Google Generative AI REST API with API-key authentication.
-    ``api_url`` in settings should be the base endpoint, e.g.
-    ``https://generativelanguage.googleapis.com/v1beta``.  The full request URL
-    is ``{api_url}/models/{model}:generateContent?key={api_key}``.
-    """
-
-    def __init__(self, settings: LLM_API_Settings, model: Optional[str] = None, **kwargs):
-        """Initialise the VertexAI API client.
-
-        Raises:
-            ValueError: If no model is specified.
-        """
-        self.settings = settings
-        self.model = model
-        self.response_format = LLM_API._load_response_format(settings)
-        self.kwargs = kwargs
-        if not self.model:
-            raise ValueError("No model specified. Please provide a model name.")
-        self.api_key = settings.api_key
-        self.api_url = settings.api_url
-
-    @staticmethod
-    def _to_gemini_tool(spec: Dict) -> Dict:
-        """Convert an OpenAI-format tool spec to a Gemini functionDeclaration."""
-        fn = spec["function"]
-        result: Dict = {"name": fn["name"]}
-        if "description" in fn:
-            result["description"] = fn["description"]
-        if "parameters" in fn:
-            result["parameters"] = fn["parameters"]
-        return result
-
-    def build_messages(  # pylint: disable=too-many-branches
-        self,
-        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
-        chat_style=None,
-    ) -> List[Dict]:
-        """Build Gemini ``contents`` list from a ``ChatHistoryItem`` stream.
-
-        SYSTEM items are skipped — the system prompt goes in ``systemInstruction``
-        via ``_process_request``.  Consecutive TOOL items, optionally followed by
-        a USER item, are batched into a single ``role: user`` message containing
-        ``functionResponse`` parts — the format Gemini expects for tool outputs.
-        """
-        from .settings import get_statek_settings  # pylint: disable=import-outside-toplevel
-        if chat_style is None:
-            chat_style = get_statek_settings().chat_style
-        settings = get_statek_settings()
-
-        if not chat_history:
-            return []
-
-        history_list = [item for item in chat_history if item.role != ChatRole.SYSTEM]
-        messages: List[Dict] = []
-        i = 0
-        while i < len(history_list):
-            item = history_list[i]
-
-            if item.role == ChatRole.USER:
-                text = self._content_text_for_item(item, chat_style, settings)
-                if text:
-                    messages.append({"role": "user", "parts": [{"text": text}]})
-                i += 1
-                continue
-
-            if item.role == ChatRole.TOOL:
-                parts: List[Dict] = []
-                while i < len(history_list) and history_list[i].role == ChatRole.TOOL:
-                    tool_item = history_list[i]
-                    parts.append({
-                        "functionResponse": {
-                            "name": _func_name_from_tool_calls(tool_item.tool_calls),
-                            "response": {"output": tool_item.content or ""},
-                        }
-                    })
-                    i += 1
-                if i < len(history_list) and history_list[i].role == ChatRole.USER:
-                    text = self._content_text_for_item(history_list[i], chat_style, settings)
-                    if text:
-                        parts.append({"text": text})
-                    i += 1
-                if parts:
-                    messages.append({"role": "user", "parts": parts})
-                continue
-
-            if item.role == ChatRole.ASSISTANT:
-                msg_parts: List[Dict] = []
-                if item.content:
-                    text = self._content_text_for_item(item, chat_style, settings)
-                    if text:
-                        msg_parts.append({"text": text})
-                if item.tool_calls:
-                    tcs = item.tool_calls
-                    if not isinstance(tcs, list):
-                        tcs = [tcs]
-                    for cs in tcs:
-                        msg_parts.append({
-                            "functionCall": {
-                                "name": cs.func_name,
-                                "args": dict(cs.kwargs) if cs.kwargs else {},
-                            }
-                        })
-                if msg_parts:
-                    messages.append({"role": "model", "parts": msg_parts})
-                i += 1
-                continue
-
-            i += 1
-
-        return messages
-
-    async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
-        self,
-        system_prompt: Optional[str] = None,
-        metadata: Optional[Dict[str, str]] = None,
-        tools: Optional[List[Callable]] = None,
-        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
-        session_id: Optional[str] = None,
-        chat_style=None,
-    ) -> LLM_Response:
-        """Process a request to the Google Generative AI (Gemini) API."""
-        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
-
-        messages = self.build_messages(chat_history, chat_style=chat_style)
-        model = metadata.get('MODEL', self.model) if metadata else self.model
-        temperature = self._extract_temperature(metadata)
-
-        payload: Dict = {"contents": messages}
-
-        if system_prompt:
-            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
-
-        generation_config: Dict = {}
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        if self.response_format:
-            generation_config["responseMimeType"] = "application/json"
-        if generation_config:
-            payload["generationConfig"] = generation_config
-
-        if tools:
-            fn_decls = [self._to_gemini_tool(format_tool_spec(t)) for t in tools]
-            payload["tools"] = [{"functionDeclarations": fn_decls}]
-
-        url = f"{self.api_url}/models/{model}:generateContent?key={self.api_key}"
-        total_bytes_sent = len(json.dumps(payload).encode('utf-8'))
-        if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
-            STATEK_LOGGER.debug("VertexAI payload: %s", json.dumps(payload, indent=2))
-
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url, json=payload, headers={"Content-Type": "application/json"}
-            )
-            response.raise_for_status()
-
-            total_bytes_received = len(response.content)
-            data = response.json()
-            STATEK_LOGGER.debug("VertexAI response: %s", json.dumps(data))
-
-            candidates = data.get("candidates", [])
-            if not candidates:
-                raise RuntimeError(
-                    f"VertexAI API error: {data.get('error', {}).get('message', str(data))}"
-                )
-
-            response_text = ""
-            function_calls = []
-            for part in candidates[0].get("content", {}).get("parts", []):
-                if "text" in part:
-                    response_text += part["text"]
-                elif "functionCall" in part:
-                    function_calls.append(part["functionCall"])
-
-            call_requests = (
-                [
-                    CallParams(
-                        call_id=f"{fc['name']}_{idx}",
-                        name=fc["name"],
-                        args=[],
-                        kwargs=fc.get("args", {}),
-                    )
-                    for idx, fc in enumerate(function_calls)
-                ]
-                if function_calls else None
-            )
-
-            if self.response_format and response_text:
-                response_text = json.loads(response_text)["python_code"]
-
-            stats = LLM_Stats(
-                total_bytes_sent=total_bytes_sent,
-                total_bytes_received=total_bytes_received,
-                cost=None,
-            )
-
-            return LLM_Response(
-                text=response_text, session_id=None, stats=stats,
                 call_requests=call_requests
             )
