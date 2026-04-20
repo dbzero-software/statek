@@ -2,7 +2,10 @@
 
 from .settings import LLM_API_Settings, StatekSettings
 from .prompt_config import PromptDef, update_prompt_config
-from .llm_api import LLM_API, OpenRouter_API, Claude_API, LLM_Response, LLM_Stats
+from .llm_api import (
+    LLM_API, OpenRouter_API, OpenAI_API, VertexAI_API, ClaudeAI_API,
+    Claude_API, LLM_Response, LLM_Stats,
+)
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
 from .system import (tool, docstr, get_any, get_all, error_handler,
@@ -20,6 +23,9 @@ __all__ = [
     "update_prompt_config",
     "LLM_API",
     "OpenRouter_API",
+    "OpenAI_API",
+    "VertexAI_API",
+    "ClaudeAI_API",
     "Claude_API",
     "LLM_Response",
     "LLM_Stats",

@@ -884,11 +884,15 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 # All warmup blocks completed, transition to STARTED
                 job.set_status(JobStatus.STARTED)
 
-    # Step 9: Get LLM API provider
-    if provider is None:
-        metadata = job.job_def.agent._metadata or {}  # pylint: disable=protected-access
-        provider = metadata.get("PROVIDER") or get_statek_settings().default_llm_api_provider
-    llm_api = LLM_API.get(provider_name=provider)
+    # Step 9: Get LLM API provider. JobDef metadata is the frozen job
+    # configuration; the loop-level provider acts as a default only.
+    metadata = job.job_def.metadata or {}
+    provider_to_use = (
+        metadata.get("PROVIDER")
+        or provider
+        or get_statek_settings().default_llm_api_provider
+    )
+    llm_api = LLM_API.get(provider_name=provider_to_use)
 
     # Step 10: Get next request parameters — log pending console batch first
     _log_pending_console(job)
