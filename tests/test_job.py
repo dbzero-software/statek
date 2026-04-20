@@ -16,6 +16,14 @@ from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.utils import CodeBlock, CallSpec
 
 
+@db0.memo
+class JobExtRefThing:
+    """Memo object used by Job external-reference tests."""
+
+    def __init__(self, value):
+        self.value = value
+
+
 class TestJobDefError:
     """Test cases for JobDefError class."""
 
@@ -106,6 +114,40 @@ class TestJobDef:
 
 class TestJob:
     """Test cases for Job class."""
+
+    def test_contains_ext_ref_false_before_add(self, job_factory):
+        """Job does not report unrelated memo objects as external refs."""
+        job = job_factory()
+        ext_ref = JobExtRefThing("message")
+        assert job.contains_ext_ref(ext_ref) is False
+
+    def test_add_ext_ref_registers_memo_object(self, job_factory):
+        """Job remembers memo objects registered as external refs."""
+        job = job_factory()
+        ext_ref = JobExtRefThing("message")
+        job.add_ext_ref(ext_ref)
+        assert job.contains_ext_ref(ext_ref) is True
+
+    def test_add_ext_ref_is_weak_reference(self, job_factory):
+        """External refs do not increase the referenced object's db0 refcount."""
+        job = job_factory()
+        ext_ref = JobExtRefThing("message")
+        refcount = db0.getrefcount(ext_ref)
+        job.add_ext_ref(ext_ref)
+        assert db0.getrefcount(ext_ref) == refcount
+
+    def test_contains_ext_ref_false_for_non_memo(self, job_factory):
+        """contains_ext_ref returns False for non-memo values."""
+        job = job_factory()
+        job.add_ext_ref(JobExtRefThing("message"))
+        assert job.contains_ext_ref("message") is False
+        assert job.contains_ext_ref(object()) is False
+
+    def test_add_ext_ref_ignores_non_memo(self, job_factory):
+        """Adding a non-memo value is harmless."""
+        job = job_factory()
+        job.add_ext_ref("message")
+        assert job.contains_ext_ref("message") is False
 
     def test_get_next_prompt_first_prompt_empty_console(self, job_factory):
         """Test get_next_prompt when chat_log is empty and console is empty."""

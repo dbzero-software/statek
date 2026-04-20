@@ -958,6 +958,7 @@ def process_push_notifications(step_size=100, max_count=500):
         max_count: Maximum total notifications to process in this call.
     """
     processed = 0
+    private_prefix_uuid = db0.get_current_prefix().uuid
 
     for prefix in db0.get_prefixes():
         if processed >= max_count:
@@ -969,12 +970,14 @@ def process_push_notifications(step_size=100, max_count=500):
             batch_size = min(step_size, max_count - processed)
             if queue.is_empty():
                 break
-            items = queue.pop_from_job_console(batch_size)
+            items = queue.pop_from_job_console(batch_size, prefix=private_prefix_uuid)
             if not items:
                 break
             for job_uuid, message in items:
                 try:
                     job = db0.fetch(job_uuid)
+                    if not isinstance(message, str):
+                        job.add_ext_ref(message)
                     job.push_user_message(str(message))
                 except Exception:  # pylint: disable=broad-except
                     pass
