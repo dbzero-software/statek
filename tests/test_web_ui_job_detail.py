@@ -18,6 +18,7 @@ from web_ui.pages.job_detail import (
     _get_tool_data_for_block,
     _get_exception_messages,
     _get_job_model,
+    _get_job_provider,
     _get_job_temperature,
     _job_uses_reasoning,
     _get_locale_str,
@@ -243,6 +244,18 @@ class TestGetJobTemperature:
         job = _make_job()
 
         assert _get_job_temperature(job) == ''
+
+
+class TestGetJobProvider:
+    def test_reads_explicit_provider_from_job_metadata(self):
+        job = _make_job(metadata={'PROVIDER': 'OPENROUTER'})
+
+        assert _get_job_provider(job) == 'OPENROUTER'
+
+    def test_missing_provider_returns_empty_string(self):
+        job = _make_job()
+
+        assert _get_job_provider(job) == ''
 
 
 class TestJobUsesReasoning:
@@ -567,6 +580,23 @@ class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
         md = _call_build_md(job)
 
         assert 'Temperature' not in md
+
+    def test_includes_provider_when_present(self, db0_fixture):
+        job = _make_job_for_md()
+        job.job_def.metadata = {'PROVIDER': 'OPENAI'}
+
+        md = _call_build_md(job)
+
+        assert 'Provider' in md
+        assert 'OPENAI' in md
+
+    def test_omits_provider_when_missing(self, db0_fixture):
+        job = _make_job_for_md()
+        job.job_def.metadata = {}
+
+        md = _call_build_md(job)
+
+        assert 'Provider' not in md
 
     def test_includes_reasoning_when_present(self, db0_fixture):
         job = _make_job_for_md()

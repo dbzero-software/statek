@@ -178,6 +178,18 @@ def _get_job_temperature(job) -> str:
         return ''
 
 
+def _get_job_provider(job) -> str:
+    """Return explicit job provider override, or an empty string when defaulted."""
+    try:
+        if not job.job_def:
+            return ''
+        metadata = job.job_def.metadata or {}
+        provider = metadata.get('PROVIDER')
+        return str(provider) if provider else ''
+    except Exception:  # pylint: disable=broad-except
+        return ''
+
+
 def _job_uses_reasoning(job) -> bool:
     """Return whether the job explicitly enabled reasoning."""
     try:
@@ -711,6 +723,7 @@ def _build_md_content(
     errors = _get_exception_messages(job)
     locale_str = _get_locale_str(job)
     temperature_str = _get_job_temperature(job)
+    provider_str = _get_job_provider(job)
     uses_reasoning = _job_uses_reasoning(job)
 
     # ── Header ──────────────────────────────────────────────────────────────
@@ -721,6 +734,8 @@ def _build_md_content(
     parts.append(f'| **UUID** | `{_escape_md(uuid_str)}` |')
     parts.append(f'| **Agent** | {_escape_md(agent_role)} |')
     parts.append(f'| **Model** | `{_escape_md(model)}` |')
+    if provider_str:
+        parts.append(f'| **Provider** | `{_escape_md(provider_str)}` |')
     if locale_str:
         parts.append(f'| **Locale** | `{_escape_md(locale_str)}` |')
     if temperature_str:
@@ -1261,6 +1276,7 @@ def create_job_detail_dialog(job) -> None:
     model = _get_job_model(job)
     locale_str = _get_locale_str(job)
     temperature_str = _get_job_temperature(job)
+    provider_str = _get_job_provider(job)
     uses_reasoning = _job_uses_reasoning(job)
     chat_style_str = ''
     try:
@@ -1303,6 +1319,10 @@ def create_job_detail_dialog(job) -> None:
                         with ui.row().classes('items-center gap-1'):
                             ui.icon('memory').classes('text-sm text-gray-500')
                             ui.label(model).classes('text-xs font-mono text-gray-600')
+                        if provider_str:
+                            with ui.row().classes('items-center gap-1'):
+                                ui.icon('cloud').classes('text-sm text-gray-500')
+                                ui.label(provider_str).classes('text-xs font-mono text-gray-600')
                         if locale_str:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('language').classes('text-sm text-gray-500')

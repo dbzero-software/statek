@@ -1723,8 +1723,8 @@ class TestProviderRouting:
         assert call_kwargs.kwargs.get("provider_name") == "OPENROUTER"
 
     @pytest.mark.asyncio
-    async def test_explicit_provider_param_overrides_metadata(self, db0_fixture):
-        """The explicit provider parameter takes precedence over metadata PROVIDER."""
+    async def test_metadata_provider_overrides_provider_default(self, db0_fixture):
+        """A frozen job metadata PROVIDER takes precedence over the loop default."""
         job = self._make_job(db0_fixture, {"MODEL": "test-model", "PROVIDER": "CLAUDEAI"})
         mock_api, mock_harness = self._make_mock_api()
 
@@ -1734,4 +1734,38 @@ class TestProviderRouting:
             await run_job_step(job, provider="OPENROUTER")
 
         call_kwargs = mock_llm_api_cls.get.call_args
+        assert call_kwargs.kwargs.get("provider_name") == "CLAUDEAI"
+
+    @pytest.mark.asyncio
+    async def test_provider_param_used_as_default_when_metadata_provider_missing(self, db0_fixture):
+        """The loop provider is used only when the frozen job metadata has no PROVIDER."""
+        job = self._make_job(db0_fixture, {"MODEL": "test-model"})
+        mock_api, mock_harness = self._make_mock_api()
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job, provider="OPENROUTER")
+
+        call_kwargs = mock_llm_api_cls.get.call_args
         assert call_kwargs.kwargs.get("provider_name") == "OPENROUTER"
+
+    @pytest.mark.asyncio
+    async def test_frozen_provider_used_after_agent_metadata_changes(
+        self, db0_fixture
+    ):
+        """Existing jobs use their JobDef provider snapshot, not current agent metadata."""
+        job = self._make_job(db0_fixture, {"MODEL": "test-model", "PROVIDER": "OPENAI"})
+        job.job_def.agent._metadata = {  # pylint: disable=protected-access
+            "MODEL": "test-model",
+            "PROVIDER": "OPENROUTER",
+        }
+        mock_api, mock_harness = self._make_mock_api()
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        call_kwargs = mock_llm_api_cls.get.call_args
+        assert call_kwargs.kwargs.get("provider_name") == "OPENAI"
