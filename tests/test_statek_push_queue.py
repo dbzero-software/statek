@@ -1,5 +1,5 @@
 """Tests for StatekPushQueue singleton."""
-# pylint: disable=no-member,unused-argument
+# pylint: disable=no-member,unused-argument,too-few-public-methods
 import dbzero as db0
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
@@ -29,6 +29,15 @@ def _make_job_on_current_prefix():
     job_def = JobDef(agent=agent)
     return Job(job_def=job_def, model_family="test", model="test-model",
                job_status=JobStatus.READY)  # pylint: disable=no-member
+
+
+@db0.memo
+class _QueuedMessage:
+    def __init__(self, text):
+        self.text = text
+
+    def __str__(self):
+        return f"queued:{self.text}"
 
 
 def test_statek_push_queue_is_singleton(db0_fixture):
@@ -72,6 +81,19 @@ def test_pop_from_job_console_returns_tuples_of_uuid_and_str(db0_fixture):
     assert len(result[0]) == 2
     assert isinstance(result[0][0], str)  # db0 UUIDs are strings
     assert isinstance(result[0][1], str)
+
+
+def test_pop_from_job_console_preserves_memo_message_objects(db0_fixture):
+    job = _make_job(db0_fixture)
+    job_uuid = db0.uuid(job)
+    queue = StatekPushQueue()
+    message = _QueuedMessage("object-message")
+
+    queue.push_to_job_console(job_uuid=job_uuid, message=message)
+
+    result = queue.pop_from_job_console(10)
+    assert len(result) == 1
+    assert result[0] == (job_uuid, message)
 
 
 def test_pop_from_job_console_respects_count(db0_fixture):
@@ -200,3 +222,50 @@ def test_pop_from_job_console_prefix_uuid_non_matching_stay_in_queue(db0_fixture
     remaining = queue.pop_from_job_console(10)
     assert len(remaining) == 1
     assert remaining[0][1] == "from-b"
+
+
+def test_has_job_returns_true_when_job_uuid_exists(db0_fixture):
+    job = _make_job(db0_fixture)
+    queue = StatekPushQueue()
+    job_uuid = db0.uuid(job)
+
+    queue.push_to_job_console(job_uuid=job_uuid, message="hello")
+
+    assert queue.has_job(job_uuid) is True
+
+
+def test_has_job_returns_false_when_job_uuid_does_not_exist(db0_fixture):
+    job = _make_job(db0_fixture)
+    other_job = _make_job(db0_fixture)
+    queue = StatekPushQueue()
+
+    queue.push_to_job_console(job_uuid=db0.uuid(job), message="hello")
+
+    assert queue.has_job(db0.uuid(other_job)) is False
+
+
+def test_has_job_returns_none_when_no_scan_budget_is_available(db0_fixture):
+    queue = StatekPushQueue()
+    jobs = [_make_job(db0_fixture) for _ in range(3)]
+
+    for index, job in enumerate(jobs):
+        queue.push_to_job_console(job_uuid=db0.uuid(job), message=f"msg{index}")
+
+    assert queue.has_job(db0.uuid(jobs[2]), max_scan=0) is None
+
+
+def test_has_job_does_not_remove_items_from_queue(db0_fixture):
+    first_job = _make_job(db0_fixture)
+    second_job = _make_job(db0_fixture)
+    queue = StatekPushQueue()
+    first_uuid = db0.uuid(first_job)
+    second_uuid = db0.uuid(second_job)
+
+    queue.push_to_job_console(job_uuid=first_uuid, message="first")
+    queue.push_to_job_console(job_uuid=second_uuid, message="second")
+
+    assert queue.has_job(first_uuid) is True
+    assert queue.pop_from_job_console(10) == [
+        (first_uuid, "first"),
+        (second_uuid, "second"),
+    ]

@@ -10,6 +10,7 @@ from statek.executors.job import Job, JobStatus, parse_warmup_code
 from statek.executors.utils import run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
+from statek.chat_style import ChatStyle
 
 
 @db0.memo
@@ -266,3 +267,31 @@ class TestRunJobStepMultipleBlocks:
         assert result4 is True
         assert job.status == JobStatus.DONE
         assert job.py_env.exit_status == "done"
+
+    @pytest.mark.asyncio
+    async def test_direct_warmup_plain_code_executes(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """In DIRECT mode, plain Python warmup blocks must still execute.
+
+        Regression: exec_all_steps used to skip ALL plain code in DIRECT mode,
+        which dropped warmup print() output and left console_pos=0 across all
+        WarmupLogItems, causing empty tool results in get_chat_history.
+        """
+        job_def = job_def_factory(warmup_code=[
+            'print("hello from warmup")',
+            'exit("done")',
+        ])
+        job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        job = Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,
+        )
+
+        await run_job_step(job)
+        assert any("hello from warmup" in line for line in job.py_env.console)
+        positions = job._warmup_end_positions()  # pylint: disable=protected-access
+        assert positions[0] == len(job.py_env.console)
+        assert positions[0] > 0

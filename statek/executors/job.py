@@ -8,7 +8,7 @@ import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, ToolError, WarmupLogItem, UserLogItem
-from statek.llm_api import LLM_Response, CallParams
+from statek.llm_api import LLM_API, LLM_Response
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
                           strip_markup, extract_dialog,
@@ -126,6 +126,8 @@ class JobDef:
     """
     # An agent assigned to this job
     agent: "Agent"
+    # Frozen job configuration such as model, temperature, reasoning, etc.
+    metadata: Optional[Dict[str, str]] = None
     # Job params to be fed into the agent's prompt template
     job_params: Optional[Dict[str, Any]] = None
     # Optional warmup code (single block or sequence of blocks) executed before the first prompt
@@ -134,39 +136,42 @@ class JobDef:
     _chat_style: Optional[ChatStyle] = None
     # Optional locale for language-specific behaviour
     locale: Optional["StatekLocale"] = None
-    # Frozen LLM model family for jobs created from this definition
-    model_family: Optional[str] = None
-    # Frozen LLM model for jobs created from this definition
-    model: Optional[str] = None
 
     def __post_init__(self):
         if self.agent is not None:
             db0.tags(self).add(self.agent)
-        metadata = (
-            self.agent._metadata
-            if self.agent is not None and self.agent._metadata
-            else {}
-        )
-        metadata_model = metadata.get('MODEL')
-        metadata_model_family = metadata.get('MODEL_FAMILY')
-        if self.model is None and metadata_model is None:
+        if self.metadata is None:
+            self.metadata = (
+                self.agent._metadata
+                if self.agent is not None and self.agent._metadata
+                else {}
+            )
+
+        metadata_model = self.metadata.get('MODEL') if self.metadata else None
+        if metadata_model is None:
             role = self.agent.role if self.agent is not None else '<unknown>'
             raise ValueError(
                 f"JobDef for agent '{role}' requires metadata field 'MODEL'"
             )
-        if self.model_family is None:
-            self.model_family = (
-                metadata_model_family
-                or (
-                    (self.model or metadata_model).split('/', 1)[0]
-                    if (self.model or metadata_model) and '/' in (self.model or metadata_model)
-                    else None
-                )
-            )
-        if self.model is None:
-            self.model = metadata_model
-        if metadata_model_family is None and self.model_family is None and self.model and '/' in self.model:
-            self.model_family = self.model.split('/', 1)[0]
+
+    @property
+    def model(self) -> Optional[str]:
+        """Return the frozen model configured for this job definition."""
+        metadata = self.metadata or {}
+        model = metadata.get('MODEL')
+        return str(model) if model is not None else None
+
+    @property
+    def model_family(self) -> Optional[str]:
+        """Return the frozen model family configured for this job definition."""
+        metadata = self.metadata or {}
+        model_family = metadata.get('MODEL_FAMILY')
+        if model_family is not None:
+            return str(model_family)
+        model = self.model
+        if model and '/' in model:
+            return model.split('/', 1)[0]
+        return None
 
     def set_error(self, error: Exception, collect_traceback: bool = True) -> None:
         """Create a JobDefError from the given exception and associate it with this JobDef."""
@@ -259,7 +264,6 @@ class Job:
         model_family: Optional[str] = None,
         model: Optional[str] = None,
         job_status: JobStatus = JobStatus.READY,
-        session_id: str = None,
         py_env: PyEnv = None,
         chat_log: List[Union[str, ChatLogItem, UserLogItem]] = None,
         awaited_result: Optional[FutureResult] = None,
@@ -275,8 +279,6 @@ class Job:
         # Private job status attribute
         self.__job_status = None
         self.set_status(job_status)
-        # Associated LLM API's session ID (where available)
-        self.session_id = session_id
         # LLM program's execution environment
         self.py_env = py_env if py_env is not None else PyEnv()
         # Current chat state
@@ -478,7 +480,7 @@ class Job:
         locale = self.job_def.locale
         if locale is None:
             return ""
-        metadata = self.job_def.agent._metadata or {}  # pylint: disable=protected-access
+        metadata = self.job_def.metadata or {}
         if metadata.get("AUTO_LANG_HINT", "").upper() == "FALSE":
             return ""
         hint = get_language_hint(locale.lang_code)
@@ -787,15 +789,14 @@ class Job:
 
         Returns:
             Dict[str, Any]: With keys ``chat_history`` (Iterable[ChatHistoryItem]),
-            ``system_prompt`` (str), ``metadata`` (dict), ``available_tools`` (list),
-            optionally ``chat_style`` and ``session_id``.
+            ``system_prompt`` (str), ``model`` (str), ``metadata`` (dict),
+            ``available_tools`` (list), and optionally ``chat_style``,
+            ``temperature``, and ``enable_reasoning``.
         """
-        metadata = (
-            dict(self.job_def.agent._metadata)  # pylint: disable=protected-access
-            if self.job_def.agent._metadata else {}
-        )
-        if self.job_def.model is not None:
-            metadata["MODEL"] = self.job_def.model
+        metadata = dict(self.job_def.metadata or {})
+        model = LLM_API.require_model(metadata.get("MODEL"))
+        temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
+        enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
         system_prompt = self.job_def.system_prompt
 
         # Append language rule when locale specifies a non-EN language
@@ -811,16 +812,18 @@ class Job:
         request_params: Dict[str, Any] = {
             "chat_history": self.get_chat_history(),
             "system_prompt": system_prompt,
+            "model": model,
             "metadata": metadata,
             "available_tools": self.job_def.agent.all_tools,
         }
+        if temperature is not None:
+            request_params["temperature"] = temperature
+        if enable_reasoning:
+            request_params["enable_reasoning"] = True
 
         chat_style = self.job_def.chat_style
         if chat_style is not None:
             request_params["chat_style"] = chat_style
-
-        if self.session_id is not None:
-            request_params["session_id"] = self.session_id
 
         return request_params
 
@@ -1301,6 +1304,7 @@ class Job:
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
             self.num_completions = 1 if self.num_completions is None else self.num_completions + 1
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+            self.py_env.exit_status = None
             self.chat_log.append(LLM_LogItem(
                 console_pos=len(self.py_env.console) if self.py_env.console else 0,
                 llm_resp=None

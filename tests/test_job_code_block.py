@@ -87,7 +87,6 @@ class TestAppendChatLogCodeBlock:
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={})
         llm_resp = LLM_Response(
             text="x = 1",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=[call_params],
         )
@@ -105,7 +104,6 @@ class TestAppendChatLogCodeBlock:
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={"x": 1})
         llm_resp = LLM_Response(
             text="",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=[call_params],
         )
@@ -124,7 +122,6 @@ class TestAppendChatLogCodeBlock:
         job = job_factory()
         llm_resp = LLM_Response(
             text="x = 1",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=None,
         )
@@ -142,7 +139,6 @@ class TestAppendChatLogCodeBlock:
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={})
         llm_resp = LLM_Response(
             text="x = 1",
-            session_id=None,
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
             call_requests=[call_params],
         )

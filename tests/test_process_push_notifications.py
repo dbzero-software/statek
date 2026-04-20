@@ -19,6 +19,15 @@ def _make_started_job():
                job_status=JobStatus.STARTED)  # pylint: disable=no-member
 
 
+@db0.memo
+class _QueuedMessage:
+    def __init__(self, text):
+        self.text = text
+
+    def __str__(self):
+        return f"hello-from-{self.text}"
+
+
 class TestProcessPushNotifications:
 
     def test_no_queue_does_nothing(self, db0_fixture):
@@ -39,6 +48,17 @@ class TestProcessPushNotifications:
 
         assert job.py_env.push_log is not None
         assert job.py_env.push_log[0] == "hello"
+
+    def test_processes_non_string_notification_via_str_conversion(self, db0_fixture):
+        job = _make_started_job()
+        job_uuid = db0.uuid(job)
+        queue = StatekPushQueue()
+        queue.push_to_job_console(job_uuid=job_uuid, message=_QueuedMessage("object"))
+
+        process_push_notifications()
+
+        assert job.py_env.push_log is not None
+        assert job.py_env.push_log[0] == "hello-from-object"
 
     def test_queue_is_empty_after_processing(self, db0_fixture):
         job = _make_started_job()

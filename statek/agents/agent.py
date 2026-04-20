@@ -165,7 +165,7 @@ class Agent:
         """
         if self._metadata == new_metadata:
             return False
-        self._metadata = new_metadata
+        self._metadata = dict(new_metadata)
         STATEK_LOGGER.debug("Agent '%s' metadata updated: %s", self.role, self._metadata)
         return True
 
@@ -448,11 +448,10 @@ class SupervisedAgent(Agent):
 
         return JobDef(
             agent=self,
+            metadata=self._metadata,
             job_params=job_params,
             warmup_code=combined,
             locale=locale,
-            model_family=model_family,
-            model=model,
         )
 
     def _combine_warmup_code(self, warmup_code):

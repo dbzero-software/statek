@@ -1,6 +1,6 @@
 """StatekPushQueue - singleton wrapper over FiFoQueue(s) for inter-process messaging."""
 # pylint: disable=no-member
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import dbzero as db0
 
@@ -23,21 +23,33 @@ class StatekPushQueue:
         return self.__job_console_queue.is_empty()
 
     @db0_rpc.remote
-    def push_to_job_console(self, job_uuid: str, message: str):
+    def push_to_job_console(self, job_uuid: str, message: Any):
         """Append a (job_uuid, message) pair to the job-console queue.
 
         Args:
             job_uuid: The job object's UUID (may be from a different prefix).
-            message: The console message text to push.
+            message: Arbitrary string-convertible object to push.
         """
         self.__job_console_queue.push_back(job_uuid=job_uuid, message=message)
+
+    def has_job(self, job_uuid: str, max_scan: int = 100) -> Optional[bool]:
+        """Check whether a job UUID is present in the job-console queue.
+
+        Scanning uses the queue's underlying index iteration order. Returns
+        ``None`` when answering would require scanning more than *max_scan*
+        queued elements.
+        """
+        return self.__job_console_queue.has_item(
+            filter=lambda **kwargs: kwargs.get("job_uuid") == job_uuid,
+            max_scan=max_scan,
+        )
 
     @db0_rpc.remote
     def pop_from_job_console(
         self,
         count: int,
         prefix: Optional[str | int] = None,  # pylint: disable=unused-argument
-    ) -> List[Tuple[str, str]]:
+    ) -> List[Tuple[str, Any]]:
         """Retrieve and remove up to *count* earliest job-console entries.
 
         Intended for remote use from the Statek process.

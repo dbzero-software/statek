@@ -1,6 +1,7 @@
 """Job detail view for the Statek web UI."""
 
 import io
+import json
 import traceback
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -165,6 +166,34 @@ def _get_job_model(job) -> str:
         return '—'
 
 
+def _get_job_temperature(job) -> str:
+    """Return explicit job temperature override, or an empty string when defaulted."""
+    try:
+        if not job.job_def:
+            return ''
+        metadata = job.job_def.metadata or {}
+        temperature = metadata.get('TEMPERATURE')
+        return str(temperature) if temperature is not None else ''
+    except Exception:  # pylint: disable=broad-except
+        return ''
+
+
+def _job_uses_reasoning(job) -> bool:
+    """Return whether the job explicitly enabled reasoning."""
+    try:
+        if not job.job_def:
+            return False
+        metadata = job.job_def.metadata or {}
+        value = metadata.get('REASONING')
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
 def _get_tool_data_for_block(code_block, chat_log_item) -> list:
     """Return [(call_spec, result_str, error_str|None), ...] for a code block's tool calls.
 
@@ -257,15 +286,13 @@ def _get_history_items(job) -> list:
         return []
 
 
-def _message_title(item, has_assistant_section: bool) -> str:
+def _message_title(item) -> str:
     """Return a display label for a non-assistant chat history item."""
     if item.role == ChatRole.TOOL:
         return 'Tool Result'
     if item.content_src == ContentSource.CONSOLE:
         return 'Console Output'
-    if has_assistant_section:
-        return 'User Message'
-    return 'Initial User Message'
+    return 'User Message'
 
 
 def _build_history_sections(job) -> list[_HistorySection]:
@@ -342,7 +369,7 @@ def _build_history_sections(job) -> list[_HistorySection]:
         if item.content_src == ContentSource.USER:
             content = _strip_language_hint_suffix(content)
         message = _HistoryMessage(
-            title=_message_title(item, current is not None),
+            title=_message_title(item),
             content=content,
             content_src=item.content_src,
         )
@@ -683,6 +710,8 @@ def _build_md_content(
     sections = _build_history_sections(job)
     errors = _get_exception_messages(job)
     locale_str = _get_locale_str(job)
+    temperature_str = _get_job_temperature(job)
+    uses_reasoning = _job_uses_reasoning(job)
 
     # ── Header ──────────────────────────────────────────────────────────────
     parts.append('# Job Detail\n')
@@ -694,6 +723,10 @@ def _build_md_content(
     parts.append(f'| **Model** | `{_escape_md(model)}` |')
     if locale_str:
         parts.append(f'| **Locale** | `{_escape_md(locale_str)}` |')
+    if temperature_str:
+        parts.append(f'| **Temperature** | `{_escape_md(temperature_str)}` |')
+    if uses_reasoning:
+        parts.append('| **Reasoning** | Enabled |')
     parts.append(f'| **Cost** | `${total_cost:.4f}` |')
     parts.append(f'| **Turns** | {num_turns} |')
     if chat_style:
@@ -873,11 +906,27 @@ def _render_tool_calls(tool_data: list) -> None:
                     ui.separator().classes('my-1')
                 with ui.column().classes('w-full gap-1'):
                     # Call signature
+                    is_python_cli = (
+                        cs.func_name == 'python_cli'
+                        and cs.kwargs
+                        and isinstance(cs.kwargs.get('code'), str)
+                    )
+                    if is_python_cli:
+                        other_kwargs = {k: v for k, v in cs.kwargs.items() if k != 'code'}
+                        sig_parts = [repr(a) for a in (cs.args or [])]
+                        sig_parts.extend(f'{k}={v!r}' for k, v in other_kwargs.items())
+                        sig_text = f"{cs.func_name}({', '.join(sig_parts)}{', ' if sig_parts else ''}code=...)"
+                    else:
+                        sig_text = cs.format()
                     with ui.row().classes('items-center gap-2 px-2 py-1 rounded').style(
                         f'background: {_TOOL_CALL_BG}'
                     ):
                         ui.icon('call_made').classes('text-xs text-orange-700')
-                        ui.label(cs.format()).classes('text-xs font-mono font-semibold text-orange-900 break-all')
+                        ui.label(sig_text).classes('text-xs font-mono font-semibold text-orange-900 break-all')
+                    if is_python_cli:
+                        ui.code(cs.kwargs['code'] or '(empty)', language='python').classes(
+                            'w-full text-xs'
+                        ).style('border-radius: 4px; margin: 0')
                     # Error
                     if error:
                         error_str = str(error).strip()
@@ -904,7 +953,7 @@ def _render_tool_calls(tool_data: list) -> None:
                             f'padding: 8px; margin: 0; width: 100%; box-sizing: border-box;'
                             f'">{_esc(result_str)}</pre>'
                         ).classes('w-full')
-                    elif not error:
+                    elif not error and cs.func_name != 'python_cli':
                         ui.label('(no result)').classes('text-xs text-gray-400 italic px-2')
 
 
@@ -923,15 +972,20 @@ def _render_history_message(message: _HistoryMessage) -> None:
     bg = '#f1f8e9' if message.content_src == ContentSource.USER else '#f5f5f5'
     border = '#c5e1a5' if message.content_src == ContentSource.USER else '#e0e0e0'
     text = '#33691e' if message.content_src == ContentSource.USER else '#455a64'
-    with ui.column().classes('w-full gap-1'):
-        with ui.row().classes('items-center gap-2 px-3 py-2 rounded-lg').style(
-            f'background: {bg}; border: 1px solid {border}'
+    with ui.column().classes('w-full gap-0'):
+        with ui.row().classes('items-center gap-2 px-3 py-1 rounded-t').style(
+            f'background: {bg}; border: 1px solid {border}; border-bottom: none'
         ):
             ui.icon(icon).classes('text-sm')
-            ui.label(message.title).classes('text-sm font-bold')
+            ui.label(message.title).classes(
+                'text-xs font-semibold uppercase tracking-wide'
+            ).style(f'color: {text}')
         ui.label(message.content).classes(
-            'text-sm whitespace-pre-wrap w-full rounded p-3'
-        ).style(f'background: {bg}; border: 1px solid {border}; color: {text}')
+            'text-sm whitespace-pre-wrap w-full p-3'
+        ).style(
+            f'background: {bg}; border: 1px solid {border}; color: {text};'
+            f'border-radius: 0 0 6px 6px; margin-top: 0'
+        )
 
 
 def _render_history_section(section: _HistorySection) -> None:
@@ -1206,6 +1260,8 @@ def create_job_detail_dialog(job) -> None:
 
     model = _get_job_model(job)
     locale_str = _get_locale_str(job)
+    temperature_str = _get_job_temperature(job)
+    uses_reasoning = _job_uses_reasoning(job)
     chat_style_str = ''
     try:
         if job.job_def and job.job_def.chat_style is not None:
@@ -1251,6 +1307,15 @@ def create_job_detail_dialog(job) -> None:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('language').classes('text-sm text-gray-500')
                                 ui.label(locale_str).classes('text-xs font-mono text-gray-600')
+                        if temperature_str:
+                            with ui.row().classes('items-center gap-1'):
+                                ui.icon('device_thermostat').classes('text-sm text-gray-500')
+                                ui.label(temperature_str).classes('text-xs font-mono text-gray-600')
+                        if uses_reasoning:
+                            with ui.row().classes('items-center'):
+                                ui.icon('psychology_alt').classes(
+                                    'text-lg text-orange-500 bg-orange-50 rounded-full p-1'
+                                ).tooltip('Reasoning was enabled for this job.')
                         if chat_style_str:
                             with ui.row().classes('items-center gap-1'):
                                 ui.icon('forum').classes('text-sm text-gray-500')
@@ -1306,20 +1371,27 @@ def create_job_detail_dialog(job) -> None:
 
                     ui.button('MD', icon='download', on_click=_download_md).props(
                         'flat dense no-caps'
-                    ).classes('text-xs text-indigo-600').tooltip('Download as Markdown')
+                    ).classes('text-xs text-indigo-600 mx-1').tooltip('Download as Markdown')
                     ui.button('PDF', icon='picture_as_pdf', on_click=_download_pdf).props(
                         'flat dense no-caps'
-                    ).classes('text-xs text-red-600').tooltip('Download as PDF')
+                    ).classes('text-xs text-red-600 mx-1').tooltip('Download as PDF')
+                    raw_text_js = json.dumps(_build_raw_repr(job))
+                    ui.button(icon='content_copy').props(
+                        'flat dense round'
+                    ).classes('text-emerald-700 mx-1').on(
+                        'click',
+                        js_handler=f'() => {{ navigator.clipboard.writeText({raw_text_js}); }}',
+                    ).tooltip('Copy raw text to clipboard')
                     ui.button(
                         'Latency',
                         icon='speed',
                         on_click=lambda j=job: _open_latency_dialog(j),
                     ).props(
                         'flat dense no-caps'
-                    ).classes('text-xs text-sky-700').tooltip(
+                    ).classes('text-xs text-sky-700 mx-1').tooltip(
                         'Show overall and LLM latency details'
                     )
-                    ui.button(icon='close', on_click=dlg.close).props('flat round dense')
+                    ui.button(icon='close', on_click=dlg.close).props('flat round dense').classes('ml-2')
 
             ui.separator().classes('mb-2')
 

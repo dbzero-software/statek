@@ -514,9 +514,11 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
     cli_instr_num = instr_num[1] if skip_regular else None
 
     # --- regular code ---
-    # DIRECT mode: code field holds dialog text for history, not Python — skip execution.
+    # DIRECT mode: LLM-generated code field holds dialog text for history, not Python.
+    # Warmup blocks, however, are real setup code and must still execute.
     is_direct = job.job_def.chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
-    if not skip_regular and not is_direct and not _is_empty_code(code.code):
+    is_warmup = job.status == JobStatus.WARMING_UP
+    if not skip_regular and (is_warmup or not is_direct) and not _is_empty_code(code.code):
         exited = not await exec_step(code.code, job, instr_num=regular_instr_num,
                                      local_context=local_context)
         if exited:
@@ -864,9 +866,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Step 6 & 7: Check if code has finished (exit_status not None)
         if job.py_env.exit_status is not None:
             job.set_status(JobStatus.DONE)
-            # Log any pending console output before the exit marker
             _log_pending_console(job)
-            job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
             return True
 
         # Step 8: Handle warmup block progression or transition to STARTED
@@ -886,9 +886,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 9: Get LLM API provider
     if provider is None:
-        agent_metadata = (job.job_def.agent._metadata or {}) if job.job_def.agent else {}  # pylint: disable=protected-access
-        provider = agent_metadata.get('PROVIDER') or get_statek_settings().default_llm_api_provider
-    llm_api = LLM_API.get(provider_name=provider, model=job.model)
+        provider = get_statek_settings().default_llm_api_provider
+    llm_api = LLM_API.get(provider_name=provider)
 
     # Step 10: Get next request parameters — log pending console batch first
     _log_pending_console(job)
@@ -906,10 +905,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     job.context_bytes = job.total_bytes_sent + job.total_bytes_received
     if response.stats.cost is not None:
         job.total_cost += response.stats.cost
-
-    # Update session_id if returned by the LLM API
-    if response.session_id:
-        job.session_id = response.session_id
 
     # Step 12: Add new log item using append_chat_log
     job.append_chat_log(request, response)
@@ -937,7 +932,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             custom_exit(job)
             job.set_status(JobStatus.DONE)
             _log_pending_console(job)
-            job._log(f"exit: {job.py_env.exit_status}")  # pylint: disable=protected-access
             return True
 
     # Step 14: Check harness constraints after step
@@ -976,7 +970,7 @@ def process_push_notifications(step_size=100, max_count=500):
             for job_uuid, message in items:
                 try:
                     job = db0.fetch(job_uuid)
-                    job.push_user_message(message)
+                    job.push_user_message(str(message))
                 except Exception:  # pylint: disable=broad-except
                     pass
                 processed += 1
@@ -1035,10 +1029,6 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             # Log cost after each LLM request
             statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
                        f"cost: ${job.total_cost:.4f}")
-            # Log exit status if job completed successfully
-            if job.status == JobStatus.DONE and job.py_env.exit_status is not None:
-                exit_msg = f"exit: {job.py_env.exit_status}"
-                job.console_append(exit_msg)
         except LLM_HarnessError as e:
             error_msg = f"LLM_HarnessError: {e}"
             statek_log(error_msg, level='debug')
@@ -1214,6 +1204,18 @@ def _resolve_job_def_model(agent, provider: Optional[str]) -> tuple[Optional[str
     return model_family, model
 
 
+def _ensure_shared_job_def_metadata(agent, model_family: Optional[str], model_to_use: str) -> dict:
+    """Ensure loop-created JobDefs reuse the agent metadata dict."""
+    metadata = agent._metadata  # pylint: disable=protected-access
+    if metadata is None:
+        metadata = {}
+        agent._metadata = metadata  # pylint: disable=protected-access
+    metadata["MODEL"] = model_to_use
+    if model_family is not None:
+        metadata["MODEL_FAMILY"] = model_family
+    return metadata
+
+
 @dataclass
 class AgentLoopDef:
     """Definition for a single agent loop within a fleet.
@@ -1275,12 +1277,12 @@ async def run_agentic_loop(agent: 'Agent',
         job_def.clear_errors()
     else:
         parsed_warmup_code = parse_warmup_code(warmup_code)
+        metadata = _ensure_shared_job_def_metadata(agent, model_family, model_to_use)
         job_def = JobDef(
             agent=agent,
+            metadata=metadata,
             job_params=None,
             warmup_code=parsed_warmup_code,
-            model_family=model_family,
-            model=model_to_use,
         )
     
     start_jobs_func = _make_start_jobs_func(agent, job_def, task_queue_size_func, provider)
@@ -1328,12 +1330,12 @@ async def run_agentic_fleet(
             job_def.clear_errors()
         else:
             parsed_warmup_code = parse_warmup_code(warmup_code)
+            metadata = _ensure_shared_job_def_metadata(agent, model_family, model_to_use)
             job_def = JobDef(
                 agent=agent,
+                metadata=metadata,
                 job_params=None,
                 warmup_code=parsed_warmup_code,
-                model_family=model_family,
-                model=model_to_use,
             )
 
         start_jobs_funcs.append(_make_start_jobs_func(agent, job_def, task_queue_size_func, provider))
