@@ -547,7 +547,7 @@ class TestOpenRouterTemperature:
 
 
 class TestClaudeTemperature:
-    """Tests that Claude_API passes TEMPERATURE from metadata to payload."""
+    """Tests that Claude_API  passes TEMPERATURE from metadata to payload."""
 
     @pytest.mark.asyncio
     async def test_temperature_added_to_payload(self, claude_api):
@@ -625,16 +625,16 @@ class TestClaudeTemperature:
 
 
 # ---------------------------------------------------------------------------
-# Claude_API: tools in Anthropic format
+# Claude_API : tools in Anthropic format
 # ---------------------------------------------------------------------------
 
 class TestClaudeToolConversion:
-    """Tests for Claude_API Anthropic-format tool conversion."""
+    """Tests for Claude_API  Anthropic-format tool conversion."""
 
     def test_to_anthropic_tool_structure(self, app_tool):
         """_to_anthropic_tool converts OpenAI spec to Anthropic format."""
         openai_spec = format_tool_spec(app_tool)
-        anthropic_spec = Claude_API._to_anthropic_tool(openai_spec)
+        anthropic_spec = Claude_API ._to_anthropic_tool(openai_spec)
 
         assert "name" in anthropic_spec
         assert "description" in anthropic_spec
@@ -647,14 +647,14 @@ class TestClaudeToolConversion:
     def test_to_anthropic_tool_preserves_properties(self, app_tool):
         """input_schema contains the same properties as the original parameters."""
         openai_spec = format_tool_spec(app_tool)
-        anthropic_spec = Claude_API._to_anthropic_tool(openai_spec)
+        anthropic_spec = Claude_API ._to_anthropic_tool(openai_spec)
 
         assert "x" in anthropic_spec["input_schema"]["properties"]
         assert anthropic_spec["input_schema"]["properties"]["x"]["type"] == "string"
 
     @pytest.mark.asyncio
     async def test_claude_tools_in_anthropic_format(self, claude_api, app_tool):
-        """Claude_API sends tools in Anthropic format (input_schema, not parameters)."""
+        """Claude_API  sends tools in Anthropic format (input_schema, not parameters)."""
         captured_payload = {}
 
         async def fake_post(self_, url, json=None, headers=None):
@@ -681,7 +681,7 @@ class TestClaudeToolConversion:
 
     @pytest.mark.asyncio
     async def test_claude_no_tools_key_when_none(self, claude_api):
-        """Claude_API omits 'tools' key when tools=None."""
+        """Claude_API  omits 'tools' key when tools=None."""
         captured_payload = {}
 
         async def fake_post(self_, url, json=None, headers=None):
@@ -825,11 +825,11 @@ class TestOpenRouterCallRequests:
 
 
 # ---------------------------------------------------------------------------
-# Claude_API: call_requests parsed from tool_use blocks in response
+# Claude_API : call_requests parsed from tool_use blocks in response
 # ---------------------------------------------------------------------------
 
 class TestClaudeCallRequests:
-    """Tests that Claude_API parses tool_use content blocks into call_requests."""
+    """Tests that Claude_API  parses tool_use content blocks into call_requests."""
 
     @pytest.mark.asyncio
     async def test_tool_use_block_populates_call_requests(
@@ -1407,11 +1407,11 @@ class TestOpenRouterBuildMessages:
 
 
 # ---------------------------------------------------------------------------
-# Claude_API.build_messages with ChatHistoryItem
+# Claude_API .build_messages with ChatHistoryItem
 # ---------------------------------------------------------------------------
 
 class TestClaudeBuildMessages:
-    """Tests for Claude_API.build_messages accepting ChatHistoryItem objects."""
+    """Tests for Claude_API .build_messages accepting ChatHistoryItem objects."""
 
     def test_none_chat_history_returns_empty(self, claude_api, db0_fixture):
         assert claude_api.build_messages(chat_history=None, chat_style=_MD()) == []
@@ -1423,7 +1423,7 @@ class TestClaudeBuildMessages:
 
     def test_extract_system_prompt_pulls_first_system(self, claude_api, db0_fixture):
         history = [_sys("sysprompt"), _user("hello")]
-        sys_text, rest = Claude_API.extract_system_prompt(history)
+        sys_text, rest = Claude_API .extract_system_prompt(history)
         assert sys_text == "sysprompt"
         assert len(rest) == 1
         assert rest[0].role == ChatRole.USER

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import json
 import re
 import traceback as _traceback_module
 from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Union
@@ -64,6 +65,41 @@ def parse_warmup_code(
 
     parsed_blocks = [parse_warmup_block(block) for block in raw_blocks]
     return build_warmup_code(parsed_blocks)
+
+
+def _warmup_code_text(warmup) -> str:
+    """Return the concatenated text of all warmup code blocks."""
+    if warmup is None:
+        return ""
+    if isinstance(warmup, str):
+        return warmup
+    if isinstance(warmup, CodeBlock):
+        return warmup.code or ""
+    return "".join(w if isinstance(w, str) else (w.code or "") for w in warmup)
+
+
+def _tool_log_text(item: Optional["LLM_LogItem"]) -> str:
+    """Return all tool log text from an LLM_LogItem as a single string."""
+    if item is None or item.tool_log is None:
+        return ""
+    tool_log = item.tool_log
+    if isinstance(tool_log, str):
+        return tool_log
+    if isinstance(tool_log, ToolError):
+        return tool_log.err_message
+    return "\n".join(tl if isinstance(tl, str) else tl.err_message for tl in tool_log)
+
+
+def _llm_resp_output_tokens(llm_resp) -> int:
+    """Approximate output token count for an LLM response."""
+    if isinstance(llm_resp, str):
+        return len(llm_resp) // 4
+    code = (llm_resp.code or "") if llm_resp else ""
+    tool_calls = list(llm_resp.tool_calls) if llm_resp and llm_resp.tool_calls else []
+    if not tool_calls:
+        return len(code) // 4
+    tool_json = json.dumps([{"name": cs.func_name, "arguments": dict(cs.kwargs or {})} for cs in tool_calls])
+    return (len(code) + len(tool_json)) // 4
 
 
 @memo
@@ -989,6 +1025,87 @@ class Job:
             response_times.append((pending_request_time, None))
 
         return response_times
+
+    def get_llm_initial_step_size(self) -> tuple[int, int]:
+        """Return (input_tokens, output_tokens) for the constant initial portion.
+
+        Covers the system prompt and all warmup code blocks — the fixed overhead
+        sent with every first LLM request. Token counts use the ``len // 4``
+        approximation. Output tokens are always zero (no LLM output at this stage).
+        """
+        system_prompt = self.job_def.system_prompt if self.job_def else ""
+        warmup_text = _warmup_code_text(self.job_def.warmup_code if self.job_def else None)
+        return (len(system_prompt) + len(warmup_text)) // 4, 0
+
+    def get_llm_step_sizes(self) -> Iterable[tuple[int, int]]:
+        """Return (input_tokens, output_tokens) per LLM step, ordered as get_llm_response_times.
+
+        One entry is yielded per concrete ``LLM_LogItem`` (``llm_resp`` is not
+        ``None``) plus one entry for a trailing pending marker if present.
+        Token counts use the ``len // 4`` approximation.
+
+        Input tokens for each step cover: console output produced since the
+        previous step, tool log from the previous step, and any user messages
+        accumulated since then. The first step additionally includes the initial
+        step size (system prompt + warmup code).
+
+        Output tokens cover the LLM response text plus the JSON encoding of any
+        tool call requests.
+        """
+        console = self.py_env.console or []
+        is_first = True
+        prev_console_pos = 0
+        prev_item = None
+        accumulated_text = ""
+        trailing_pending = None
+
+        for item in self.chat_log:
+            if isinstance(item, str):
+                accumulated_text += item
+                continue
+            if isinstance(item, UserLogItem):
+                accumulated_text += item.message or ""
+                continue
+            if not isinstance(item, LLM_LogItem):
+                continue
+            console_text = "\n".join(console[prev_console_pos:item.console_pos])
+            tool_text = _tool_log_text(prev_item)
+            input_tokens = (len(console_text) + len(tool_text) + len(accumulated_text)) // 4
+            if is_first:
+                input_tokens += self.get_llm_initial_step_size()[0]
+            if item.llm_resp is None:
+                trailing_pending = input_tokens
+                continue
+            is_first = False
+            trailing_pending = None
+            yield (input_tokens, _llm_resp_output_tokens(item.llm_resp))
+            accumulated_text = ""
+            prev_console_pos = item.console_pos
+            prev_item = item
+
+        if trailing_pending is not None:
+            yield (trailing_pending, 0)
+
+    def tokens_per_sec(self) -> float:
+        """Return total tokens divided by total LLM processing time in seconds.
+
+        Combines ``get_llm_response_times`` and ``get_llm_step_sizes`` to
+        compute the overall throughput metric. Steps with unknown duration
+        (``None``) are excluded from both totals. Returns ``0.0`` when no
+        step has a known duration.
+        """
+        total_tokens = 0
+        total_seconds = 0.0
+        for (_, duration), (input_tok, output_tok) in zip(
+            self.get_llm_response_times(), self.get_llm_step_sizes()
+        ):
+            if duration is None:
+                continue
+            total_tokens += input_tok + output_tok
+            total_seconds += duration
+        if total_seconds == 0.0:
+            return 0.0
+        return total_tokens / total_seconds
 
     def _get_warmup_block_count(self) -> int:
         """

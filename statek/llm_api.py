@@ -17,6 +17,14 @@ from .chat_history import (
 
 STATEK_LOGGER = get_statek_logger()
 
+
+def _func_name_from_tool_calls(tool_calls) -> str:
+    """Return the function name from a single CallSpec or the first item of a list."""
+    if tool_calls is None:
+        return ""
+    cs = tool_calls if not isinstance(tool_calls, list) else (tool_calls[0] if tool_calls else None)
+    return cs.func_name if cs is not None else ""
+
 LLM_Stats = namedtuple("LLM_Stats", ["total_bytes_sent", "total_bytes_received", "cost"])
 # text: response text from the LLM (empty string when the LLM made tool calls instead)
 # stats: byte/cost accounting
@@ -742,10 +750,10 @@ class ClaudeAI_API(LLM_API):
         self.kwargs = kwargs
         self.api_key = settings.api_key
 
+
     @staticmethod
     def _content_text_for_item(item: "ChatHistoryItem", chat_style, settings) -> str:
         """Return the text content for ``item`` after applying chat-style wrapping.
-
         Reuses ``format_chat_history_item`` for consistent formatting and
         extracts the resulting ``content`` string.
         """
