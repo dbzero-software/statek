@@ -5,7 +5,7 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from functools import lru_cache
-from typing import Optional, Iterable, Sequence, List, Dict, Callable
+from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple
 import json
 import httpx
 
@@ -306,22 +306,29 @@ class LLM_API(ABC):
 
     @staticmethod
     @lru_cache
-    def get(provider_name: str = None, **kwargs):
+    def get(provider_name: str = None, model: str = None, **kwargs):
         """
         Factory method to get an LLM_API instance for a specific provider.
         """
-        if provider_name.upper() == 'OPENROUTER':
-            settings = get_provider_settings('OPENROUTER')
-            if not settings:
-                raise ValueError("No settings found for OpenRouter provider.")
-            return OpenRouter_API(settings=settings, **kwargs)
-        if provider_name.upper() in ('CLAUDE', 'ANTHROPIC'):
-            settings = get_provider_settings('CLAUDE')
-            if not settings:
-                raise ValueError("No settings found for Claude provider.")
-            return Claude_API(settings=settings, **kwargs)
-        raise ValueError(f"Unsupported LLM API provider: {provider_name}")
+        del model
+        if provider_name is None:
+            from .settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+            provider_key = get_statek_settings().default_llm_api_provider.upper()
+        else:
+            provider_key = provider_name.upper()
+        settings = get_provider_settings(provider_key)
+        if not settings:
+            raise ValueError(f"No settings found for {provider_key} provider.")
 
+        if provider_key == 'OPENROUTER':
+            return OpenRouter_API(settings=settings, **kwargs)
+        if provider_key == 'OPENAI':
+            return OpenAI_API(settings=settings, **kwargs)
+        if provider_key in ('VERTEXAI', 'VERTEX_AI', 'GOOGLE_VERTEXAI', 'GOOGLE'):
+            return VertexAI_API(settings=settings, **kwargs)
+        if provider_key in ('CLAUDEAI', 'CLAUDE_AI', 'CLAUDE', 'ANTHROPIC'):
+            return ClaudeAI_API(settings=settings, **kwargs)
+        raise ValueError(f"Unsupported LLM API provider: {provider_name}")
 
 class OpenRouter_API(LLM_API):
     """OpenRouter API implementation of LLM_API.
@@ -491,7 +498,224 @@ class OpenRouter_API(LLM_API):
             )
 
 
-class Claude_API(LLM_API):
+class OpenAI_API(OpenRouter_API):
+    """OpenAI API implementation using the chat completions wire format."""
+
+
+class VertexAI_API(LLM_API):
+    """Vertex AI Gemini implementation of LLM_API."""
+
+    def __init__(self, settings: LLM_API_Settings, **kwargs):
+        self.settings = settings
+        self.response_format = LLM_API._load_response_format(settings)
+        self.kwargs = kwargs
+        self.api_url = settings.api_url
+        self.api_key = settings.api_key
+
+    @staticmethod
+    def _content_text_for_item(item: "ChatHistoryItem", chat_style, settings) -> str:
+        formatted = format_chat_history_item(item, chat_style, settings)
+        content = formatted.get("content")
+        return content if isinstance(content, str) else ""
+
+    @staticmethod
+    def _normalise_tool_calls(tool_calls) -> List:
+        if tool_calls is None:
+            return []
+        if isinstance(tool_calls, list):
+            return tool_calls
+        return [tool_calls]
+
+    def build_contents(
+        self,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+    ) -> List[Dict]:
+        """Build Gemini ``contents`` from a ``ChatHistoryItem`` stream."""
+        from .settings import get_statek_settings  # pylint: disable=import-outside-toplevel
+        if chat_style is None:
+            chat_style = get_statek_settings().chat_style
+        settings = get_statek_settings()
+
+        if not chat_history:
+            return []
+
+        contents: List[Dict] = []
+        for item in chat_history:
+            if item.role == ChatRole.SYSTEM:
+                continue
+            if item.role == ChatRole.USER:
+                text = self._content_text_for_item(item, chat_style, settings)
+                if text:
+                    contents.append({"role": "user", "parts": [{"text": text}]})
+                continue
+            if item.role == ChatRole.ASSISTANT:
+                parts = []
+                if item.content:
+                    parts.append({"text": self._content_text_for_item(item, chat_style, settings)})
+                for call in self._normalise_tool_calls(item.tool_calls):
+                    parts.append({
+                        "functionCall": {
+                            "name": call.func_name,
+                            "args": dict(call.kwargs) if call.kwargs else {},
+                        }
+                    })
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+                continue
+            if item.role == ChatRole.TOOL:
+                tool_calls = self._normalise_tool_calls(item.tool_calls)
+                name = tool_calls[0].func_name if tool_calls else "tool_result"
+                contents.append({
+                    "role": "function",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": name,
+                            "response": {"content": item.content or ""},
+                        }
+                    }],
+                })
+        return contents
+
+    @staticmethod
+    def _build_system_instruction(system_prompt: Optional[str]) -> Optional[Dict]:
+        if not system_prompt:
+            return None
+        return {"parts": [{"text": system_prompt}]}
+
+    @staticmethod
+    def _to_vertex_tool(spec: Dict) -> Dict:
+        fn = spec["function"]
+        return {
+            "name": fn["name"],
+            "description": fn["description"],
+            "parameters": fn["parameters"],
+        }
+
+    def _model_resource(self, model: str) -> str:
+        if model.startswith("projects/"):
+            return model
+        project = self.kwargs.get("project")
+        location = self.kwargs.get("location")
+        publisher = self.kwargs.get("publisher", "google")
+        if project and location:
+            return (
+                f"projects/{project}/locations/{location}/publishers/"
+                f"{publisher}/models/{model}"
+            )
+        return model
+
+    def _request_url(self, model: str) -> str:
+        if "{model}" in self.api_url:
+            return self.api_url.format(model=self._model_resource(model))
+        if self.api_url.endswith(":generateContent"):
+            return self.api_url
+        return f"{self.api_url.rstrip('/')}/{self._model_resource(model)}:generateContent"
+
+    def _headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.kwargs.get("auth") == "api_key":
+            headers["x-goog-api-key"] = self.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    @staticmethod
+    def _parse_response(data: Dict) -> Tuple[str, Optional[List[CallParams]]]:
+        candidates = data.get("candidates") or []
+        if not candidates:
+            error_detail = data.get("error", {}).get("message", str(data))
+            raise RuntimeError(f"VertexAI API error: {error_detail}")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        response_text = ""
+        call_requests = []
+        for part in parts:
+            if "text" in part:
+                response_text += part.get("text", "")
+            if "functionCall" in part:
+                function_call = part["functionCall"]
+                name = function_call.get("name")
+                kwargs = function_call.get("args", {})
+                call_requests.append(
+                    CallParams(
+                        call_id=function_call.get("id") or name or "",
+                        name=name,
+                        args=[],
+                        kwargs=kwargs if isinstance(kwargs, dict) else {},
+                    )
+                )
+        return response_text, call_requests or None
+
+    async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
+    ) -> LLM_Response:
+        """Process a request to Vertex AI Gemini GenerateContent."""
+        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
+
+        del metadata, enable_reasoning
+        model = self.require_model(model)
+        payload = {"contents": self.build_contents(chat_history, chat_style=chat_style)}
+        system_instruction = self._build_system_instruction(system_prompt)
+        if system_instruction:
+            payload["systemInstruction"] = system_instruction
+        if tools:
+            payload["tools"] = [{
+                "functionDeclarations": [
+                    self._to_vertex_tool(format_tool_spec(t)) for t in tools
+                ]
+            }]
+        generation_config = dict(self.kwargs.get("generation_config", {}))
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if generation_config:
+            payload["generationConfig"] = generation_config
+
+        for key, value in self.kwargs.items():
+            if key not in ("project", "location", "publisher", "auth", "generation_config"):
+                payload[key] = value
+
+        payload_bytes = json.dumps(payload).encode('utf-8')
+        total_bytes_sent = len(payload_bytes)
+        if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
+            STATEK_LOGGER.debug("VertexAI payload: %s", json.dumps(payload, indent=2))
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                self._request_url(model),
+                json=payload,
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            total_bytes_received = len(response.content)
+            data = response.json()
+            STATEK_LOGGER.debug("VertexAI response: %s", json.dumps(data))
+
+            response_text, call_requests = self._parse_response(data)
+            if self.response_format and response_text:
+                response_text = json.loads(response_text)["python_code"]
+            usage = data.get("usageMetadata", {})
+            cost = usage.get("cost")
+            stats = LLM_Stats(
+                total_bytes_sent=total_bytes_sent,
+                total_bytes_received=total_bytes_received,
+                cost=cost,
+            )
+            return LLM_Response(
+                text=response_text,
+                stats=stats,
+                call_requests=call_requests,
+            )
+
+
+class ClaudeAI_API(LLM_API):
     """Claude API implementation of LLM_API.
 
     This class provides a concrete implementation for Anthropic's Claude service,
@@ -805,3 +1029,6 @@ class Claude_API(LLM_API):
                 text=response_text, stats=stats,
                 call_requests=call_requests
             )
+
+
+Claude_API = ClaudeAI_API

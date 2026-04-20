@@ -7,7 +7,8 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from statek.llm_api import (
-    LLM_API, LLM_Response, LLM_Stats, OpenRouter_API, Claude_API, CallParams, extract_call_params,
+    LLM_API, LLM_Response, LLM_Stats, OpenRouter_API, OpenAI_API, VertexAI_API,
+    ClaudeAI_API, Claude_API, CallParams, extract_call_params,
 )
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.exceptions import InvalidFormat
@@ -64,12 +65,88 @@ def openrouter_api():
 
 
 @pytest.fixture()
+def openai_api():
+    settings = LLM_API_Settings(
+        api_url="https://api.openai.com/v1/chat/completions",
+        api_key="test-key",
+    )
+    return OpenAI_API(settings=settings)
+
+
+@pytest.fixture()
+def vertexai_api():
+    settings = LLM_API_Settings(
+        api_url="https://aiplatform.googleapis.com/v1",
+        api_key="test-token",
+    )
+    return VertexAI_API(settings=settings, project="p1", location="us-central1")
+
+
+@pytest.fixture()
 def claude_api():
     settings = LLM_API_Settings(
         api_url="https://api.anthropic.com/v1/messages",
         api_key="test-key",
     )
     return Claude_API(settings=settings, use_prompt_caching=False)
+
+
+# ---------------------------------------------------------------------------
+# LLM_API.get factory
+# ---------------------------------------------------------------------------
+
+class TestLLMAPIGetFactory:
+    """Tests for provider factory selection and caching."""
+
+    def setup_method(self):
+        LLM_API.get.cache_clear()
+
+    def teardown_method(self):
+        LLM_API.get.cache_clear()
+
+    def test_get_openai_provider(self):
+        settings = LLM_API_Settings(
+            api_url="https://api.openai.com/v1/chat/completions",
+            api_key="key",
+        )
+        with patch("statek.llm_api.get_provider_settings", return_value=settings):
+            api = LLM_API.get(provider_name="OPENAI")
+
+        assert isinstance(api, OpenAI_API)
+
+    def test_get_vertexai_provider(self):
+        settings = LLM_API_Settings(
+            api_url="https://aiplatform.googleapis.com/v1",
+            api_key="token",
+        )
+        with patch("statek.llm_api.get_provider_settings", return_value=settings):
+            api = LLM_API.get(
+                provider_name="VERTEXAI", project="p1", location="us-central1")
+
+        assert isinstance(api, VertexAI_API)
+        assert api.kwargs["project"] == "p1"
+
+    def test_get_claudeai_provider_and_legacy_alias(self):
+        settings = LLM_API_Settings(
+            api_url="https://api.anthropic.com/v1/messages",
+            api_key="key",
+        )
+        with patch("statek.llm_api.get_provider_settings", return_value=settings):
+            api = LLM_API.get(provider_name="CLAUDEAI")
+
+        assert isinstance(api, ClaudeAI_API)
+        assert Claude_API is ClaudeAI_API
+
+    def test_get_caches_same_provider_and_kwargs(self):
+        settings = LLM_API_Settings(
+            api_url="https://api.openai.com/v1/chat/completions",
+            api_key="key",
+        )
+        with patch("statek.llm_api.get_provider_settings", return_value=settings):
+            first = LLM_API.get(provider_name="OPENAI", timeout=30)
+            second = LLM_API.get(provider_name="OPENAI", timeout=30)
+
+        assert first is second
 
 
 # ---------------------------------------------------------------------------
@@ -1431,6 +1508,113 @@ class TestClaudeBuildMessages:
         tool_result_blocks = [b for b in msgs[1]["content"] if b["type"] == "tool_result"]
         results_by_id = {b["tool_use_id"]: b["content"] for b in tool_result_blocks}
         assert results_by_id == {"c1": "alpha", "c2": "beta"}
+
+
+# ---------------------------------------------------------------------------
+# VertexAI_API Gemini payload / response handling
+# ---------------------------------------------------------------------------
+
+class TestVertexAIBuildContents:
+    """Tests for VertexAI_API Gemini content conversion."""
+
+    def test_user_and_assistant_messages_use_gemini_roles(self, vertexai_api, db0_fixture):
+        history = [_user("hello"), _asst_code("x = 1")]
+        contents = vertexai_api.build_contents(history, chat_style=_MD())
+
+        assert contents[0] == {"role": "user", "parts": [{"text": "hello"}]}
+        assert contents[1]["role"] == "model"
+        assert "x = 1" in contents[1]["parts"][0]["text"]
+
+    def test_assistant_tool_call_and_result_use_function_parts(self, vertexai_api, db0_fixture):
+        cs = CallSpec(id="c1", func_name="foo", args=[], kwargs={"x": 1})
+        history = [_asst_tools(cs), _tool_result("done", cs)]
+        contents = vertexai_api.build_contents(history, chat_style=_MD())
+
+        assert contents[0] == {
+            "role": "model",
+            "parts": [{"functionCall": {"name": "foo", "args": {"x": 1}}}],
+        }
+        assert contents[1] == {
+            "role": "function",
+            "parts": [{
+                "functionResponse": {
+                    "name": "foo",
+                    "response": {"content": "done"},
+                }
+            }],
+        }
+
+
+class TestVertexAIRequest:
+    """Tests that VertexAI_API sends Gemini GenerateContent payloads."""
+
+    @pytest.mark.asyncio
+    async def test_payload_headers_and_url(self, vertexai_api, app_tool, db0_fixture):
+        captured = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
+            mock_resp.json.return_value = {
+                "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            result = await vertexai_api._process_request(
+                system_prompt="sys",
+                model="gemini-2.5-flash",
+                tools=[app_tool],
+                chat_history=[_user("hello")],
+                temperature=0.2,
+            )
+
+        assert captured["url"] == (
+            "https://aiplatform.googleapis.com/v1/projects/p1/locations/"
+            "us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
+        )
+        assert captured["headers"]["Authorization"] == "Bearer test-token"
+        assert captured["json"]["systemInstruction"] == {"parts": [{"text": "sys"}]}
+        assert captured["json"]["contents"] == [
+            {"role": "user", "parts": [{"text": "hello"}]}
+        ]
+        assert captured["json"]["generationConfig"]["temperature"] == 0.2
+        fn_decl = captured["json"]["tools"][0]["functionDeclarations"][0]
+        assert fn_decl["name"] == "my_app_tool"
+        assert fn_decl["parameters"]["type"] == "object"
+        assert result.text == "ok"
+
+    @pytest.mark.asyncio
+    async def test_function_call_response_populates_call_requests(self, vertexai_api):
+        async def fake_post(self_, url, json=None, headers=None):
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b"..."
+            mock_resp.json.return_value = {
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "name": "my_app_tool",
+                                "args": {"x": "hi"},
+                            }
+                        }]
+                    }
+                }]
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            result = await vertexai_api._process_request(model="gemini-2.5-flash")
+
+        assert result.text == ""
+        assert len(result.call_requests) == 1
+        assert result.call_requests[0].name == "my_app_tool"
+        assert result.call_requests[0].kwargs == {"x": "hi"}
 
 
 # ---------------------------------------------------------------------------
