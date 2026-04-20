@@ -1666,3 +1666,85 @@ class TestHandleDialogMarkdownMedia:
         console_text = "\n".join(job.py_env.console)
         assert "ConnectionError" in console_text
         assert "send failed" in console_text
+
+
+# ---------------------------------------------------------------------------
+# Provider routing via metadata["PROVIDER"]
+# ---------------------------------------------------------------------------
+
+class TestProviderRouting:
+    """Tests that run_job_step selects the LLM provider from metadata when available."""
+
+    def _make_job(self, db0_fixture, metadata):  # pylint: disable=unused-argument
+        agent = Agent(
+            role="test",
+            _system_prompt="Test",
+            _metadata=metadata,
+            _tools=[],
+        )
+        job_def = JobDef(agent=agent, job_params=None, warmup_code=None)
+        return Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+
+    def _make_mock_api(self):
+        mock_response = LLM_Response(
+            text="x = 1",
+            session_id=None,
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+        return mock_api, mock_harness
+
+    @pytest.mark.asyncio
+    async def test_metadata_provider_used_when_no_explicit_provider(self, db0_fixture):
+        """When metadata has PROVIDER, LLM_API.get is called with that provider."""
+        job = self._make_job(db0_fixture, {"MODEL": "test-model", "PROVIDER": "CLAUDEAI"})
+        mock_api, mock_harness = self._make_mock_api()
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        mock_llm_api_cls.get.assert_called_once()
+        call_kwargs = mock_llm_api_cls.get.call_args
+        assert call_kwargs.kwargs.get("provider_name") == "CLAUDEAI"
+
+    @pytest.mark.asyncio
+    async def test_default_provider_used_when_no_metadata_provider(self, db0_fixture):
+        """Without PROVIDER in metadata, the default from settings is used."""
+        job = self._make_job(db0_fixture, {"MODEL": "test-model"})
+        mock_api, mock_harness = self._make_mock_api()
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.get_statek_settings") as mock_settings:
+            mock_settings.return_value.default_llm_api_provider = "OPENROUTER"
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        call_kwargs = mock_llm_api_cls.get.call_args
+        assert call_kwargs.kwargs.get("provider_name") == "OPENROUTER"
+
+    @pytest.mark.asyncio
+    async def test_explicit_provider_param_overrides_metadata(self, db0_fixture):
+        """The explicit provider parameter takes precedence over metadata PROVIDER."""
+        job = self._make_job(db0_fixture, {"MODEL": "test-model", "PROVIDER": "CLAUDEAI"})
+        mock_api, mock_harness = self._make_mock_api()
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job, provider="OPENROUTER")
+
+        call_kwargs = mock_llm_api_cls.get.call_args
+        assert call_kwargs.kwargs.get("provider_name") == "OPENROUTER"

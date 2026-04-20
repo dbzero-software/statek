@@ -1799,6 +1799,79 @@ class TestGetLlmResponseTimes:
         assert list(job.get_llm_response_times()) == [(t2, 5.0)]
 
 
+class TestGetLlmStepSizes:
+    """Tests for Job.get_llm_initial_step_size and Job.get_llm_step_sizes."""
+
+    def test_initial_step_size_covers_system_prompt_and_warmup(self, job_factory):
+        """get_llm_initial_step_size counts system prompt and warmup code tokens."""
+        warmup = "x = 1"
+        job = job_factory(warmup_code=warmup)
+        system_prompt = job.job_def.system_prompt
+        input_tokens, output_tokens = job.get_llm_initial_step_size()
+        assert output_tokens == 0
+        assert input_tokens == (len(system_prompt) + len(warmup)) // 4
+
+    def test_first_step_includes_initial_step_size(self, job_factory):
+        """First step input tokens include the initial step size (prompt + warmup)."""
+        warmup = "warmup_code = True"
+        job = job_factory(warmup_code=warmup)
+        item = create_chat_log_item(console_pos=0, llm_resp="resp")
+        job.chat_log.append(item)
+        initial_input, _ = job.get_llm_initial_step_size()
+        input_tokens, _ = list(job.get_llm_step_sizes())[0]
+        assert input_tokens == initial_input
+
+    def test_console_and_user_message_counted_in_next_step_input(self, job_factory):
+        """Console output and user messages between steps count in next step's input."""
+        job = job_factory()
+        job.py_env.console = ["console_line"]
+        msg = "follow-up"
+        item1 = create_chat_log_item(console_pos=0, llm_resp="resp1")
+        user_item = UserLogItem(message=msg, timestamp=datetime.now())
+        item2 = create_chat_log_item(console_pos=1, llm_resp="resp2")
+        job.chat_log.extend([item1, user_item, item2])
+        steps = list(job.get_llm_step_sizes())
+        input2, _ = steps[1]
+        assert input2 == (len("console_line") + len(msg)) // 4
+
+    def test_code_block_tool_calls_counted_in_output_tokens(self, job_factory):
+        """Tool call requests in a CodeBlock response contribute to output tokens."""
+        import json  # pylint: disable=import-outside-toplevel
+        job = job_factory()
+        cs = CallSpec(id="c1", func_name="my_tool", args=None, kwargs={"x": 1})
+        cb = CodeBlock(code="run = True", tool_calls=[cs])
+        item = create_chat_log_item(console_pos=0, llm_resp=cb)
+        job.chat_log.append(item)
+        _, output_tokens = list(job.get_llm_step_sizes())[0]
+        tool_json = json.dumps([{"name": "my_tool", "arguments": {"x": 1}}])
+        assert output_tokens == (len("run = True") + len(tool_json)) // 4
+
+
+class TestTokensPerSec:
+    """Tests for Job.tokens_per_sec."""
+
+    def test_divides_total_tokens_by_total_duration(self, job_factory):
+        """tokens_per_sec = sum(input+output) / sum(durations) across all valid steps."""
+        job = job_factory()
+        with patch.object(Job, 'get_llm_response_times', return_value=[(None, 10.0)]):
+            with patch.object(Job, 'get_llm_step_sizes', return_value=[(40, 20)]):
+                assert job.tokens_per_sec() == (40 + 20) / 10.0
+
+    def test_steps_with_none_duration_are_excluded(self, job_factory):
+        """Steps whose duration is None do not contribute to either totals."""
+        job = job_factory()
+        with patch.object(Job, 'get_llm_response_times', return_value=[(None, 4.0), (None, None)]):
+            with patch.object(Job, 'get_llm_step_sizes', return_value=[(100, 60), (200, 80)]):
+                assert job.tokens_per_sec() == 160.0 / 4.0
+
+    def test_no_valid_steps_returns_zero(self, job_factory):
+        """Returns 0.0 when there are no completed steps to measure."""
+        job = job_factory()
+        with patch.object(Job, 'get_llm_response_times', return_value=[(None, None)]):
+            with patch.object(Job, 'get_llm_step_sizes', return_value=[(50, 30)]):
+                assert job.tokens_per_sec() == 0.0
+
+
 class TestJobCreatedAt:
     """Tests for Job.created_at."""
 
