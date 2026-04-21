@@ -134,7 +134,7 @@ def delegate_task(agent: SupervisedAgent,
         agent: The `Agent` to delegate task to
         warmup_code: Optional Python code (single block or sequence of blocks)
                     to be executed prior to task start
-        parent_job: Optional parent job — when provided, the child job
+        parent_job: Optional parent job; when provided, the child job
                     inherits the parent's error handlers.
         shared_vars: Optional ``{var_name: value}`` mapping of variables to
                     be additionally shared with the child job's context.
@@ -177,7 +177,7 @@ def delegate_mute_task(agent: SupervisedAgent,
         agent: The `Agent` to delegate task to
         warmup_code: Optional Python code (single block or sequence of blocks)
                     to be executed prior to task start
-        parent_job: Optional parent job — when provided, the child job
+        parent_job: Optional parent job; when provided, the child job
                     inherits the parent's error handlers.
         shared_vars: Optional ``{var_name: value}`` mapping of variables to
                     be additionally shared with the child job's context.
@@ -188,6 +188,44 @@ def delegate_mute_task(agent: SupervisedAgent,
     caller_frame = inspect.currentframe().f_back.f_back.f_back if warmup_code else None
     return _create_task_job(
         agent, warmup_code, parent_job, shared_vars, locale, caller_frame, **kwargs)
+
+
+@temporal(complement=get_mute_job_result, condition=is_job_completed)
+@tool
+def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    agent: DialogAgent,
+    message: str,
+    parent_job: Optional[Job] = None,
+    shared_vars: Optional[Dict[str, Any]] = None,
+    locale: Optional[StatekLocale] = None,
+    **kwargs
+) -> TaskFutureResult:
+    """Create a new mute dialog job with an initial user message.
+
+    Like :func:`delegate_mute_task`, but for :class:`DialogAgent` jobs that
+    start from an incoming user message. The dialog agent's messages are not
+    delivered as this function's immediate result; they are collected from the
+    completed job and returned as a string.
+
+    Args:
+        agent: The dialog agent to delegate the dialog to.
+        message: The initial user message.
+        parent_job: Optional parent job — when provided, the child job
+                    inherits the parent's error handlers.
+        shared_vars: Optional ``{var_name: value}`` mapping of variables to
+                    be additionally shared with the child job's context.
+        locale: Optional locale for job execution.
+        kwargs: job specific parameters for prompt formatting (i.e. job_params).
+    """
+    job = start_dialog(
+        agent=agent,
+        message=message,
+        parent_job=parent_job,
+        shared_vars=shared_vars,
+        locale=locale,
+        **kwargs,
+    )
+    return TaskFutureResult(job, deps=None, state_num=0)
 
 
 def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
