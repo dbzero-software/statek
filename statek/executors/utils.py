@@ -172,9 +172,8 @@ def _fmt_print_arg(arg) -> str:
     return format_default_llm_repr(arg)
 
 
-def custom_print(job, *args, sep=' ', end='\n', **kwargs):
+def custom_print(job, *args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
     """Custom print function that writes to job console."""
-    del kwargs
     output = sep.join(_fmt_print_arg(arg) for arg in args) + end
     job.console_append(output.rstrip('\n'))
 
@@ -479,8 +478,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
     if local_context is None:
         local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
 
-    def cli_print(*args, sep=' ', end='\n', **kwargs):
-        del kwargs
+    def cli_print(*args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
         console_append(output.rstrip('\n'))
 
