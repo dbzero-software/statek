@@ -93,10 +93,11 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
     caller_frame,
     **kwargs,
 ) -> TaskFutureResult:
+    effective_locale = _resolve_child_locale(parent_job, locale)
     job_def = agent.create_job_def(
         warmup_code=warmup_code,
         shared_vars=shared_vars,
-        locale=locale,
+        locale=effective_locale,
         **kwargs,
     )
 
@@ -120,6 +121,13 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
     return TaskFutureResult(job, deps=None, state_num=0)
 
 
+def _resolve_child_locale(parent_job: Optional[Job], locale):
+    """Return the locale, inheriting parent_job.locale when locale is empty."""
+    if locale is not None or parent_job is None:
+        return locale
+    return parent_job.job_def.locale
+
+
 @temporal(complement=get_task_result, condition=is_job_completed)
 @tool
 def delegate_task(agent: SupervisedAgent,
@@ -138,7 +146,8 @@ def delegate_task(agent: SupervisedAgent,
                     inherits the parent's error handlers.
         shared_vars: Optional ``{var_name: value}`` mapping of variables to
                     be additionally shared with the child job's context.
-        locale: Optional locale for job execution.
+        locale: Optional locale for job execution.  When omitted and
+            parent_job is provided, the parent job's locale is inherited.
         kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
     # Skip @tool and @temporal decorator frames to reach the actual caller
@@ -181,7 +190,8 @@ def delegate_mute_task(agent: SupervisedAgent,
                     inherits the parent's error handlers.
         shared_vars: Optional ``{var_name: value}`` mapping of variables to
                     be additionally shared with the child job's context.
-        locale: Optional locale for job execution.
+        locale: Optional locale for job execution.  When omitted and
+            parent_job is provided, the parent job's locale is inherited.
         kwargs: job specific parameters for prompt formatting (i.e. job_params)
     """
     # Skip @tool and @temporal decorator frames to reach the actual caller
@@ -214,7 +224,8 @@ def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positio
                     inherits the parent's error handlers.
         shared_vars: Optional ``{var_name: value}`` mapping of variables to
                     be additionally shared with the child job's context.
-        locale: Optional locale for job execution.
+        locale: Optional locale for job execution.  When omitted and
+            parent_job is provided, the parent job's locale is inherited.
         kwargs: job specific parameters for prompt formatting (i.e. job_params).
     """
     job = start_dialog(
@@ -250,16 +261,18 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
                     inherits the parent's error handlers.
         shared_vars: Optional variables to share with the dialog job's
                      context (see :func:`delegate_task`).
-        locale: Optional locale for the child job / dialog.
+        locale: Optional locale for the child job / dialog.  When omitted and
+            parent_job is provided, the parent job's locale is inherited.
         kwargs: Optional agent-specific extra arguments (job_params).
 
     Returns:
         The newly created Job instance.
     """
+    effective_locale = _resolve_child_locale(parent_job, locale)
     job_def = agent.create_job_def(
         warmup_code=warmup_code,
         shared_vars=shared_vars,
-        locale=locale,
+        locale=effective_locale,
         **kwargs,
     )
 
