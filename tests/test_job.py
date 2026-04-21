@@ -1784,6 +1784,51 @@ class TestGetChatResponses:
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="# Answer"))
         assert list(job.get_chat_responses()) == ["# Answer"]
 
+    def test_answer_tool_log_console_output_is_yielded(self, job_factory):
+        """Console answer tool logs expose only their message body."""
+        job = job_factory()
+        job.py_env.console = [
+            "log: answer(body='Brak dyzurow w przyszlym tygodniu.', media=None)",
+        ]
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="answer(...)"))
+
+        assert list(job.get_chat_responses()) == [
+            "answer(...)",
+            "Brak dyzurow w przyszlym tygodniu.",
+        ]
+
+    def test_answer_tool_log_is_ordered_between_llm_turns(self, job_factory):
+        """Answer logs are yielded at their console position between LLM turns."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.py_env.console = [
+            "log: answer(body='from first turn', media=None)",
+            "ordinary console output",
+            "log: answer(body='from second turn', media=None)",
+        ]
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
+        ))
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="plain reply"))
+
+        assert list(job.get_chat_responses()) == [
+            "from first turn",
+            "plain reply",
+            "from second turn",
+        ]
+
+    def test_non_answer_tool_log_console_output_is_not_yielded(self, job_factory):
+        """Only answer tool logs are treated as chat responses."""
+        job = job_factory()
+        job.py_env.console = [
+            "log: search('alice', limit=5)",
+            "log: answer(body='done', media=None)",
+        ]
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="internal"))
+
+        assert list(job.get_chat_responses()) == ["internal", "done"]
+
 
 class TestGetLlmResponseTimes:
     """Tests for Job.get_llm_response_times."""

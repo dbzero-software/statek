@@ -2,9 +2,11 @@
 """Tests for statek.utils parse_func_call, parse_warmup_block, and CodeBlock."""
 
 import pytest
+from statek.llm_api import CallParams
 from statek.utils import (parse_func_call, ParsedFuncCall,
                           parse_warmup_block, ParsedWarmupBlock,
-                          CodeBlock, CallSpec)
+                          CodeBlock, CallSpec, parse_tool_log,
+                          print_tool_log)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +101,64 @@ def test_parse_func_call_invalid_syntax_raises():
     """Invalid Python syntax raises an exception."""
     with pytest.raises(Exception):
         parse_func_call('not a function call!!!')
+
+
+# ---------------------------------------------------------------------------
+# parse_tool_log / print_tool_log tests
+# ---------------------------------------------------------------------------
+
+def test_parse_tool_log_valid_call_params():
+    """A log line with one function call is parsed into CallParams."""
+    line = (
+        "log: answer(body='Brak dyzurow w przyszlym tygodniu "
+        "(2026-04-27-2026-05-03).', media=None)"
+    )
+    result = parse_tool_log(line)
+    assert isinstance(result, CallParams)
+    assert result.id == ""
+    assert result.name == "answer"
+    assert result.args == []
+    assert result.kwargs == {
+        "body": "Brak dyzurow w przyszlym tygodniu (2026-04-27-2026-05-03).",
+        "media": None,
+    }
+
+
+def test_parse_tool_log_valid_positional_and_keyword_args():
+    """Positional and keyword arguments are preserved."""
+    result = parse_tool_log("log: search('alice', limit=5)")
+    assert result is not None
+    assert result.name == "search"
+    assert result.args == ["alice"]
+    assert result.kwargs == {"limit": 5}
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "answer(body='missing prefix')",
+        " log: answer(body='leading space')",
+        "log:",
+        "log: answer(body='unterminated'",
+        "log: answer(body='ok'); other()",
+        "log: answer(**{'body': 'unsupported expansion'})",
+    ],
+)
+def test_parse_tool_log_invalid_inputs_return_none(line):
+    """Non-log and malformed inputs are ignored."""
+    assert parse_tool_log(line) is None
+
+
+def test_print_tool_log_outputs_log_line(capsys):
+    """print_tool_log writes the canonical log format."""
+    call_params = CallParams(
+        call_id="call_1",
+        name="answer",
+        args=[],
+        kwargs={"body": "done", "media": None},
+    )
+    print_tool_log(call_params)
+    assert capsys.readouterr().out == "log: answer(body='done', media=None)\n"
 
 
 # ---------------------------------------------------------------------------

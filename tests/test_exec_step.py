@@ -59,6 +59,13 @@ def _fetch_result_from_deps(self):
     return self.deps.value
 
 
+def _fetch_result_when_deps_ready(self):
+    """Return the dependency value only after deps.ready is set."""
+    if self.deps.ready:
+        return self.deps.value
+    raise FutureError(future_result=self)
+
+
 def _fetch_result_pair_from_deps(self) -> tuple[MemoWithMethod, MemoWithMethod]:
     """Fetch a typed tuple result from deps for FutureResult unpacking."""
     if self.deps.ready:
@@ -76,6 +83,17 @@ def local_print(some_argument):
 def compute(a, b, c):
     """Function that computes sum of three arguments."""
     return a + b + c
+
+
+_pending_expression_future = None
+_pending_expression_call_count = 0
+
+
+def get_pending_expression_value():
+    """Module-level helper because dbzero cannot persist nested callables."""
+    global _pending_expression_call_count  # pylint: disable=global-statement
+    _pending_expression_call_count += 1
+    return _pending_expression_future
 
 
 # Helper functions for creating FutureResults
@@ -950,6 +968,43 @@ x + y"""
         assert simple_job.py_env.console is not None
         assert len(simple_job.py_env.console) == 1
         assert "42" in simple_job.py_env.console[0]
+
+    @pytest.mark.asyncio
+    async def test_exec_step_pending_temporal_expression_print_resume_does_not_reexecute(
+            self, job_factory):
+        """Resume pending implicit expression output without re-running expression code."""
+        global _pending_expression_future  # pylint: disable=global-statement
+        global _pending_expression_call_count  # pylint: disable=global-statement
+        simple_job = self.create_job(job_factory)
+        future = FutureResult(deps=MemoWithValueAndReady(77, False), state_num=0)
+        future.set_complement_functions(
+            complement=_fetch_result_when_deps_ready,
+            condition=_check_condition_true,
+        )
+        _pending_expression_future = future
+        _pending_expression_call_count = 0
+
+        simple_job.py_env.local_state = {
+            'get_pending_expression_value': get_pending_expression_value
+        }
+
+        with pytest.raises(FutureError) as exc_info:
+            await exec_step('get_pending_expression_value()', simple_job)
+
+        assert exc_info.value.instr_num == 0
+        assert simple_job.py_env.future_result is future
+        assert simple_job.py_env.console is None
+        assert _pending_expression_call_count == 1
+
+        future.deps.ready = True
+        await exec_step(
+            'get_pending_expression_value()', simple_job,
+            instr_num=exc_info.value.instr_num
+        )
+
+        assert simple_job.py_env.future_result is None
+        assert simple_job.py_env.console == ["77"]
+        assert _pending_expression_call_count == 1
 
     @pytest.mark.asyncio
     async def test_exec_step_local_vars_in_comprehension(self, job_factory):

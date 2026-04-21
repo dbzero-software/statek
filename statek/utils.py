@@ -11,10 +11,13 @@ from dataclasses import dataclass, is_dataclass, fields as dataclass_fields
 from datetime import datetime
 from decimal import Decimal
 from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Tuple, Type, Any,
-                    get_type_hints, get_origin, get_args, Union, ForwardRef)
+                    get_type_hints, get_origin, get_args, Union, ForwardRef, TYPE_CHECKING)
 import dbzero as db0
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from statek.llm_api import CallParams
 
 ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
 ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
@@ -120,18 +123,81 @@ def parse_func_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-
     if not isinstance(tree.body, ast.Call):
         raise ValueError(f"Not a function call: {input!r}")
     call = tree.body
-    if isinstance(call.func, ast.Name):
-        name = call.func.id
-    elif isinstance(call.func, ast.Attribute):
-        name = call.func.attr
-    else:
-        raise ValueError(f"Unsupported function expression: {input!r}")
-    args = [arg.id if isinstance(arg, ast.Name) else ast.literal_eval(arg) for arg in call.args]
+    name = _call_func_name(call, input)
+    args = [_literal_or_name(arg) for arg in call.args]
     kwargs = {
-        kw.arg: kw.value.id if isinstance(kw.value, ast.Name) else ast.literal_eval(kw.value)
+        kw.arg: _literal_or_name(kw.value)
         for kw in call.keywords
     } or None
     return ParsedFuncCall(name=name, args=args, kwargs=kwargs)
+
+
+def _literal_or_name(node: ast.AST) -> Any:
+    """Return a literal AST value, preserving bare names as strings."""
+    if isinstance(node, ast.Name):
+        return node.id
+    return ast.literal_eval(node)
+
+
+def _call_func_name(call: ast.Call, input: str) -> str:  # pylint: disable=redefined-builtin
+    """Return the simple function name from an AST call."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    raise ValueError(f"Unsupported function expression: {input!r}")
+
+
+def _parse_tool_log_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-builtin
+    """Parse the call body of a tool-log line."""
+    tree = ast.parse(input, mode='eval')
+    if not isinstance(tree.body, ast.Call):
+        raise ValueError(f"Not a function call: {input!r}")
+    call = tree.body
+    if any(kw.arg is None for kw in call.keywords):
+        raise ValueError(f"Unsupported keyword expansion: {input!r}")
+    return ParsedFuncCall(
+        name=_call_func_name(call, input),
+        args=[_literal_or_name(arg) for arg in call.args],
+        kwargs={kw.arg: _literal_or_name(kw.value) for kw in call.keywords},
+    )
+
+
+def parse_tool_log(input: str) -> Optional["CallParams"]:  # pylint: disable=redefined-builtin
+    """Parse a single ``log:`` tool-call line into ``CallParams``.
+
+    Returns ``None`` when the input is not a tool log or does not contain
+    exactly one supported Python-style function call.
+    """
+    if not input.startswith("log:"):
+        return None
+
+    call_text = input.removeprefix("log:").strip()
+    if not call_text:
+        return None
+
+    try:
+        parsed = _parse_tool_log_call(call_text)
+    except (SyntaxError, ValueError, TypeError, MemoryError, RecursionError):
+        return None
+
+    from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
+    return CallParams(
+        call_id="",
+        name=parsed.name,
+        args=parsed.args,
+        kwargs=parsed.kwargs,
+    )
+
+
+def print_tool_log(call_params: "CallParams"):
+    """Print ``call_params`` in the canonical tool-log format."""
+    parts = []
+    if call_params.args:
+        parts.extend(repr(arg) for arg in call_params.args)
+    if call_params.kwargs:
+        parts.extend(f"{key}={value!r}" for key, value in call_params.kwargs.items())
+    print(f"log: {call_params.name}({', '.join(parts)})")
 
 
 def parse_warmup_block(code: str) -> ParsedWarmupBlock:

@@ -4,8 +4,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from statek.task import (
-    copy_locals, delegate_task, delegate_mute_task, start_dialog,
-    submit_new_job, submit_new_jobs_batch,
+    copy_locals, delegate_task, delegate_mute_dialog, delegate_mute_task,
+    start_dialog, submit_new_job, submit_new_jobs_batch,
 )
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
@@ -346,6 +346,56 @@ class TestDelegateTask:
         result = delegate_task(supervised_agent)
         assert result.job.job_def.locale is None
 
+    def test_delegate_task_inherits_parent_locale_when_unspecified(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """With parent_job, locale defaults to the parent's locale."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        parent_result = delegate_task(supervised_agent, locale=parent_locale)
+
+        child_result = delegate_task(supervised_agent, parent_job=parent_result.job)
+
+        assert child_result.job.job_def.locale is parent_locale
+
+    def test_delegate_task_explicit_locale_overrides_parent_locale(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """An explicit child locale takes precedence over parent_job.locale."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        child_locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.GB,
+        )
+        parent_result = delegate_task(supervised_agent, locale=parent_locale)
+
+        child_result = delegate_task(
+            supervised_agent, parent_job=parent_result.job, locale=child_locale
+        )
+
+        assert child_result.job.job_def.locale is child_locale
+
+    def test_delegate_task_none_locale_inherits_parent_locale(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """locale=None inherits parent_job.locale."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        parent_result = delegate_task(supervised_agent, locale=parent_locale)
+
+        child_result = delegate_task(
+            supervised_agent, parent_job=parent_result.job, locale=None
+        )
+
+        assert child_result.job.job_def.locale is parent_locale
+
 
 class TestDelegateMuteTask:
     """Tests for delegate_mute_task and get_mute_job_result."""
@@ -389,6 +439,105 @@ class TestDelegateMuteTask:
         # exit_status takes precedence when set
         result.job.py_env.exit_status = "aborted: quota exceeded"
         assert result.value == "aborted: quota exceeded"
+
+    def test_delegate_mute_task_inherits_parent_locale_when_unspecified(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Mute task locale defaults to parent_job.locale."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        parent_result = delegate_mute_task(supervised_agent, locale=parent_locale)
+
+        child_result = delegate_mute_task(
+            supervised_agent, parent_job=parent_result.job
+        )
+
+        assert child_result.job.job_def.locale is parent_locale
+
+
+class TestDelegateMuteDialog:
+    """Tests for delegate_mute_dialog."""
+
+    @pytest.fixture
+    def mock_settings(self):
+        """Mock settings functions."""
+        with patch('statek.task.get_statek_settings') as mock_statek, \
+             patch('statek.task.get_provider_settings') as mock_provider:
+            mock_statek_settings = Mock()
+            mock_statek_settings.default_llm_api_provider = "OPENAI"
+            mock_statek_settings.chat_style = None
+            mock_statek.return_value = mock_statek_settings
+
+            mock_provider_settings = Mock()
+            mock_provider_settings.default_model = "gpt-4"
+            mock_provider.return_value = mock_provider_settings
+
+            yield
+
+    def test_creates_dialog_job_with_initial_message(self, db0_fixture, mock_settings):
+        """delegate_mute_dialog creates a dialog job and pushes the initial user message."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        result = delegate_mute_dialog(agent, message="hello")
+
+        assert isinstance(result.job, Job)
+        assert result.job.job_def.agent is agent
+        assert result.job.chat_log[0] == "hello"
+        assert result.job.status == JobStatus.READY
+
+    def test_result_returns_chat_responses_on_success(self, db0_fixture, mock_settings):
+        """On completion, delegate_mute_dialog resolves to user-facing chat responses."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        result = delegate_mute_dialog(agent, message="hello")
+
+        result.job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="# Answer"))
+        result.job.chat_log.append(LLM_LogItem(console_pos=1, llm_resp="# Follow-up"))
+        result.job.set_status(JobStatus.DONE)
+
+        assert result.value == "# Answer\n# Follow-up"
+
+    def test_forwards_parent_shared_vars_locale_and_kwargs(
+        self, db0_fixture, mock_settings
+    ):
+        """delegate_mute_dialog forwards dialog job construction arguments."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.GB,
+        )
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        parent = start_dialog(agent, message="parent")
+        parent.add_error_handler(_noop_error_handler, "ctx")
+
+        result = delegate_mute_dialog(
+            agent,
+            message="child",
+            parent_job=parent,
+            shared_vars={"alpha": 42},
+            locale=locale,
+            topic="weather",
+        )
+
+        assert result.job.error_handlers[0].error_handler is _noop_error_handler
+        assert result.job.py_env.local_state["alpha"] == 42
+        assert result.job.job_def.locale is locale
+        assert result.job.job_def.job_params["topic"] == "weather"
+        assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
+
+    def test_delegate_mute_dialog_inherits_parent_locale_when_unspecified(
+        self, db0_fixture, mock_settings
+    ):
+        """Mute dialog locale defaults to parent_job.locale."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        parent = start_dialog(agent, message="parent", locale=locale)
+
+        result = delegate_mute_dialog(agent, message="child", parent_job=parent)
+
+        assert result.job.job_def.locale is locale
 
 
 _recorded_send_calls = []
@@ -549,6 +698,38 @@ class TestStartDialog:
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hi")
         assert job.job_def.locale is None
+
+    def test_start_dialog_inherits_parent_locale_when_unspecified(
+        self, db0_fixture, mock_settings
+    ):
+        """With parent_job, dialog locale defaults to the parent's locale."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        parent_job = start_dialog(agent, message="parent", locale=locale)
+
+        child_job = start_dialog(agent, message="child", parent_job=parent_job)
+
+        assert child_job.job_def.locale is locale
+
+    def test_start_dialog_none_locale_inherits_parent_locale(
+        self, db0_fixture, mock_settings
+    ):
+        """locale=None inherits parent_job.locale."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        parent_job = start_dialog(agent, message="parent", locale=locale)
+
+        child_job = start_dialog(
+            agent, message="child", parent_job=parent_job, locale=None
+        )
+
+        assert child_job.job_def.locale is locale
 
 
 class TestDialogAgentAddAnswerTool:
