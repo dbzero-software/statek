@@ -64,7 +64,7 @@ class _MirrorDict(dict):
             self._target[key] = value
 
 
-def _wrap_param (param):
+def _wrap_param(param):
     if isinstance(param, FutureResult):
         value = param.value
         return value
@@ -174,6 +174,7 @@ def _fmt_print_arg(arg) -> str:
 
 def custom_print(job, *args, sep=' ', end='\n', **kwargs):
     """Custom print function that writes to job console."""
+    del kwargs
     output = sep.join(_fmt_print_arg(arg) for arg in args) + end
     job.console_append(output.rstrip('\n'))
 
@@ -309,6 +310,14 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
         if isinstance(value, types.FunctionType)
     }
 
+    def _resolve_output_future(result):
+        value = result.value
+        if asyncio.iscoroutine(value):
+            import nest_asyncio
+            nest_asyncio.apply()
+            value = asyncio.get_running_loop().run_until_complete(value)
+        return value
+
     with _setup_execution_context(job, global_context, local_context, print_fn=print_fn):
         tree = ast.parse(code_str)
 
@@ -332,6 +341,18 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
         ast.fix_missing_locations(tree)
 
         start_instr = instr_num if instr_num is not None else 0
+        if job.py_env.future_result is not None:
+            try:
+                result = _resolve_output_future(job.py_env.future_result)
+                output = format_default_llm_repr(result)
+                output_fn(output)
+                job.py_env.future_result = None
+                if instr_num is not None:
+                    start_instr = instr_num + 1
+            except FutureError as e:
+                if e.instr_num is None:
+                    e.instr_num = instr_num
+                raise
 
         for idx, node in enumerate(tree.body):
             if idx < start_instr:
@@ -352,11 +373,11 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                                 filename="<string>", mode="eval"),
                         global_context, sync_local)
                     if isinstance(result, FutureResult):
-                        result = result.value
-                        if asyncio.iscoroutine(result):
-                            import nest_asyncio
-                            nest_asyncio.apply()
-                            result = asyncio.get_running_loop().run_until_complete(result)
+                        try:
+                            result = _resolve_output_future(result)
+                        except FutureError:
+                            job.py_env.future_result = result
+                            raise
                     if result is not None or idx not in print_call_exprs:
                         output_fn(format_default_llm_repr(result))
                 else:
@@ -459,6 +480,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
 
     def cli_print(*args, sep=' ', end='\n', **kwargs):
+        del kwargs
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
         console_append(output.rstrip('\n'))
 

@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Union
 import dbzero as db0
 
+from statek.future import FutureResult
+
 @db0.memo
 @dataclass
 class PyEnv:
@@ -26,6 +28,8 @@ class PyEnv:
     warmup_block_num: int = None
     # Exit status (or None if exit not called yet)
     exit_status: str = None
+    # Result of the last instruction awaiting completion
+    future_result: FutureResult = None
 
     def console_append(self, out: str):
         """
