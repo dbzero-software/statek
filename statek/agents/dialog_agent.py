@@ -119,8 +119,14 @@ class DialogAgent(SupervisedAgent):
                 body (required): The final message text to send to the user.
                 media: Optional media attachment forwarded to send_message.
             """
-            # This is LLM-facing log
-            print(f"log: answer(body={body!r}, media={media!r})")
+            from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
+            from statek.utils import print_tool_log  # pylint: disable=import-outside-toplevel
+            print_tool_log(CallParams(
+                call_id="",
+                name="answer",
+                args=[],
+                kwargs={"body": body, "media": media},
+            ))
             original(body=body, media=media)
             exit("Success")  # pylint: disable=consider-using-sys-exit
 
