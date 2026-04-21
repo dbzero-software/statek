@@ -12,7 +12,8 @@ from statek.llm_api import LLM_API, LLM_Response
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
                           strip_markup, extract_dialog,
-                          parse_warmup_block, build_warmup_code, _STATEK_TOOL_MARKER)
+                          parse_warmup_block, build_warmup_code,
+                          parse_tool_log, _STATEK_TOOL_MARKER)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.settings import get_statek_settings, ChatStyle, statek_log
@@ -952,15 +953,55 @@ class Job:
 
         return True
 
+    @staticmethod
+    def _chat_response_from_tool_log(line: str) -> Optional[str]:
+        """Extract a user-facing answer body from a console tool-log line."""
+        call_params = parse_tool_log(line)
+        if call_params is None or call_params.name != "answer":
+            return None
+
+        body = None
+        if call_params.args:
+            body = call_params.args[0]
+        if call_params.kwargs:
+            body = call_params.kwargs.get("body", body)
+            body = call_params.kwargs.get("content", body)
+        if not isinstance(body, str) or not body:
+            return None
+        return body
+
+    def _iter_chat_response_tool_logs(self, from_pos: int, to_pos: int) -> Iterable[str]:
+        """Yield answer bodies from console output in ``[from_pos, to_pos)``."""
+        console = self.py_env.console or []
+        for output in console[from_pos:to_pos]:
+            for line in output.splitlines():
+                body = self._chat_response_from_tool_log(line)
+                if body is not None:
+                    yield body
+
     def get_chat_responses(self) -> Iterable[str]:
-        """Yield user-facing LLM responses from the chat log, oldest first."""
-        for item in self.chat_log:
+        """Yield user-facing chat responses from the chat log, oldest first."""
+        console_len = len(self.py_env.console) if self.py_env.console else 0
+        items = [
+            item for item in self.chat_log
+            if isinstance(item, (WarmupLogItem, LLM_LogItem))
+        ]
+        end_positions = [
+            items[idx + 1].console_pos if idx + 1 < len(items) else console_len
+            for idx in range(len(items))
+        ]
+
+        for idx, item in enumerate(items):
             if isinstance(item, LLM_LogItem) and self._is_user_facing_llm_response(item):
                 resp = item.llm_resp
                 if isinstance(resp, str):
                     yield resp
                 elif isinstance(resp, CodeBlock) and resp.code:
                     yield resp.code
+            yield from self._iter_chat_response_tool_logs(
+                item.console_pos,
+                end_positions[idx],
+            )
 
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
         """Return user-message timestamps paired with time-to-first user reply.
