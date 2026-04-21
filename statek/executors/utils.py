@@ -946,7 +946,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     return False
 
 
-def process_push_notifications(step_size=100, max_count=500):
+def process_push_notifications(step_size=100, max_count=500, prefix: Optional[Union[str, int]] = None):
     """Process pending push notifications from StatekPushQueues on all open prefixes.
 
     Finds all StatekPushQueue instances across open prefixes and delivers push
@@ -956,25 +956,28 @@ def process_push_notifications(step_size=100, max_count=500):
     Args:
         step_size: Number of notifications to retrieve per batch.
         max_count: Maximum total notifications to process in this call.
+        prefix: Optional prefix name or UUID to limit processing to.
     """
     processed = 0
 
-    for prefix in db0.get_prefixes():
+    for queue_prefix in db0.get_prefixes():
         if processed >= max_count:
             break
-        queue = db0.find_singleton(StatekPushQueue, prefix.name)
+        queue = db0.find_singleton(StatekPushQueue, queue_prefix.name)
         if queue is None:
             continue
         while processed < max_count:
             batch_size = min(step_size, max_count - processed)
             if queue.is_empty():
                 break
-            items = queue.pop_from_job_console(batch_size)
+            items = queue.pop_from_job_console(batch_size, prefix=prefix)
             if not items:
                 break
             for job_uuid, message in items:
                 try:
                     job = db0.fetch(job_uuid)
+                    if not isinstance(message, str):
+                        job.add_ext_ref(message)
                     job.push_user_message(str(message))
                 except Exception:  # pylint: disable=broad-except
                     pass

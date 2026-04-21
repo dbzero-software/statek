@@ -305,6 +305,8 @@ class Job:
         self.perm_ctx: Optional[dict] = None
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
+        # Application-specific external memo references, created lazily.
+        self.__ext_ref = None
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
@@ -319,6 +321,30 @@ class Job:
     def model(self) -> Optional[str]:
         """Return the frozen model stored on the job definition."""
         return self.job_def.model if self.job_def is not None else None
+
+    def _ensure_ext_ref_storage(self):
+        """Return external-reference storage, creating it for older persisted jobs."""
+        if not hasattr(self, "_Job__ext_ref") or self.__ext_ref is None:
+            self.__ext_ref = db0.weak_set()
+        return self.__ext_ref
+
+    def add_ext_ref(self, obj: Any) -> None:
+        """Register an application-specific weak reference to an external memo object."""
+        if not db0.is_memo(obj):
+            return
+
+        storage = self._ensure_ext_ref_storage()
+        storage.add(obj)
+
+    def contains_ext_ref(self, obj: Any) -> bool:
+        """Return whether *obj* was previously registered as an external reference."""
+        if not db0.is_memo(obj):
+            return False
+
+        storage = getattr(self, "_Job__ext_ref", None)
+        if storage is None:
+            return False
+        return obj in storage
 
     def add_error_handler(self, error_handler: Callable, context: Any) -> None:
         """Register an error handler with this job.
