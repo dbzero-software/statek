@@ -288,14 +288,11 @@ def _value_changed(before, after) -> bool:
         return True
 
 
-def _merge_modified_locals(job: Job, local_context: dict, initial_context: dict) -> None:
-    """Merge changed execution locals without discarding job-owned state."""
-    if job.py_env.local_state is None:
-        job.py_env.local_state = {}
-
-    for key, value in local_context.items():
-        if key not in initial_context or _value_changed(initial_context[key], value):
-            job.py_env.local_state[key] = value
+def _copy_modified_locals(current_locals: dict, job_locals: dict) -> None:
+    """Copy locals from then current execution step into job persistent locals without dropping keys"""
+    for key, value in current_locals.items():
+        if key not in job_locals or _value_changed(job_locals[key], value):
+            job_locals[key] = value
 
 
 def _exec_code_body(code_str: str, job: Job, global_context: dict,
@@ -465,7 +462,9 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
             instr_num=instr_num,
         )
     finally:
-        _merge_modified_locals(job, local_context, initial_context)
+        if job.py_env.local_state is None:
+            job.py_env.local_state = {}        
+        _copy_modified_locals(local_context, job.py_env.local_state)
 
     return job.py_env.exit_status is None
 
@@ -495,8 +494,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
     else:
         global_context = {key: value for key, value in job.py_env.global_state.items()}
     if local_context is None:
-        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
-    initial_context = dict(local_context)
+        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}    
 
     def cli_print(*args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
@@ -511,7 +509,9 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
             instr_num=instr_num,
         )
     finally:
-        _merge_modified_locals(job, local_context, initial_context)
+        if job.py_env.local_state is None:
+            job.py_env.local_state = {}
+        _copy_modified_locals(local_context, job.py_env.local_state)
 
     return job.py_env.exit_status is not None
 
