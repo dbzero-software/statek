@@ -56,9 +56,6 @@ def extract_example(job: Job, name: str) -> Example:
         example_metadata["agent_role"] = job.job_def.agent.role
     if job.job_def.job_params is not None:
         example_metadata["job_params"] = job.job_def.job_params
-    difficulty = getattr(job, "task_difficulty", None)
-    if difficulty is not None:
-        example_metadata["difficulty"] = difficulty
 
     return Example(
         example_metadata=example_metadata,

@@ -76,12 +76,12 @@ class TestExtractExampleMetadata:
         example = Example(example_metadata={}, warmup_items=[], example_items=[])
         assert example.difficulty is None
 
-    def test_extract_example_includes_job_task_difficulty(self, job_factory):
+    def test_extract_example_does_not_include_job_task_difficulty(self, job_factory):
         job = job_factory()
         job.task_difficulty = TaskDifficulty.high
         result = extract_example(job, "x")
-        assert result.example_metadata["difficulty"] == TaskDifficulty.high
-        assert result.difficulty == TaskDifficulty.high
+        assert "difficulty" not in result.example_metadata
+        assert result.difficulty is None
 
 
 class TestExtractWarmupItems:
