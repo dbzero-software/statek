@@ -874,6 +874,15 @@ class Job:
                             content_src=ContentSource.CONSOLE,
                             tool_calls=cs,
                         )
+                    # python_cli output already travelled via tool_log /
+                    # TOOL items above — the console slice that also
+                    # received it (for console_pos advancement) would only
+                    # duplicate it as a USER message.  Skip that dump and
+                    # any push_log yielding for this block.
+                    from_pos = item.console_pos
+                    to_pos = end_positions[idx]
+                    yield from _yield_pushes(from_pos, to_pos)
+                    continue
                 elif block_code:
                     yield ChatHistoryItem(
                         role=ChatRole.ASSISTANT,

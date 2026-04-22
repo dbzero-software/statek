@@ -1306,6 +1306,30 @@ class TestJobGetChatHistoryWithWarmup:
         assert history[1].role == ChatRole.TOOL
         assert history[1].content == "tool result"
 
+    def test_python_cli_output_as_tool_not_duplicate_user(self, job_factory):
+        """python_cli console output is attributed to a TOOL message only —
+        no duplicate USER console dump following it.  This reproduces the
+        production bug where every python_cli tool call produced an empty
+        <CONSOLE_OUTPUT> tool-result followed by a USER message carrying
+        the actual output."""
+        call_spec = CallSpec(id="call_1", func_name="python_cli",
+                             kwargs={"code": "render_calendar()"})
+        job = job_factory()
+        # tool_log aligned with tool_calls; console advanced by the same output.
+        item = create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(tool_calls=[call_spec]),
+        )
+        item.tool_log = ["private/calendar.svg"]
+        job.chat_log.append(item)
+        job.py_env.console = ["private/calendar.svg"]
+
+        history = list(job.get_chat_history())
+
+        roles = [h.role for h in history]
+        assert roles == [ChatRole.ASSISTANT, ChatRole.TOOL]
+        assert history[1].content == "private/calendar.svg"
+
     def test_warmup_not_in_subsequent_messages(self, job_factory):
         """Warmup code does not appear in console items after the first LLM turn."""
         job = job_factory(warmup_code="x = 1")
