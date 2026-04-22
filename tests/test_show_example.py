@@ -8,9 +8,11 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from statek.agents.agent import Agent
-from statek.agents.list_of_examples import show_example
+from statek.agents.list_of_examples import get_example_difficulty, show_example
 from statek.executors.example import load_examples
+from statek.executors.job import TaskDifficulty
 from statek.settings import StatekSettings, ChatStyle, get_statek_settings
+from statek.utils import perm_ctx_get
 
 
 EXAMPLE_MD = """\
@@ -236,6 +238,49 @@ def test_show_example_none_id_invalid_default_prints_not_found(capsys, examples_
     assert "not found" in out
 
 
+def test_show_example_sets_last_example_id(capsys, examples_dir):
+    """Successful show_example stores the selected example ID in persistent context."""
+    _PERM_CTX = {}  # noqa: F841
+    settings = _settings(
+        examples_dir=examples_dir,
+        chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
+    )
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        show_example(agent_name="myagent", example_id=0)
+
+    capsys.readouterr()
+    assert perm_ctx_get("last_example_id") == 0
+
+
+def test_show_example_default_id_sets_last_example_id(capsys, examples_dir):
+    """When default_example_id is used, the resolved ID is stored as last_example_id."""
+    _PERM_CTX = {}  # noqa: F841
+    settings = _settings(
+        examples_dir=examples_dir,
+        chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
+    )
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        default_example_id = "0"  # noqa: F841  # pylint: disable=unused-variable
+        show_example(agent_name="myagent", example_id=None)
+
+    capsys.readouterr()
+    assert perm_ctx_get("last_example_id") == 0
+
+
+def test_show_example_missing_id_does_not_overwrite_last_example_id(capsys, examples_dir):
+    """Failed lookups do not replace the previous successful example trace."""
+    _PERM_CTX = {"last_example_id": 7}  # noqa: F841
+    settings = _settings(
+        examples_dir=examples_dir,
+        chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
+    )
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        show_example(agent_name="myagent", example_id=99)
+
+    capsys.readouterr()
+    assert perm_ctx_get("last_example_id") == 7
+
+
 # --- Agent.get_examples ---
 
 EXAMPLE_MD_2 = """\
@@ -305,3 +350,22 @@ def test_get_examples_single_example(examples_dir):
         result = agent.get_examples()
 
     assert result == ["Dispatching to new thread"]
+
+
+def test_get_example_difficulty_reads_example_metadata(temp_dir):
+    """Example difficulty is parsed from example metadata by example ID."""
+    agent_dir = os.path.join(temp_dir, "myagent")
+    os.makedirs(agent_dir)
+    with open(os.path.join(agent_dir, "example-001.md"), "w", encoding="utf-8") as f:
+        f.write("# seq_id: 0\n# name: Easy\n# difficulty: low\n```python\nx = 1\n```\n")
+
+    settings = _settings(examples_dir=temp_dir)
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        assert get_example_difficulty("myagent", 0) == TaskDifficulty.low  # pylint: disable=no-member
+
+
+def test_get_example_difficulty_returns_none_when_missing(examples_dir):
+    """Missing difficulty metadata is not an error."""
+    settings = _settings(examples_dir=examples_dir)
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        assert get_example_difficulty("myagent", 0) is None

@@ -5,7 +5,7 @@
 from statek.executors.example import (
     Example, extract_example, format_example, parse_example, _WARMUP_SEPARATOR,
 )
-from statek.executors.job import Job, JobDef, JobStatus
+from statek.executors.job import Job, JobDef, JobStatus, TaskDifficulty
 from statek.agents.agent import Agent
 from statek.settings import ChatStyle
 from tests.conftest import create_chat_log_item
@@ -46,6 +46,13 @@ def test_metadata_value_with_colon_preserved():
     meta = {"exit_status": "Error: Maximum turns exceeded: 5/5"}
     result = parse_example(_fmt(_example([], ["x = 1", ""], metadata=meta), metadata=True))
     assert result.example_metadata["exit_status"] == "Error: Maximum turns exceeded: 5/5"
+
+
+def test_difficulty_metadata_parsed_as_task_difficulty():
+    """Difficulty metadata is reconstructed as TaskDifficulty."""
+    result = parse_example("# difficulty: high\n```python\nx = 1\n```")
+    assert result.example_metadata["difficulty"] == TaskDifficulty.high
+    assert result.difficulty == TaskDifficulty.high
 
 
 def test_consecutive_code_blocks_yield_empty_console_between():

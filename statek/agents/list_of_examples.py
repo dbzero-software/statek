@@ -16,7 +16,8 @@ from typing import Optional
 from statek.executors.example import load_examples, format_example
 from statek.settings import get_statek_settings
 from statek.system import tool
-from statek.utils import find_locals
+from statek.task_difficulty import TaskDifficulty
+from statek.utils import find_locals, perm_ctx_set
 
 log = logging.getLogger('statek')
 
@@ -46,6 +47,21 @@ def get_example_names(agent_name: str) -> list:
         return []
     examples = load_examples(path)
     return [ex.example_metadata.get("name", "") for ex in examples]
+
+
+def get_example_difficulty(agent_name: str, example_id: int) -> Optional[TaskDifficulty]:
+    """Return a parsed example difficulty for an agent example, if configured."""
+    examples_dir = _get_examples_dir()
+    if not examples_dir:
+        return None
+    path = os.path.join(examples_dir, agent_name)
+    if not os.path.isdir(path):
+        return None
+    examples = load_examples(path)
+    if example_id < 0 or example_id >= len(examples):
+        return None
+
+    return examples[example_id].difficulty
 
 
 @tool(system=True)
@@ -133,6 +149,10 @@ def show_example(agent_name: str, example_id: Optional[int] = None, **kwargs):  
     example = examples[example_id]
     name = example.example_metadata.get("name", "")
     log.debug("#list_of_examples: showing example [%d] %s", example_id, name)
+    try:
+        perm_ctx_set(last_example_id=example_id)
+    except RuntimeError:
+        log.debug("#show_example: persistent context unavailable; last_example_id not stored")
     if settings.xml_box_example:
         print(format_example(example, style, xml_tags={"example": settings.xml_box_example}))
     else:
