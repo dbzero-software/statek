@@ -9,7 +9,6 @@ These tools are registered in the global tool registry via ``@tool(system=True)`
 The wrappers in agent.py resolve agent_name at call time via get_current_agent() and delegate here.
 """
 
-import logging
 import os
 from typing import Optional
 
@@ -19,12 +18,33 @@ from statek.system import tool
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import find_locals, perm_ctx_set
 
-log = logging.getLogger('statek')
-
 
 def _get_examples_dir() -> Optional[str]:
     """Return the examples base directory from StatekSettings, or None if not set."""
     return get_statek_settings().examples_dir
+
+
+def _get_example(agent_name: str, example_id: int, logs: Optional[list[str]] = None):
+    """Return an example by agent/id, optionally collecting user-facing lookup messages."""
+    examples_dir = _get_examples_dir()
+    if not examples_dir:
+        if logs is not None:
+            logs.append("# No examples found")
+        return None
+
+    path = os.path.join(examples_dir, agent_name)
+    if not os.path.isdir(path):
+        if logs is not None:
+            logs.append("# No examples found")
+        return None
+
+    examples = load_examples(path)
+    if example_id < 0 or example_id >= len(examples):
+        if logs is not None:
+            logs.append(f"# Example {example_id} not found (total: {len(examples)})")
+        return None
+
+    return examples[example_id]
 
 
 def get_example_names(agent_name: str) -> list:
@@ -51,17 +71,8 @@ def get_example_names(agent_name: str) -> list:
 
 def get_example_difficulty(agent_name: str, example_id: int) -> Optional[TaskDifficulty]:
     """Return a parsed example difficulty for an agent example, if configured."""
-    examples_dir = _get_examples_dir()
-    if not examples_dir:
-        return None
-    path = os.path.join(examples_dir, agent_name)
-    if not os.path.isdir(path):
-        return None
-    examples = load_examples(path)
-    if example_id < 0 or example_id >= len(examples):
-        return None
-
-    return examples[example_id].difficulty
+    example = _get_example(agent_name, example_id)
+    return example.difficulty if example is not None else None
 
 
 @tool(system=True)
@@ -114,45 +125,26 @@ def show_example(agent_name: str, example_id: Optional[int] = None, **kwargs):  
     if example_id is None:
         defaults = list(find_locals(var_name="default_example_id"))
         if not defaults:
-            log.debug("#show_example: no example_id and no default_example_id in context")
             print("# Example not found")
             return
         try:
             example_id = int(defaults[0])
         except (TypeError, ValueError):
-            log.debug("#show_example: default_example_id=%r not convertible to int",
-                      defaults[0])
             print("# Example not found")
             return
-        log.debug("#show_example: resolved default_example_id=%d", example_id)
-    examples_dir = _get_examples_dir()
-    log.debug("#list_of_examples: show_example examples_dir=%s", examples_dir)
-    if not examples_dir:
-        log.debug("#list_of_examples: no examples_dir configured")
-        print("# No examples found")
-        return
-    path = os.path.join(examples_dir, agent_name)
-    log.debug("#list_of_examples: show_example resolved path=%s", path)
-    if not os.path.isdir(path):
-        log.debug("#list_of_examples: directory does not exist: %s", path)
-        print("# No examples found")
-        return
-    examples = load_examples(path)
-    log.debug("#list_of_examples: loaded %d examples, requested id=%d", len(examples), example_id)
-    if example_id < 0 or example_id >= len(examples):
-        log.debug("#list_of_examples: example_id %d out of range (total: %d)",
-                  example_id, len(examples))
-        print(f"# Example {example_id} not found (total: {len(examples)})")
+    lookup_logs = []
+    example = _get_example(agent_name, example_id, logs=lookup_logs)
+    if example is None:
+        for message in lookup_logs:
+            print(message)
         return
     settings = get_statek_settings()
     style = settings.examples_style or settings.chat_style
-    example = examples[example_id]
     name = example.example_metadata.get("name", "")
-    log.debug("#list_of_examples: showing example [%d] %s", example_id, name)
     try:
         perm_ctx_set(last_example_id=example_id)
     except RuntimeError:
-        log.debug("#show_example: persistent context unavailable; last_example_id not stored")
+        pass
     if settings.xml_box_example:
         print(format_example(example, style, xml_tags={"example": settings.xml_box_example}))
     else:
