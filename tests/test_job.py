@@ -133,7 +133,7 @@ class TestJobDef:
             agent=agent,
             metadata={"MODEL": "H:large,L:small,M:medium"},
         )
-        assert job_def.model == "low:small,medium:medium,high:large"
+        assert job_def.model == "L:small,M:medium,H:large"
 
     def test_system_prompt_delegates_to_agent(self, agent_factory, job_def_factory):
         """system_prompt property delegates to agent.system_prompt with job_params."""
@@ -573,10 +573,8 @@ class TestJobGetChatHistory:
         assert history[0].content == "Podaj grafik"
 
 
-def test_get_current_difficulty_returns_static_metadata_without_changing_last(
-    job_def_factory,
-):
-    """Metadata difficulty is static and does not apply no-downgrade state."""
+def test_get_current_difficulty_returns_static_metadata(job_def_factory):
+    """Metadata difficulty is used when no dynamic difficulty is stored."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "L:small,M:medium,H:large",
@@ -584,10 +582,9 @@ def test_get_current_difficulty_returns_static_metadata_without_changing_last(
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.task_difficulty = TaskDifficulty.high
 
     assert job.get_current_difficulty() == TaskDifficulty.low
-    assert job.task_difficulty == TaskDifficulty.high
+    assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
 def test_get_current_difficulty_returns_static_settings_default(job_def_factory):
@@ -599,11 +596,11 @@ def test_get_current_difficulty_returns_static_settings_default(job_def_factory)
     with patch("statek.executors.job.get_statek_settings", return_value=settings):
         assert job.get_current_difficulty() == TaskDifficulty.high
 
-    assert job.task_difficulty is None
+    assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
-def test_get_current_difficulty_never_downgrades_example_difficulty(job_def_factory):
-    """Example difficulty is dynamic and only raises the stored difficulty."""
+def test_get_current_difficulty_uses_last_dynamic_difficulty(job_def_factory):
+    """Stored dynamic difficulty takes precedence over static defaults."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "L:small,M:medium,H:large",
@@ -611,28 +608,10 @@ def test_get_current_difficulty_never_downgrades_example_difficulty(job_def_fact
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.perm_ctx = {"last_example_id": 0}
+    job._Job__last_difficulty = TaskDifficulty.medium  # pylint: disable=protected-access
 
-    with patch(
-        "statek.agents.list_of_examples.get_example_difficulty",
-        return_value=TaskDifficulty.medium,
-    ):
-        assert job.get_current_difficulty() == TaskDifficulty.medium
-    assert job.task_difficulty == TaskDifficulty.medium
-
-    with patch(
-        "statek.agents.list_of_examples.get_example_difficulty",
-        return_value=TaskDifficulty.low,
-    ):
-        assert job.get_current_difficulty() == TaskDifficulty.medium
-    assert job.task_difficulty == TaskDifficulty.medium
-
-    with patch(
-        "statek.agents.list_of_examples.get_example_difficulty",
-        return_value=TaskDifficulty.high,
-    ):
-        assert job.get_current_difficulty() == TaskDifficulty.high
-    assert job.task_difficulty == TaskDifficulty.high
+    assert job.get_current_difficulty() == TaskDifficulty.medium
+    assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
 
 
 def test_get_current_model_returns_plain_model(job_def_factory):
@@ -641,7 +620,7 @@ def test_get_current_model_returns_plain_model(job_def_factory):
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
 
     assert job.get_current_model() == "test-model"
-    assert job.task_difficulty is None
+    assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
 def test_get_current_model_uses_current_difficulty(job_def_factory):
@@ -655,13 +634,28 @@ def test_get_current_model_uses_current_difficulty(job_def_factory):
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
 
     assert job.get_current_model() == "medium"
-    assert job.task_difficulty == TaskDifficulty.medium
+    assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
-def test_get_current_model_dynamically_upgrades_working_job(
+def test_get_current_model_uses_last_dynamic_difficulty(job_def_factory):
+    """MODEL lookup uses stored dynamic difficulty without changing it."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job._Job__last_difficulty = TaskDifficulty.medium  # pylint: disable=protected-access
+
+    assert job.get_current_model() == "medium"
+    assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
+
+
+def test_get_next_request_uses_last_dynamic_difficulty(
     job_def_factory,
 ):
-    """Dynamic example difficulty upgrades a running job and does not downgrade it."""
+    """Request construction resolves mapped models through stored dynamic difficulty."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "L:small,M:medium,H:large",
@@ -672,37 +666,13 @@ def test_get_current_model_dynamically_upgrades_working_job(
         job_def=job_def,
         job_status=JobStatus.STARTED,  # pylint: disable=no-member
     )
-    job.perm_ctx = {"last_example_id": 0}
+    job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
-    with patch(
-        "statek.agents.list_of_examples.get_example_difficulty",
-        return_value=TaskDifficulty.medium,
-    ):
-        first_request = job.get_next_request()
+    request = job.get_next_request()
 
-    assert first_request["model"] == "medium"
-    assert first_request["metadata"]["MODEL"] == "medium"
-    assert job.task_difficulty == TaskDifficulty.medium
-
-    with patch(
-        "statek.agents.list_of_examples.get_example_difficulty",
-        return_value=TaskDifficulty.low,
-    ):
-        second_request = job.get_next_request()
-
-    assert second_request["model"] == "medium"
-    assert second_request["metadata"]["MODEL"] == "medium"
-    assert job.task_difficulty == TaskDifficulty.medium
-
-    with patch(
-        "statek.agents.list_of_examples.get_example_difficulty",
-        return_value=TaskDifficulty.high,
-    ):
-        third_request = job.get_next_request()
-
-    assert third_request["model"] == "large"
-    assert third_request["metadata"]["MODEL"] == "large"
-    assert job.task_difficulty == TaskDifficulty.high
+    assert request["model"] == "large"
+    assert request["metadata"]["MODEL"] == "large"
+    assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
 
 
 class TestJobGetNextRequest:
@@ -916,7 +886,7 @@ class TestJobGetNextRequest:
 
         request = job.get_next_request()
 
-        assert job.task_difficulty == TaskDifficulty.high
+        assert job._Job__last_difficulty is None  # pylint: disable=protected-access
         assert request["model"] == "large"
         assert request["metadata"]["MODEL"] == "large"
 
@@ -936,39 +906,23 @@ class TestJobGetNextRequest:
         job.job_def.metadata["DEFAULT_DIFFICULTY"] = "low"
         request = job.get_next_request()
 
-        assert job.task_difficulty == TaskDifficulty.low
+        assert job._Job__last_difficulty is None  # pylint: disable=protected-access
         assert request["model"] == "small"
 
-    def test_get_next_request_prefers_last_example_difficulty(
-        self, temp_dir, agent, job_def_factory
-    ):
-        """last_example_id in persistent context selects the example difficulty."""
-        import os  # pylint: disable=import-outside-toplevel
-        from statek.settings import StatekSettings  # pylint: disable=import-outside-toplevel
-
-        agent.role = "myagent"
-        agent_dir = os.path.join(temp_dir, "myagent")
-        os.makedirs(agent_dir)
-        with open(os.path.join(agent_dir, "example-001.md"), "w", encoding="utf-8") as f:
-            f.write("# seq_id: 0\n# name: Hard\n# difficulty: high\n```python\nx = 1\n```\n")
-
+    def test_get_next_request_prefers_last_dynamic_difficulty(self, job_def_factory):
+        """Stored dynamic difficulty selects the concrete model from MODEL mapping."""
         job_def = job_def_factory(
             metadata={
                 "MODEL": "L:small,M:medium,H:large",
                 "DEFAULT_DIFFICULTY": "low",
             }
         )
-        job_def.agent = agent
         job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-        job.perm_ctx = {"last_example_id": 0}
+        job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
-        with patch(
-            "statek.agents.list_of_examples.get_statek_settings",
-            return_value=StatekSettings(examples_dir=temp_dir),
-        ):
-            request = job.get_next_request()
+        request = job.get_next_request()
 
-        assert job.task_difficulty == TaskDifficulty.high
+        assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
         assert request["model"] == "large"
 
     def test_last_response_empty_chat_log(self, job_factory):

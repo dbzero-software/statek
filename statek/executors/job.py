@@ -3,7 +3,7 @@ from datetime import datetime
 import json
 import re
 import traceback as _traceback_module
-from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Tuple, Union
+from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Union
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
@@ -19,7 +19,6 @@ from statek.locale import get_language_rule, get_language_hint
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 from statek.task_difficulty import (
     TaskDifficulty,
-    max_task_difficulty,
     parse_task_difficulty,
     task_difficulty_values,
 )
@@ -127,6 +126,11 @@ def _is_model_mapping(value) -> bool:
     return not isinstance(value, str) and hasattr(value, "items") and hasattr(value, "__getitem__")
 
 
+def _format_task_difficulty_short(difficulty: TaskDifficulty) -> str:
+    """Return the short label used in MODEL metadata."""
+    return str(difficulty)[0].upper()
+
+
 def _warmup_code_text(warmup) -> str:
     """Return the concatenated text of all warmup code blocks."""
     if warmup is None:
@@ -226,7 +230,7 @@ class JobDef:
             if len(models) == 1:
                 return next(iter(models))
             return ",".join(
-                f"{difficulty}:{model[difficulty]}"
+                f"{_format_task_difficulty_short(difficulty)}:{model[difficulty]}"
                 for difficulty in task_difficulty_values()
                 if difficulty in model
             )
@@ -374,8 +378,8 @@ class Job:
         self.total_cost = 0.0
         # Persistent execution context (created on demand by perm_ctx_set)
         self.perm_ctx: Optional[dict] = None
-        # Highest task difficulty selected for this job so far.
-        self.task_difficulty: Optional[TaskDifficulty] = None
+        # The last dynamically-resolved difficulty level in this task.
+        self.__last_difficulty: Optional[TaskDifficulty] = None
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
         # Application-specific external memo references, created lazily.
@@ -927,11 +931,6 @@ class Job:
 
         return request_params
 
-    def _resolve_model(self, metadata: Dict[str, Any]) -> str:
-        """Resolve MODEL metadata to the concrete model for this request."""
-        del metadata
-        return self.get_current_model()
-
     def get_current_model(self) -> str:
         """Return the concrete model configured for the job's current difficulty."""
         metadata = self.job_def.metadata or {}
@@ -940,59 +939,31 @@ class Job:
             return str(model_config) if model_config is not None else None
 
         difficulty = self.get_current_difficulty()
-        self.task_difficulty = difficulty
         return model_config[difficulty]
 
     def get_current_difficulty(self) -> TaskDifficulty:
         """Return the current task difficulty for this job.
 
-        Static sources (job metadata and settings) are returned directly.
-        Dynamic example difficulty never downgrades a previously selected
-        difficulty for the job.
+        The last dynamically-resolved difficulty takes precedence over static
+        sources. Static sources are job metadata and settings.
         """
         metadata = self.job_def.metadata or {}
-        difficulty, is_dynamic = self._resolve_requested_difficulty(metadata)
-        if not is_dynamic:
-            return difficulty
-
-        last_difficulty = getattr(self, "task_difficulty", None)
-        if last_difficulty is None:
-            self.task_difficulty = difficulty
-            return difficulty
-
-        current_difficulty = max_task_difficulty(last_difficulty, difficulty)
-        if current_difficulty != last_difficulty:
-            self.task_difficulty = current_difficulty
-        return current_difficulty
-
-    def _resolve_requested_difficulty(
-        self, metadata: Dict[str, Any]
-    ) -> Tuple[TaskDifficulty, bool]:
-        """Resolve requested task difficulty and whether it came from an example."""
-        difficulty = self._get_last_example_difficulty()
-        if difficulty is not None:
-            return difficulty, True
+        last_difficulty = self._get_last_difficulty()
+        if last_difficulty is not None:
+            return last_difficulty
 
         difficulty = parse_task_difficulty(metadata.get("DEFAULT_DIFFICULTY"))
         if difficulty is not None:
-            return difficulty, False
+            return difficulty
 
-        return parse_task_difficulty(get_statek_settings().default_task_difficulty), False
+        return parse_task_difficulty(get_statek_settings().default_task_difficulty)
 
-    def _get_last_example_difficulty(self) -> Optional[TaskDifficulty]:
-        """Return difficulty for perm_ctx['last_example_id'], if available."""
-        if not self.perm_ctx or "last_example_id" not in self.perm_ctx:
-            return None
-        if self.job_def is None or self.job_def.agent is None:
-            return None
-
-        try:
-            example_id = int(self.perm_ctx["last_example_id"])
-        except (TypeError, ValueError):
-            return None
-
-        from statek.agents.list_of_examples import get_example_difficulty  # pylint: disable=import-outside-toplevel
-        return get_example_difficulty(self.job_def.agent.role, example_id)
+    def _get_last_difficulty(self) -> Optional[TaskDifficulty]:
+        """Return the last dynamically-resolved difficulty, including legacy jobs."""
+        difficulty = getattr(self, "_Job__last_difficulty", None)
+        if difficulty is not None:
+            return difficulty
+        return getattr(self, "task_difficulty", None)
 
     def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
         """
