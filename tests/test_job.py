@@ -602,8 +602,8 @@ def test_get_current_difficulty_returns_static_settings_default(job_def_factory)
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
-def test_get_current_difficulty_uses_last_dynamic_difficulty(job_def_factory):
-    """Stored dynamic difficulty takes precedence over static defaults."""
+def test_get_current_difficulty_static_metadata_ignores_last_dynamic_difficulty(job_def_factory):
+    """Static metadata is returned directly when no example is active."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "L:small,M:medium,H:large",
@@ -613,8 +613,118 @@ def test_get_current_difficulty_uses_last_dynamic_difficulty(job_def_factory):
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
     job._Job__last_difficulty = TaskDifficulty.medium  # pylint: disable=protected-access
 
-    assert job.get_current_difficulty() == TaskDifficulty.medium
+    assert job.get_current_difficulty() == TaskDifficulty.low
     assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
+
+
+def test_get_current_difficulty_uses_example_difficulty(job_def_factory):
+    """Example difficulty is dynamic and is stored as the last resolved difficulty."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 3}
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.high,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.high
+
+    mock_get_example_difficulty.assert_called_once_with("test", 3)
+    assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
+
+
+def test_get_current_difficulty_uses_ambient_perm_ctx_example_id(job_def_factory):
+    """Ambient _PERM_CTX is used when the job PyEnv context does not have the example ID."""
+    _PERM_CTX = {"last_example_id": 8}  # noqa: F841
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.medium,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+
+    mock_get_example_difficulty.assert_called_once_with("test", 8)
+    assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
+
+
+def test_get_current_difficulty_example_does_not_downgrade_last_dynamic(
+    job_def_factory,
+):
+    """Lower example difficulty does not downgrade a previously resolved dynamic value."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 4}
+    job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.low,
+    ):
+        assert job.get_current_difficulty() == TaskDifficulty.high
+
+    assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
+
+
+def test_get_current_difficulty_example_can_upgrade_last_dynamic(
+    job_def_factory,
+):
+    """Higher example difficulty upgrades the stored dynamic value."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 5}
+    job._Job__last_difficulty = TaskDifficulty.low  # pylint: disable=protected-access
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.medium,
+    ):
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+
+    assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
+
+
+def test_get_current_difficulty_missing_example_difficulty_falls_back_to_metadata(
+    job_def_factory,
+):
+    """Missing example difficulty falls through to static metadata."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "medium",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 6}
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=None,
+    ):
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+
+    assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
 def test_get_current_difficulty_ignores_non_job_task_difficulty_attribute(
@@ -657,8 +767,8 @@ def test_get_current_model_uses_current_difficulty(job_def_factory):
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
-def test_get_current_model_uses_last_dynamic_difficulty(job_def_factory):
-    """MODEL lookup uses stored dynamic difficulty without changing it."""
+def test_get_current_model_uses_example_dynamic_difficulty(job_def_factory):
+    """MODEL lookup resolves example difficulty through get_current_difficulty."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "L:small,M:medium,H:large",
@@ -666,16 +776,21 @@ def test_get_current_model_uses_last_dynamic_difficulty(job_def_factory):
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job._Job__last_difficulty = TaskDifficulty.medium  # pylint: disable=protected-access
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
 
-    assert job.get_current_model() == "medium"
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.medium,
+    ):
+        assert job.get_current_model() == "medium"
+
     assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
 
 
 def test_get_next_request_uses_last_dynamic_difficulty(
     job_def_factory,
 ):
-    """Request construction resolves mapped models through stored dynamic difficulty."""
+    """Request construction keeps the dynamic high-water mark for examples."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "L:small,M:medium,H:large",
@@ -686,9 +801,14 @@ def test_get_next_request_uses_last_dynamic_difficulty(
         job_def=job_def,
         job_status=JobStatus.STARTED,  # pylint: disable=no-member
     )
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 2}
     job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
-    request = job.get_next_request()
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.low,
+    ):
+        request = job.get_next_request()
 
     assert request["model"] == "large"
     assert request["metadata"]["MODEL"][TaskDifficulty.high] == "large"
@@ -951,8 +1071,10 @@ class TestJobGetNextRequest:
         assert job._Job__last_difficulty is None  # pylint: disable=protected-access
         assert request["model"] == "small"
 
-    def test_get_next_request_prefers_last_dynamic_difficulty(self, job_def_factory):
-        """Stored dynamic difficulty selects the concrete model from MODEL mapping."""
+    def test_get_next_request_prefers_last_dynamic_difficulty_for_example(
+        self, job_def_factory
+    ):
+        """Example resolution keeps the stored dynamic high-water mark."""
         job_def = job_def_factory(
             metadata={
                 "MODEL": "L:small,M:medium,H:large",
@@ -960,9 +1082,14 @@ class TestJobGetNextRequest:
             }
         )
         job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+        job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 7}
         job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
-        request = job.get_next_request()
+        with patch(
+            "statek.executors.job._get_example_difficulty_for_job",
+            return_value=TaskDifficulty.low,
+        ):
+            request = job.get_next_request()
 
         assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
         assert request["model"] == "large"

@@ -267,6 +267,23 @@ def test_show_example_default_id_sets_last_example_id(capsys, examples_dir):
     assert perm_ctx_get("last_example_id") == 0
 
 
+def test_show_example_syncs_last_example_id_to_current_job(
+    capsys, examples_dir, job_factory
+):
+    """show_example mirrors last_example_id into the current job's PyEnv context."""
+    job = job_factory()
+    _STATEK_CTX = {"job": job}  # noqa: F841
+    settings = _settings(
+        examples_dir=examples_dir,
+        chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
+    )
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        show_example(agent_name="myagent", example_id=0)
+
+    capsys.readouterr()
+    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 0
+
+
 def test_show_example_missing_id_does_not_overwrite_last_example_id(capsys, examples_dir):
     """Failed lookups do not replace the previous successful example trace."""
     _PERM_CTX = {"last_example_id": 7}  # noqa: F841

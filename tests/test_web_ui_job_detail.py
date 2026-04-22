@@ -1266,10 +1266,17 @@ class TestBuildRawRepr:
 
 
 class TestGetJobModel:
-    def test_reads_model_from_job_def(self):
+    def test_reads_current_model_from_job(self):
         job = _make_job()
-        job.job_def.model = 'deepseek/deepseek-v3.2'
+        job.get_current_model = MagicMock(return_value='deepseek/deepseek-v3.2')
+
         assert _get_job_model(job) == 'deepseek/deepseek-v3.2'
+        job.get_current_model.assert_called_once_with()
+
+    def test_blank_current_model_returns_dash(self):
+        job = _make_job()
+        job.get_current_model = MagicMock(return_value=None)
+        assert _get_job_model(job) == '—'
 
     def test_missing_job_def_returns_dash(self):
         job = MagicMock()

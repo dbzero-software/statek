@@ -1180,6 +1180,20 @@ class TestExecStepStatekCtx:
         await exec_step('x = 1', job)
         assert '_STATEK_CTX' not in job.py_env.local_state
 
+    @pytest.mark.asyncio
+    async def test_perm_ctx_created_on_demand_persists_after_exec_step(self, job_factory):
+        """_PERM_CTX is created only when requested and remains in PyEnv locals."""
+        job = job_factory()
+        await exec_step('from statek.utils import perm_ctx_set\nperm_ctx_set(key="value")', job)
+        assert job.py_env.local_state["_PERM_CTX"] == {"key": "value"}
+
+    @pytest.mark.asyncio
+    async def test_perm_ctx_not_persisted_until_created(self, job_factory):
+        """_PERM_CTX is absent from PyEnv locals until a tool creates it."""
+        job = job_factory()
+        await exec_step('x = 1', job)
+        assert '_PERM_CTX' not in job.py_env.local_state
+
 
 # ---------------------------------------------------------------------------
 # Module-level @tool for string-to-name resolution tests.

@@ -3,6 +3,7 @@
 import pytest
 
 from statek.utils import perm_ctx_set, perm_ctx_get
+from statek.utils import register_local_context, unregister_local_context
 
 
 def test_set_and_get():
@@ -51,12 +52,44 @@ def test_set_no_context_creates_on_demand():
     assert perm_ctx_get("x") == 10
 
 
-def test_set_creates_perm_ctx_on_job():
+def test_set_creates_perm_ctx_in_pyenv_local_state():
     job = _FakeJob()
     _STATEK_CTX = {"job": job}  # noqa: F841
-    assert job.perm_ctx is None
+    assert job.py_env.local_state is None
     perm_ctx_set(key="value")
-    assert job.perm_ctx == {"key": "value"}
+    assert job.py_env.local_state["_PERM_CTX"] == {"key": "value"}
+
+
+def test_set_creates_perm_ctx_in_active_local_context():
+    job = _FakeJob()
+    local_context = {}
+    context_id = register_local_context(local_context)
+    try:
+        _STATEK_CTX = {"job": job, "_local_context_id": context_id}  # noqa: F841
+        perm_ctx_set(key="value")
+        assert local_context["_PERM_CTX"] == {"key": "value"}
+        assert job.py_env.local_state is None
+    finally:
+        unregister_local_context(context_id)
+
+
+def test_set_sync_mirrors_active_local_context_to_pyenv_local_state():
+    job = _FakeJob()
+    local_context = {}
+    context_id = register_local_context(local_context)
+    try:
+        _STATEK_CTX = {"job": job, "_local_context_id": context_id}  # noqa: F841
+        perm_ctx_set(sync=True, key="value")
+        assert local_context["_PERM_CTX"] == {"key": "value"}
+        assert job.py_env.local_state["_PERM_CTX"] == {"key": "value"}
+    finally:
+        unregister_local_context(context_id)
+
+
+def test_set_sync_updates_local_context_without_current_job():
+    _PERM_CTX = {}  # noqa: F841
+    perm_ctx_set(sync=True, key="value")
+    assert perm_ctx_get("key") == "value"
 
 
 def test_get_wrong_arg_count():
@@ -68,5 +101,19 @@ def test_get_wrong_arg_count():
 
 
 class _FakeJob:
-    """Minimal stub with _perm_ctx attribute for on-demand creation tests."""
-    perm_ctx = None
+    """Minimal stub with PyEnv local state for on-demand creation tests."""
+
+    class _FakePyEnv:
+        local_state = None
+
+        @property
+        def perm_ctx(self):
+            return None if self.local_state is None else self.local_state.get("_PERM_CTX")
+
+        def update_locals(self, **kwargs):
+            if self.local_state is None:
+                self.local_state = {}
+            self.local_state.update(kwargs)
+
+    def __init__(self):
+        self.py_env = self._FakePyEnv()

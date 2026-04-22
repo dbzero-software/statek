@@ -31,6 +31,8 @@ from statek.utils import (
     get_current_job,
     get_current_agent,
     parse_dialog,
+    register_local_context,
+    unregister_local_context,
     strip_markup
 )
 
@@ -234,27 +236,29 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['_fmt_fstring_arg'] = _fmt_print_arg
 
     # Inject _STATEK_CTX with job-level context (agent, job, etc.)
+    local_context_id = register_local_context(local_context)
     statek_ctx = {}
     statek_ctx['job'] = job
+    statek_ctx['_local_context_id'] = local_context_id
     if job.job_def.agent is not None:
         statek_ctx['agent'] = job.job_def.agent
     local_context['_STATEK_CTX'] = statek_ctx
     global_context['_STATEK_CTX'] = statek_ctx
 
-    # Inject _PERM_CTX if it was previously created on the job
-    if job.perm_ctx is not None:
-        local_context['_PERM_CTX'] = job.perm_ctx
-        global_context['_PERM_CTX'] = job.perm_ctx
+    # Make an existing persistent context visible to injected tools.
+    if '_PERM_CTX' in local_context:
+        global_context['_PERM_CTX'] = local_context['_PERM_CTX']
 
     try:
         yield custom_print_fn, custom_exit_fn
     finally:
+        unregister_local_context(local_context_id)
         # Restore original built-ins
         builtins.print = original_print
         builtins.exit = original_exit
 
         # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX', '_PERM_CTX']:
+        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX']:
             if key in local_context:
                 del local_context[key]
 

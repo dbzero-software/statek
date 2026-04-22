@@ -15,6 +15,7 @@ from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Tuple, T
 import dbzero as db0
 
 logger = logging.getLogger(__name__)
+_ACTIVE_LOCAL_CONTEXTS: Dict[int, dict] = {}
 
 if TYPE_CHECKING:
     from statek.llm_api import CallParams
@@ -770,6 +771,26 @@ def _get_statek_ctx() -> Optional[dict]:
     return ctx
 
 
+def register_local_context(local_context: dict) -> int:
+    """Register an active execution locals dict and return its lookup key."""
+    context_id = id(local_context)
+    _ACTIVE_LOCAL_CONTEXTS[context_id] = local_context
+    return context_id
+
+
+def unregister_local_context(context_id: int) -> None:
+    """Remove an active execution locals dict from the lookup registry."""
+    _ACTIVE_LOCAL_CONTEXTS.pop(context_id, None)
+
+
+def _get_active_local_context(statek_ctx: dict) -> Optional[dict]:
+    """Return the mutable locals dict for an active execution context."""
+    context_id = statek_ctx.get("_local_context_id")
+    if context_id is None:
+        return None
+    return _ACTIVE_LOCAL_CONTEXTS.get(context_id)
+
+
 def statek_ctx_set(**kwargs) -> None:
     """Set or update variables in the current agent's execution context.
 
@@ -823,33 +844,57 @@ def _get_perm_ctx() -> Optional[dict]:
     return ctx
 
 
-def perm_ctx_set(**kwargs) -> None:
+def _sync_perm_ctx_to_job(statek_ctx: Optional[dict], values: dict) -> None:
+    """Mirror persistent context values into the current job's PyEnv context."""
+    if statek_ctx is None or 'job' not in statek_ctx:
+        return
+    py_env = statek_ctx['job'].py_env
+    if py_env.local_state is None:
+        py_env.local_state = {}
+    ctx = py_env.local_state.setdefault("_PERM_CTX", {})
+    ctx.update(values)
+
+
+def perm_ctx_set(sync: bool = False, **kwargs) -> None:
     """Set or update variables in the persistent execution context.
 
     If _PERM_CTX already exists in the call stack it is updated directly.
-    Otherwise the function creates _PERM_CTX on the current job (obtained
-    from _STATEK_CTX) so it persists across steps.
+    Otherwise the function creates _PERM_CTX in the current job's PyEnv local
+    state so it persists across steps.
 
     Args:
+        sync: Also mirror values into the current job's PyEnv _PERM_CTX
+            immediately when a current job is available.
         **kwargs: key-value pairs to set in _PERM_CTX.
 
     Raises:
         RuntimeError: if neither _PERM_CTX nor _STATEK_CTX with a job is
             found in the call stack.
     """
+    statek_ctx = _get_statek_ctx()
     ctx = _get_perm_ctx()
     if ctx is not None:
         ctx.update(kwargs)
+        if sync:
+            _sync_perm_ctx_to_job(statek_ctx, kwargs)
         return
 
     # Create on demand via the job from _STATEK_CTX
-    statek_ctx = _get_statek_ctx()
     if statek_ctx is None or 'job' not in statek_ctx:
         raise RuntimeError("_PERM_CTX not found and no job in execution context")
-    job = statek_ctx['job']
-    if job.perm_ctx is None:
-        job.perm_ctx = {}
-    job.perm_ctx.update(kwargs)
+    local_context = _get_active_local_context(statek_ctx)
+    if isinstance(local_context, dict):
+        ctx = local_context.setdefault("_PERM_CTX", {})
+        ctx.update(kwargs)
+        if sync:
+            _sync_perm_ctx_to_job(statek_ctx, kwargs)
+        return
+
+    py_env = statek_ctx['job'].py_env
+    if py_env.local_state is None:
+        py_env.local_state = {}
+    ctx = py_env.local_state.setdefault("_PERM_CTX", {})
+    ctx.update(kwargs)
 
 
 def perm_ctx_get(*key_and_default) -> Any:
@@ -873,10 +918,14 @@ def perm_ctx_get(*key_and_default) -> Any:
 
     ctx = _get_perm_ctx()
     if ctx is None:
-        # Fall back to job.perm_ctx via _STATEK_CTX
+        # Fall back to the job's PyEnv local state via _STATEK_CTX.
         statek_ctx = _get_statek_ctx()
         if statek_ctx is not None and 'job' in statek_ctx:
-            ctx = statek_ctx['job'].perm_ctx
+            local_context = _get_active_local_context(statek_ctx)
+            if isinstance(local_context, dict):
+                ctx = local_context.get("_PERM_CTX")
+            if ctx is None:
+                ctx = statek_ctx['job'].py_env.perm_ctx
 
     if ctx is None:
         if has_default:
