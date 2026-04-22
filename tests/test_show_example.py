@@ -7,12 +7,12 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from tests.conftest import StatekContextJob, run_with_statek_job
 from statek.agents.agent import Agent
 from statek.agents.list_of_examples import get_example_difficulty, show_example
 from statek.executors.example import load_examples
 from statek.executors.job import TaskDifficulty
 from statek.settings import StatekSettings, ChatStyle, get_statek_settings
-from statek.utils import perm_ctx_get
 
 
 EXAMPLE_MD = """\
@@ -53,6 +53,10 @@ def _settings(**kwargs) -> StatekSettings:
     return StatekSettings(**kwargs)
 
 
+def _show_example_with_job(job, **kwargs):
+    return run_with_statek_job(job, lambda: show_example(**kwargs))
+
+
 # --- StatekSettings.examples_style ---
 
 def test_examples_style_defaults_to_none():
@@ -82,8 +86,9 @@ def test_show_example_uses_chat_style_when_examples_style_not_set(capsys, exampl
         examples_dir=examples_dir,
         chat_style=ChatStyle.MARKDOWN,  # pylint: disable=no-member
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     out = capsys.readouterr().out
     assert "```python" in out
@@ -96,8 +101,9 @@ def test_show_example_uses_examples_style_over_chat_style(capsys, examples_dir):
         chat_style=ChatStyle.MARKDOWN,    # pylint: disable=no-member
         examples_style=ChatStyle.CONSOLE, # pylint: disable=no-member
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     out = capsys.readouterr().out
     assert "```python" not in out   # CONSOLE style has no fences
@@ -112,8 +118,9 @@ def test_show_example_without_boxing_prints_prefix_and_suffix(capsys, examples_d
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     out = capsys.readouterr().out
     lines = out.splitlines()
@@ -127,8 +134,9 @@ def test_show_example_prefix_contains_example_name(capsys, examples_dir):
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     out = capsys.readouterr().out
     assert "Dispatching to new thread" in out.splitlines()[0]
@@ -143,8 +151,9 @@ def test_show_example_with_boxing_wraps_in_xml_tag(capsys, examples_dir):
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
         xml_box_example="EXAMPLE",
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     out = capsys.readouterr().out
     lines = out.splitlines()
@@ -159,8 +168,9 @@ def test_show_example_with_boxing_has_no_comment_prefix_or_suffix(capsys, exampl
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
         xml_box_example="EXAMPLE",
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     out = capsys.readouterr().out
     assert "# --- EXAMPLE:" not in out
@@ -175,9 +185,10 @@ def test_show_example_none_id_uses_default_example_id_from_local_context(capsys,
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
         default_example_id = 0  # noqa: F841  # pylint: disable=unused-variable
-        show_example(agent_name="myagent", example_id=None)
+        _show_example_with_job(job, agent_name="myagent", example_id=None)
 
     out = capsys.readouterr().out
     assert "Dispatching to new thread" in out
@@ -202,9 +213,10 @@ def test_show_example_none_id_string_default_is_converted_to_int(capsys, example
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
+    job = StatekContextJob()
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
         default_example_id = "0"  # noqa: F841  # pylint: disable=unused-variable
-        show_example(agent_name="myagent", example_id=None)
+        _show_example_with_job(job, agent_name="myagent", example_id=None)
 
     out = capsys.readouterr().out
     assert "Dispatching to new thread" in out
@@ -240,31 +252,31 @@ def test_show_example_none_id_invalid_default_prints_not_found(capsys, examples_
 
 def test_show_example_sets_last_example_id(capsys, examples_dir):
     """Successful show_example stores the selected example ID in persistent context."""
-    _PERM_CTX = {}  # noqa: F841
+    job = StatekContextJob()
     settings = _settings(
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     capsys.readouterr()
-    assert perm_ctx_get("last_example_id") == 0
+    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 0
 
 
 def test_show_example_default_id_sets_last_example_id(capsys, examples_dir):
     """When default_example_id is used, the resolved ID is stored as last_example_id."""
-    _PERM_CTX = {}  # noqa: F841
+    job = StatekContextJob()
     settings = _settings(
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
         default_example_id = "0"  # noqa: F841  # pylint: disable=unused-variable
-        show_example(agent_name="myagent", example_id=None)
+        _show_example_with_job(job, agent_name="myagent", example_id=None)
 
     capsys.readouterr()
-    assert perm_ctx_get("last_example_id") == 0
+    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 0
 
 
 def test_show_example_syncs_last_example_id_to_current_job(
@@ -286,16 +298,17 @@ def test_show_example_syncs_last_example_id_to_current_job(
 
 def test_show_example_missing_id_does_not_overwrite_last_example_id(capsys, examples_dir):
     """Failed lookups do not replace the previous successful example trace."""
-    _PERM_CTX = {"last_example_id": 7}  # noqa: F841
+    job = StatekContextJob()
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 7}
     settings = _settings(
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=99)
+        _show_example_with_job(job, agent_name="myagent", example_id=99)
 
     capsys.readouterr()
-    assert perm_ctx_get("last_example_id") == 7
+    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 7
 
 
 # --- Agent.get_examples ---

@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from tests.conftest import StatekContextJob, run_with_statek_job
 from statek.document import load_documents
 from statek.agents.list_of_documents import list_of_documents as _impl
 
@@ -56,8 +57,8 @@ def test_list_topics(docs_dir, capsys):
 
 def test_list_documents_in_topic(docs_dir, capsys):
     """Specifying topic lists documents within it."""
-    _PERM_CTX = {}  # noqa: F841
-    _impl("agent_a", docs_dir, topic=0)
+    job = StatekContextJob()
+    run_with_statek_job(job, lambda: _impl("agent_a", docs_dir, topic=0))
     out = capsys.readouterr().out
     assert "Overview" in out
     assert "Details" in out
@@ -65,8 +66,8 @@ def test_list_documents_in_topic(docs_dir, capsys):
 
 def test_list_documents_filters_by_audience(docs_dir, capsys):
     """Documents not matching audience are excluded."""
-    _PERM_CTX = {}  # noqa: F841
-    _impl("agent_b", docs_dir, topic="Preferences")
+    job = StatekContextJob()
+    run_with_statek_job(job, lambda: _impl("agent_b", docs_dir, topic="Preferences"))
     out = capsys.readouterr().out
     assert "Overview" in out
     assert "Details" not in out
@@ -74,10 +75,9 @@ def test_list_documents_filters_by_audience(docs_dir, capsys):
 
 def test_list_documents_sets_last_topic_id(docs_dir):
     """Accessing a topic stores its ID in _PERM_CTX."""
-    _PERM_CTX = {}  # noqa: F841
-    _impl("agent_a", docs_dir, topic=0)
-    from statek.utils import perm_ctx_get  # pylint: disable=import-outside-toplevel
-    assert perm_ctx_get("last_topic_id") == 0
+    job = StatekContextJob()
+    run_with_statek_job(job, lambda: _impl("agent_a", docs_dir, topic=0))
+    assert job.py_env.local_state["_PERM_CTX"]["last_topic_id"] == 0
 
 
 def test_list_topics_respects_limit(docs_dir, capsys):

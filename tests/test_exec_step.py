@@ -1194,6 +1194,18 @@ class TestExecStepStatekCtx:
         await exec_step('x = 1', job)
         assert '_PERM_CTX' not in job.py_env.local_state
 
+    @pytest.mark.asyncio
+    async def test_exec_step_preserves_job_local_state_added_during_execution(self, job_factory):
+        """Direct job local-state writes are not dropped by execution-local writeback."""
+        job = job_factory()
+        await exec_step(
+            '_STATEK_CTX["job"].py_env.local_state["external"] = "keep"\n'
+            'x = 1',
+            job,
+        )
+        assert job.py_env.local_state["external"] == "keep"
+        assert job.py_env.local_state["x"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Module-level @tool for string-to-name resolution tests.

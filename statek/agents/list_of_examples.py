@@ -142,7 +142,7 @@ def show_example(agent_name: str, example_id: Optional[int] = None, **kwargs):  
     style = settings.examples_style or settings.chat_style
     name = example.example_metadata.get("name", "")
     try:
-        perm_ctx_set(sync=True, last_example_id=example_id)
+        perm_ctx_set(last_example_id=example_id)
     except RuntimeError:
         pass
     if settings.xml_box_example:

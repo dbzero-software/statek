@@ -13,7 +13,8 @@ from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
                           strip_markup, extract_dialog,
                           parse_warmup_block, build_warmup_code,
-                          parse_tool_log, _STATEK_TOOL_MARKER, perm_ctx_get)
+                          parse_tool_log, _STATEK_TOOL_MARKER, get_current_job,
+                          perm_ctx_get)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.settings import get_statek_settings, ChatStyle, statek_log
@@ -968,10 +969,12 @@ class Job:
             # return from the permanent context if available
             return perm_ctx["last_example_id"]
         
-        # return from the non-persistend permanent context
-        result = perm_ctx_get("last_example_id", None)
-        if result is not None:
-            return result
+        # Return from the non-persistent current context only when this job is
+        # the registered execution job.
+        if get_current_job() is self:
+            result = perm_ctx_get("last_example_id", None)
+            if result is not None:
+                return result
         
         # finally, try resolving from the default_example_id in the local state
         local_state = self.py_env.local_state or {}

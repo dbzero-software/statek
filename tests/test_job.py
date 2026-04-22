@@ -24,6 +24,12 @@ from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.utils import CodeBlock, CallSpec
 
 
+def _run_with_current_job(job, func):
+    """Run func while job is visible via _STATEK_CTX."""
+    _STATEK_CTX = {"job": job}  # noqa: F841
+    return func()
+
+
 @db0.memo
 class JobExtRefThing:
     """Memo object used by Job external-reference tests."""
@@ -586,7 +592,7 @@ def test_get_current_difficulty_returns_static_metadata(job_def_factory):
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
 
-    assert job.get_current_difficulty() == TaskDifficulty.low
+    assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.low
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
@@ -597,7 +603,7 @@ def test_get_current_difficulty_returns_static_settings_default(job_def_factory)
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
 
     with patch("statek.executors.job.get_statek_settings", return_value=settings):
-        assert job.get_current_difficulty() == TaskDifficulty.high
+        assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.high
 
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
@@ -623,9 +629,8 @@ def test_get_current_difficulty_uses_example_difficulty(job_def_factory):
     assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
 
 
-def test_get_current_difficulty_uses_ambient_perm_ctx_example_id(job_def_factory):
-    """Ambient _PERM_CTX is used when the job PyEnv context does not have the example ID."""
-    _PERM_CTX = {"last_example_id": 8}  # noqa: F841
+def test_get_current_difficulty_uses_registered_job_perm_ctx_example_id(job_def_factory):
+    """The registered job's PyEnv context supplies the last example ID."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "L:small,M:medium,H:large",
@@ -633,12 +638,13 @@ def test_get_current_difficulty_uses_ambient_perm_ctx_example_id(job_def_factory
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 8}
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
         return_value=TaskDifficulty.medium,
     ) as mock_get_example_difficulty:
-        assert job.get_current_difficulty() == TaskDifficulty.medium
+        assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.medium
 
     mock_get_example_difficulty.assert_called_once_with("test", 8)
     assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
@@ -726,7 +732,7 @@ def test_get_current_difficulty_ignores_non_job_task_difficulty_attribute(
     job.task_difficulty = TaskDifficulty.high
 
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
-    assert job.get_current_difficulty() == TaskDifficulty.low
+    assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.low
 
 
 def test_get_current_model_returns_plain_model(job_def_factory):
@@ -748,7 +754,7 @@ def test_get_current_model_uses_current_difficulty(job_def_factory):
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
 
-    assert job.get_current_model() == "medium"
+    assert _run_with_current_job(job, job.get_current_model) == "medium"
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
@@ -793,7 +799,7 @@ def test_get_next_request_uses_last_dynamic_difficulty(
         "statek.executors.job._get_example_difficulty_for_job",
         return_value=TaskDifficulty.low,
     ):
-        request = job.get_next_request()
+        request = _run_with_current_job(job, job.get_next_request)
 
     assert request["model"] == "large"
     assert request["metadata"]["MODEL"][TaskDifficulty.high] == "large"
@@ -813,7 +819,7 @@ def test_get_next_request_does_not_rewrite_model_metadata(job_def_factory):
     original_model_metadata = dict(job_def.metadata["MODEL"])
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
 
-    request = job.get_next_request()
+    request = _run_with_current_job(job, job.get_next_request)
 
     assert request["model"] == "large"
     assert request["metadata"]["MODEL"] == original_model_metadata
@@ -1048,10 +1054,10 @@ class TestJobGetNextRequest:
             }
         )
         job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-        assert job.get_next_request()["model"] == "large"
+        assert _run_with_current_job(job, job.get_next_request)["model"] == "large"
 
         job.job_def.metadata["DEFAULT_DIFFICULTY"] = "low"
-        request = job.get_next_request()
+        request = _run_with_current_job(job, job.get_next_request)
 
         assert job._Job__last_difficulty is None  # pylint: disable=protected-access
         assert request["model"] == "small"

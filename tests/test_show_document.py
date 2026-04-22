@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from tests.conftest import StatekContextJob, run_with_statek_job
 from statek.document import load_documents
 from statek.agents.list_of_documents import show_document
 
@@ -39,30 +40,37 @@ def docs_dir(temp_dir):
 
 
 def test_show_document_by_id(docs_dir, capsys):
-    _PERM_CTX = {}  # noqa: F841
-    show_document("agent_a", docs_dir, key=0, topic="Guide")
+    job = StatekContextJob()
+    run_with_statek_job(job, lambda: show_document("agent_a", docs_dir, key=0, topic="Guide"))
     out = capsys.readouterr().out
     assert "Line 0" in out
 
 
 def test_show_document_by_title_fragment(docs_dir, capsys):
-    _PERM_CTX = {}  # noqa: F841
-    show_document("agent_a", docs_dir, key="Full", topic="Guide")
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: show_document("agent_a", docs_dir, key="Full", topic="Guide"),
+    )
     out = capsys.readouterr().out
     assert "Line 0" in out
 
 
 def test_show_document_uses_last_topic_id(docs_dir, capsys):
     """Falls back to last_topic_id when topic is not specified."""
-    _PERM_CTX = {"last_topic_id": 0}  # noqa: F841
-    show_document("agent_a", docs_dir, key=0)
+    job = StatekContextJob()
+    job.py_env.local_state["_PERM_CTX"] = {"last_topic_id": 0}
+    run_with_statek_job(job, lambda: show_document("agent_a", docs_dir, key=0))
     out = capsys.readouterr().out
     assert "Line 0" in out
 
 
 def test_show_document_limit_and_start(docs_dir, capsys):
-    _PERM_CTX = {}  # noqa: F841
-    show_document("agent_a", docs_dir, key=0, topic="Guide", start_from=5, limit=3)
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: show_document("agent_a", docs_dir, key=0, topic="Guide", start_from=5, limit=3),
+    )
     out = capsys.readouterr().out
     assert "Line 5" in out
     assert "Line 7" in out
@@ -70,24 +78,30 @@ def test_show_document_limit_and_start(docs_dir, capsys):
 
 
 def test_show_document_no_topic_no_last_raises(docs_dir):
-    _PERM_CTX = {}  # noqa: F841
+    job = StatekContextJob()
     with pytest.raises(ValueError, match="topic"):
-        show_document("agent_a", docs_dir, key=0)
+        run_with_statek_job(job, lambda: show_document("agent_a", docs_dir, key=0))
 
 
 def test_show_document_fuzzy_match(docs_dir, capsys):
     """Fuzzy match finds a document when key is close to the title (>=90%)."""
-    _PERM_CTX = {}  # noqa: F841
+    job = StatekContextJob()
     # "Ful Guide" is close enough to "Full Guide"
-    show_document("agent_a", docs_dir, key="Ful Guide", topic="Guide")
+    run_with_statek_job(
+        job,
+        lambda: show_document("agent_a", docs_dir, key="Ful Guide", topic="Guide"),
+    )
     out = capsys.readouterr().out
     assert "Line 0" in out
 
 
 def test_show_document_fuzzy_match_below_threshold(docs_dir, capsys):
     """Fuzzy match rejects keys below 90% similarity."""
-    _PERM_CTX = {}  # noqa: F841
-    show_document("agent_a", docs_dir, key="Xyz Abc", topic="Guide")
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: show_document("agent_a", docs_dir, key="Xyz Abc", topic="Guide"),
+    )
     out = capsys.readouterr().out
     assert "not found" in out
 

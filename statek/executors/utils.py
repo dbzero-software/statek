@@ -31,8 +31,6 @@ from statek.utils import (
     get_current_job,
     get_current_agent,
     parse_dialog,
-    register_local_context,
-    unregister_local_context,
     strip_markup
 )
 
@@ -235,11 +233,8 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['_wrap_param'] = _wrap_param
     global_context['_fmt_fstring_arg'] = _fmt_print_arg
 
-    # Inject _STATEK_CTX with job-level context (agent, job, etc.)
-    local_context_id = register_local_context(local_context)
     statek_ctx = {}
-    statek_ctx['job'] = job
-    statek_ctx['_local_context_id'] = local_context_id
+    statek_ctx['job'] = job    
     if job.job_def.agent is not None:
         statek_ctx['agent'] = job.job_def.agent
     local_context['_STATEK_CTX'] = statek_ctx
@@ -251,8 +246,7 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
 
     try:
         yield custom_print_fn, custom_exit_fn
-    finally:
-        unregister_local_context(local_context_id)
+    finally:        
         # Restore original built-ins
         builtins.print = original_print
         builtins.exit = original_exit
@@ -282,6 +276,26 @@ def _is_empty_code(code_str: Optional[str]) -> bool:
                 and isinstance(node.value.value, str)):
             return False
     return True
+
+
+def _value_changed(before, after) -> bool:
+    """Return whether an executed local binding should be written back."""
+    if before is after:
+        return False
+    try:
+        return before != after
+    except Exception:  # pylint: disable=broad-except
+        return True
+
+
+def _merge_modified_locals(job: Job, local_context: dict, initial_context: dict) -> None:
+    """Merge changed execution locals without discarding job-owned state."""
+    if job.py_env.local_state is None:
+        job.py_env.local_state = {}
+
+    for key, value in local_context.items():
+        if key not in initial_context or _value_changed(initial_context[key], value):
+            job.py_env.local_state[key] = value
 
 
 def _exec_code_body(code_str: str, job: Job, global_context: dict,
@@ -441,6 +455,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
         global_context = {key: value for key, value in job.py_env.global_state.items()}
     if local_context is None:
         local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+    initial_context = dict(local_context)
 
     try:
         _exec_code_body(
@@ -450,7 +465,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
             instr_num=instr_num,
         )
     finally:
-        job.py_env.local_state = local_context
+        _merge_modified_locals(job, local_context, initial_context)
 
     return job.py_env.exit_status is None
 
@@ -481,6 +496,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         global_context = {key: value for key, value in job.py_env.global_state.items()}
     if local_context is None:
         local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+    initial_context = dict(local_context)
 
     def cli_print(*args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
@@ -495,7 +511,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
             instr_num=instr_num,
         )
     finally:
-        job.py_env.local_state = local_context
+        _merge_modified_locals(job, local_context, initial_context)
 
     return job.py_env.exit_status is not None
 
