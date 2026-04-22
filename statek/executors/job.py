@@ -962,55 +962,57 @@ class Job:
         difficulty = self.get_current_difficulty()
         return model_config[difficulty]
 
+    def _get_last_example_id(self) -> Optional[int]:
+        perm_ctx = self.py_env.perm_ctx or {}
+        if "last_example_id" in perm_ctx:
+            # return from the permanent context if available
+            return perm_ctx["last_example_id"]
+        
+        # return from the non-persistend permanent context
+        result = perm_ctx_get("last_example_id", None)
+        if result is not None:
+            return result
+        
+        # finally, try resolving from the default_example_id in the local state
+        local_state = self.py_env.local_state or {}
+        if "default_example_id" in local_state:
+            return local_state["default_example_id"]        
+        return None
+    
     def get_current_difficulty(self) -> TaskDifficulty:
         """Return the current task difficulty for this job.
 
         Resolution checks the last shown example first, then static job
         metadata, then settings. Example difficulty is dynamic: it updates the
         stored value only when it would keep or raise the current difficulty.
-        """
+        """        
+        last_example_id = self._get_last_example_id()
+
+        if last_example_id is not None:            
+            agent = self.job_def.agent if self.job_def is not None else None
+            agent_name = agent.role if agent is not None else None
+            difficulty = _get_example_difficulty_for_job(agent_name, last_example_id)
+            # update the dynamically resolved difficulty                 
+            if difficulty is not None:
+                if self.__last_difficulty is None:
+                    self.__last_difficulty = difficulty
+                else:
+                    max_difficulty = max_task_difficulty(self.__last_difficulty, difficulty)
+                    # only update if changed
+                    if self.__last_difficulty != max_difficulty:
+                        self.__last_difficulty = max_difficulty                    
+
+        if self.__last_difficulty is not None:
+            return self.__last_difficulty
+        
         metadata = self.job_def.metadata or {}
-        perm_ctx = self.py_env.perm_ctx or {}
-
-        has_last_example_id = "last_example_id" in perm_ctx
-        raw_example_id = None
-        if has_last_example_id:
-            raw_example_id = perm_ctx["last_example_id"]
-        else:
-            missing = object()
-            raw_example_id = perm_ctx_get("last_example_id", missing)
-            has_last_example_id = raw_example_id is not missing
-
-        if has_last_example_id:
-            try:
-                example_id = int(raw_example_id)
-            except (TypeError, ValueError):
-                example_id = None
-
-            has_valid_example_id = example_id is not None
-            if has_valid_example_id:
-                agent = self.job_def.agent if self.job_def is not None else None
-                agent_name = agent.role if agent is not None else None
-                difficulty = _get_example_difficulty_for_job(agent_name, example_id)
-                has_example_difficulty = difficulty is not None
-                if has_example_difficulty:
-                    if self.__last_difficulty is None:
-                        self.__last_difficulty = difficulty
-                    else:
-                        self.__last_difficulty = max_task_difficulty(
-                            self.__last_difficulty,
-                            difficulty,
-                        )
-                    return self.__last_difficulty
-
         default_difficulty_value = metadata.get("DEFAULT_DIFFICULTY")
         difficulty = parse_task_difficulty(default_difficulty_value)
         if difficulty is not None:
             return difficulty
 
-        settings = get_statek_settings()
-        settings_difficulty_value = settings.statek_default_difficulty
-        return parse_task_difficulty(settings_difficulty_value)
+        # Fallback to the global default difficulty
+        return parse_task_difficulty(get_statek_settings().statek_default_difficulty)
 
     def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
         """

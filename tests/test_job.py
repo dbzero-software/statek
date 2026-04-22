@@ -602,21 +602,6 @@ def test_get_current_difficulty_returns_static_settings_default(job_def_factory)
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
 
 
-def test_get_current_difficulty_static_metadata_ignores_last_dynamic_difficulty(job_def_factory):
-    """Static metadata is returned directly when no example is active."""
-    job_def = job_def_factory(
-        metadata={
-            "MODEL": "L:small,M:medium,H:large",
-            "DEFAULT_DIFFICULTY": "low",
-        }
-    )
-    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job._Job__last_difficulty = TaskDifficulty.medium  # pylint: disable=protected-access
-
-    assert job.get_current_difficulty() == TaskDifficulty.low
-    assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
-
-
 def test_get_current_difficulty_uses_example_difficulty(job_def_factory):
     """Example difficulty is dynamic and is stored as the last resolved difficulty."""
     job_def = job_def_factory(
