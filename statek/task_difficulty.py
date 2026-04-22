@@ -1,6 +1,6 @@
 """Task difficulty helpers for model selection."""
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import dbzero as db0
 
@@ -9,12 +9,6 @@ import dbzero as db0
 class TaskDifficulty:
     pass
 
-
-TASK_DIFFICULTY_ORDER = [
-    TaskDifficulty.low,  # pylint: disable=no-member
-    TaskDifficulty.medium,  # pylint: disable=no-member
-    TaskDifficulty.high,  # pylint: disable=no-member
-]
 
 _TASK_DIFFICULTY_BY_LABEL = {
     "L": TaskDifficulty.low,  # pylint: disable=no-member
@@ -26,6 +20,14 @@ _TASK_DIFFICULTY_BY_LABEL = {
 }
 
 
+def task_difficulty_values() -> Tuple[TaskDifficulty, ...]:
+    """Return difficulty values in enum order."""
+    try:
+        return tuple(getattr(TaskDifficulty, "values")())
+    except RuntimeError:
+        return tuple(dict.fromkeys(_TASK_DIFFICULTY_BY_LABEL.values()))
+
+
 def parse_task_difficulty(value) -> Optional[TaskDifficulty]:
     """Parse a difficulty label into ``TaskDifficulty``.
 
@@ -34,7 +36,7 @@ def parse_task_difficulty(value) -> Optional[TaskDifficulty]:
     """
     if value is None:
         return None
-    if value in TASK_DIFFICULTY_ORDER:
+    if value in task_difficulty_values():
         return value
     label = str(value).strip().upper()
     try:
@@ -45,8 +47,5 @@ def parse_task_difficulty(value) -> Optional[TaskDifficulty]:
 
 def max_task_difficulty(left: TaskDifficulty, right: TaskDifficulty) -> TaskDifficulty:
     """Return the higher of two task difficulty values."""
-    return (
-        left
-        if TASK_DIFFICULTY_ORDER.index(left) >= TASK_DIFFICULTY_ORDER.index(right)
-        else right
-    )
+    values = task_difficulty_values()
+    return left if values.index(left) >= values.index(right) else right

@@ -18,10 +18,10 @@ from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 from statek.task_difficulty import (
-    TASK_DIFFICULTY_ORDER,
     TaskDifficulty,
     max_task_difficulty,
     parse_task_difficulty,
+    task_difficulty_values,
 )
 
 """
@@ -114,7 +114,7 @@ def parse_model_metadata(input: str) -> Union[str, Dict[TaskDifficulty, str]]:
                 raise ValueError(f"Duplicate MODEL metadata for difficulty {difficulty}")
             result[difficulty] = model
 
-    missing = [difficulty for difficulty in TASK_DIFFICULTY_ORDER if difficulty not in result]
+    missing = [difficulty for difficulty in task_difficulty_values() if difficulty not in result]
     if missing:
         raise ValueError(
             "MODEL metadata must specify all difficulty levels when using difficulty labels"
@@ -227,7 +227,7 @@ class JobDef:
                 return next(iter(models))
             return ",".join(
                 f"{difficulty}:{model[difficulty]}"
-                for difficulty in TASK_DIFFICULTY_ORDER
+                for difficulty in task_difficulty_values()
                 if difficulty in model
             )
         return str(model) if model is not None else None

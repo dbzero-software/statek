@@ -127,6 +127,14 @@ class TestJobDef:
             TaskDifficulty.high: "gpt-5.4",
         }
 
+    def test_job_def_model_formats_difficulty_mapping_in_enum_order(self, agent):
+        """Difficulty mappings are formatted in enum order."""
+        job_def = JobDef(
+            agent=agent,
+            metadata={"MODEL": "H:large,L:small,M:medium"},
+        )
+        assert job_def.model == "low:small,medium:medium,high:large"
+
     def test_system_prompt_delegates_to_agent(self, agent_factory, job_def_factory):
         """system_prompt property delegates to agent.system_prompt with job_params."""
         agent = agent_factory(system_prompt="You are a {role} assistant")
