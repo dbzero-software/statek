@@ -20,7 +20,6 @@ from statek.settings import get_statek_settings, ChatStyle, statek_log
 from statek.task_difficulty import (
     TaskDifficulty,
     parse_task_difficulty,
-    task_difficulty_values,
 )
 
 """
@@ -113,7 +112,7 @@ def parse_model_metadata(input: str) -> Union[str, Dict[TaskDifficulty, str]]:
                 raise ValueError(f"Duplicate MODEL metadata for difficulty {difficulty}")
             result[difficulty] = model
 
-    missing = [difficulty for difficulty in task_difficulty_values() if difficulty not in result]
+    missing = [difficulty for difficulty in TaskDifficulty.values() if difficulty not in result]
     if missing:
         raise ValueError(
             "MODEL metadata must specify all difficulty levels when using difficulty labels"
@@ -231,7 +230,7 @@ class JobDef:
                 return next(iter(models))
             return ",".join(
                 f"{_format_task_difficulty_short(difficulty)}:{model[difficulty]}"
-                for difficulty in task_difficulty_values()
+                for difficulty in TaskDifficulty.values()
                 if difficulty in model
             )
         return str(model) if model is not None else None
@@ -898,7 +897,6 @@ class Job:
         """
         metadata = dict(self.job_def.metadata or {})
         model = LLM_API.require_model(self.get_current_model())
-        metadata["MODEL"] = model
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
         system_prompt = self.job_def.system_prompt
@@ -948,22 +946,14 @@ class Job:
         sources. Static sources are job metadata and settings.
         """
         metadata = self.job_def.metadata or {}
-        last_difficulty = self._get_last_difficulty()
-        if last_difficulty is not None:
-            return last_difficulty
+        if self.__last_difficulty is not None:
+            return self.__last_difficulty
 
         difficulty = parse_task_difficulty(metadata.get("DEFAULT_DIFFICULTY"))
         if difficulty is not None:
             return difficulty
 
-        return parse_task_difficulty(get_statek_settings().default_task_difficulty)
-
-    def _get_last_difficulty(self) -> Optional[TaskDifficulty]:
-        """Return the last dynamically-resolved difficulty, including legacy jobs."""
-        difficulty = getattr(self, "_Job__last_difficulty", None)
-        if difficulty is not None:
-            return difficulty
-        return getattr(self, "task_difficulty", None)
+        return parse_task_difficulty(get_statek_settings().statek_default_difficulty)
 
     def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
         """

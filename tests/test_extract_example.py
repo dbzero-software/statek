@@ -2,6 +2,8 @@
 
 # pylint: disable=no-member
 
+import pytest
+
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.example import Example, extract_example, format_example
 from statek.executors.job import Job, JobStatus, JobDef, TaskDifficulty
@@ -64,6 +66,7 @@ class TestExtractExampleMetadata:
         result = extract_example(job_factory(), "x")
         assert isinstance(result, Example)
 
+    @pytest.mark.usefixtures("db0_fixture")
     def test_difficulty_property_returns_parsed_metadata(self):
         example = Example(
             example_metadata={"difficulty": "medium"},

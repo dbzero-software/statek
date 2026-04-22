@@ -2,6 +2,8 @@
 
 # pylint: disable=no-member
 
+import pytest
+
 from statek.executors.example import (
     Example, extract_example, format_example, parse_example, _WARMUP_SEPARATOR,
 )
@@ -48,6 +50,7 @@ def test_metadata_value_with_colon_preserved():
     assert result.example_metadata["exit_status"] == "Error: Maximum turns exceeded: 5/5"
 
 
+@pytest.mark.usefixtures("db0_fixture")
 def test_difficulty_metadata_parsed_as_task_difficulty():
     """Difficulty metadata is reconstructed as TaskDifficulty."""
     result = parse_example("# difficulty: high\n```python\nx = 1\n```")

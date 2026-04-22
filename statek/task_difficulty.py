@@ -1,6 +1,6 @@
 """Task difficulty helpers for model selection."""
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import dbzero as db0
 
@@ -20,14 +20,6 @@ _TASK_DIFFICULTY_BY_LABEL = {
 }
 
 
-def task_difficulty_values() -> Tuple[TaskDifficulty, ...]:
-    """Return difficulty values in enum order."""
-    try:
-        return tuple(getattr(TaskDifficulty, "values")())
-    except RuntimeError:
-        return tuple(dict.fromkeys(_TASK_DIFFICULTY_BY_LABEL.values()))
-
-
 def parse_task_difficulty(value) -> Optional[TaskDifficulty]:
     """Parse a difficulty label into ``TaskDifficulty``.
 
@@ -36,7 +28,7 @@ def parse_task_difficulty(value) -> Optional[TaskDifficulty]:
     """
     if value is None:
         return None
-    if value in task_difficulty_values():
+    if value in TaskDifficulty.values():  # pylint: disable=no-member
         return value
     label = str(value).strip().upper()
     try:
@@ -47,5 +39,5 @@ def parse_task_difficulty(value) -> Optional[TaskDifficulty]:
 
 def max_task_difficulty(left: TaskDifficulty, right: TaskDifficulty) -> TaskDifficulty:
     """Return the higher of two task difficulty values."""
-    values = task_difficulty_values()
+    values = tuple(TaskDifficulty.values())  # pylint: disable=no-member
     return left if values.index(left) >= values.index(right) else right

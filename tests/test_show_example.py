@@ -352,6 +352,7 @@ def test_get_examples_single_example(examples_dir):
     assert result == ["Dispatching to new thread"]
 
 
+@pytest.mark.usefixtures("db0_fixture")
 def test_get_example_difficulty_reads_example_metadata(temp_dir):
     """Example difficulty is parsed from example metadata by example ID."""
     agent_dir = os.path.join(temp_dir, "myagent")

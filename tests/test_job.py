@@ -96,6 +96,7 @@ class TestJobDef:
         """A model without difficulty labels is returned unchanged."""
         assert parse_model_metadata("gpt-5.4-mini") == "gpt-5.4-mini"
 
+    @pytest.mark.usefixtures("db0_fixture")
     def test_parse_model_metadata_returns_complete_difficulty_mapping(self):
         """Combined labels populate every TaskDifficulty exactly once."""
         result = parse_model_metadata("L:gpt-5.4-nano,MH:gpt-5.4-mini")
@@ -105,11 +106,13 @@ class TestJobDef:
             TaskDifficulty.high: "gpt-5.4-mini",
         }
 
+    @pytest.mark.usefixtures("db0_fixture")
     def test_parse_model_metadata_rejects_partial_difficulty_mapping(self):
         """Either all difficulty levels or no labels must be configured."""
         with pytest.raises(ValueError, match="all difficulty levels"):
             parse_model_metadata("L:gpt-5.4-nano,H:gpt-5.4")
 
+    @pytest.mark.usefixtures("db0_fixture")
     def test_parse_model_metadata_rejects_duplicate_difficulty(self):
         """A difficulty level cannot be assigned twice."""
         with pytest.raises(ValueError, match="Duplicate"):
@@ -589,7 +592,7 @@ def test_get_current_difficulty_returns_static_metadata(job_def_factory):
 
 def test_get_current_difficulty_returns_static_settings_default(job_def_factory):
     """Settings default is static when metadata does not define difficulty."""
-    settings = MagicMock(default_task_difficulty="high")
+    settings = MagicMock(statek_default_difficulty="H")
     job_def = job_def_factory(metadata={"MODEL": "L:small,M:medium,H:large"})
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
 
@@ -612,6 +615,23 @@ def test_get_current_difficulty_uses_last_dynamic_difficulty(job_def_factory):
 
     assert job.get_current_difficulty() == TaskDifficulty.medium
     assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
+
+
+def test_get_current_difficulty_ignores_non_job_task_difficulty_attribute(
+    job_def_factory,
+):
+    """Job difficulty state is only stored in __last_difficulty."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.task_difficulty = TaskDifficulty.high
+
+    assert job._Job__last_difficulty is None  # pylint: disable=protected-access
+    assert job.get_current_difficulty() == TaskDifficulty.low
 
 
 def test_get_current_model_returns_plain_model(job_def_factory):
@@ -671,8 +691,28 @@ def test_get_next_request_uses_last_dynamic_difficulty(
     request = job.get_next_request()
 
     assert request["model"] == "large"
-    assert request["metadata"]["MODEL"] == "large"
+    assert request["metadata"]["MODEL"][TaskDifficulty.high] == "large"
+    assert request["metadata"]["MODEL"][TaskDifficulty.low] == "small"
+    assert request["metadata"]["MODEL"][TaskDifficulty.medium] == "medium"
     assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
+
+
+def test_get_next_request_does_not_rewrite_model_metadata(job_def_factory):
+    """Request construction leaves MODEL metadata as the JobDef snapshot."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "high",
+        }
+    )
+    original_model_metadata = dict(job_def.metadata["MODEL"])
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    request = job.get_next_request()
+
+    assert request["model"] == "large"
+    assert request["metadata"]["MODEL"] == original_model_metadata
+    assert job_def.metadata["MODEL"] == original_model_metadata
 
 
 class TestJobGetNextRequest:
@@ -888,7 +928,9 @@ class TestJobGetNextRequest:
 
         assert job._Job__last_difficulty is None  # pylint: disable=protected-access
         assert request["model"] == "large"
-        assert request["metadata"]["MODEL"] == "large"
+        assert request["metadata"]["MODEL"][TaskDifficulty.high] == "large"
+        assert request["metadata"]["MODEL"][TaskDifficulty.low] == "small"
+        assert request["metadata"]["MODEL"][TaskDifficulty.medium] == "medium"
 
     def test_get_next_request_allows_static_default_difficulty_downgrade(
         self, job_def_factory
