@@ -1100,7 +1100,7 @@ class TestRunJobStepCliToolCalls:
 
     @pytest.mark.asyncio
     async def test_cli_tool_output_stored_in_console(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli tool call output is pushed to py_env.console, not tool_log."""
+        """python_cli output lands in console AND in tool_log aligned with tool_calls."""
         cs = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-hello")'})
         warmup_blocks = [CodeBlock(code='x = 1', tool_calls=[cs]), 'exit("ok")']
         agent = Agent(
@@ -1115,13 +1115,12 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        # CLI output lands in console
         assert any("cli-hello" in line for line in job.py_env.console)
-        # tool_log is not populated by python_cli
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) == 1
-        assert warmup_items[0].tool_log is None
+        tool_log = warmup_items[0].tool_log
+        assert len(tool_log) == 1 and tool_log[0] == "cli-hello"
 
     @pytest.mark.asyncio
     async def test_regular_tool_executed_cli_tool_not_via_exec_tool(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1155,7 +1154,7 @@ class TestRunJobStepCliToolCalls:
 
     @pytest.mark.asyncio
     async def test_mixed_tool_results_regular_in_tool_log_cli_in_console(self, db0_fixture):  # pylint: disable=unused-argument
-        """Regular tool result stored in tool_log; CLI output goes to console only."""
+        """tool_log entries align with the full tool_calls order — regular + CLI."""
         cs_regular = CallSpec(id="R-001", func_name="my_tool", args=[], kwargs={})
         cs_cli = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-out")'})
         warmup_code = [CodeBlock(code='x = 1', tool_calls=[cs_regular, cs_cli]), 'exit("ok")']
@@ -1175,16 +1174,17 @@ class TestRunJobStepCliToolCalls:
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) == 1
-        # Only regular tool result in tool_log
         tool_log = warmup_items[0].tool_log
-        assert isinstance(tool_log, str)
-        assert 'regular_out' in tool_log
-        # CLI output in console
+        # Aligned with tool_calls order: [regular, cli].
+        assert len(tool_log) == 2
+        assert 'regular_out' in tool_log[0]
+        assert tool_log[1] == "cli-out"
+        # CLI output still lands in console (advances console_pos between turns).
         assert any("cli-out" in line for line in job.py_env.console)
 
     @pytest.mark.asyncio
     async def test_cli_error_output_stored_in_console(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli error output is pushed to console, not tool_log."""
+        """python_cli error output lands in both console and tool_log."""
         cs = CallSpec(id="C-001", func_name="python_cli",
                       kwargs={"code": '1 / 0'})
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
@@ -1200,19 +1200,19 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        # Error output lands in console
         assert any("ZeroDivisionError" in line for line in job.py_env.console)
-        # tool_log not populated
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) >= 1
-        assert warmup_items[0].tool_log is None
+        tool_log = warmup_items[0].tool_log
+        assert len(tool_log) == 1
+        assert "ZeroDivisionError" in tool_log[0]
 
     @pytest.mark.asyncio
     async def test_cli_no_output_leaves_tool_log_none(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli with no output does not populate tool_log or console."""
+        """python_cli with no output still produces an empty tool_log entry."""
         cs = CallSpec(id="C-001", func_name="python_cli",
-                      kwargs={"code": 'x = None\nx'})
+                      kwargs={"code": 'x = 1'})
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
         agent = Agent(
             role="cli_none",
@@ -1229,7 +1229,10 @@ class TestRunJobStepCliToolCalls:
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) >= 1
-        assert warmup_items[0].tool_log is None
+        # Empty-output CLI call still reserves its slot — get_tool_result(0)
+        # must return an empty string, not raise IndexError.
+        tool_log = warmup_items[0].tool_log
+        assert len(tool_log) == 1 and tool_log[0] == ""
 
     @pytest.mark.asyncio
     async def test_cli_future_error_stores_tuple_instr_num(self, db0_fixture):  # pylint: disable=unused-argument

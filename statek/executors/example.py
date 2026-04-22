@@ -2,11 +2,12 @@ import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job
 from statek.settings import ChatStyle
+from statek.task_difficulty import TaskDifficulty, parse_task_difficulty
 
 # Separator inserted between the warmup section and the example section in the
 # formatted output so that parse_example can correctly reconstruct both lists.
@@ -20,6 +21,17 @@ class Example:
     """Items starting from python code blocks interleaved with console blocks"""
     warmup_items: List[str]
     example_items: List[str]
+
+    @property
+    def difficulty(self) -> Optional[TaskDifficulty]:
+        """Return the example difficulty from metadata, if configured."""
+        value = (
+            self.example_metadata.get("difficulty")
+            or self.example_metadata.get("DIFFICULTY")
+            or self.example_metadata.get("TASK_DIFFICULTY")
+            or self.example_metadata.get("task_difficulty")
+        )
+        return parse_task_difficulty(value)
 
 
 def extract_example(job: Job, name: str) -> Example:
@@ -192,7 +204,7 @@ def parse_example(example_md: str) -> Example:
             meta_part = line[2:]  # strip leading '# '
             key, sep, value = meta_part.partition(': ')
             if sep:
-                metadata[key] = _parse_metadata_value(value)
+                metadata[key] = _parse_metadata_value(key, value)
                 continue  # strip metadata line from content
         kept_lines.append(line)
 
@@ -255,8 +267,10 @@ def load_examples(path: str) -> List[Example]:
     return examples
 
 
-def _parse_metadata_value(value: str):
-    """Convert a metadata string value to int if possible, else return as str."""
+def _parse_metadata_value(key: str, value: str):
+    """Convert a metadata string value to a richer type when supported."""
+    if key.upper() in ("DIFFICULTY", "TASK_DIFFICULTY"):
+        return parse_task_difficulty(value)
     try:
         return int(value)
     except ValueError:

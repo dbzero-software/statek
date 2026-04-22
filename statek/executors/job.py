@@ -13,10 +13,16 @@ from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
                           strip_markup, extract_dialog,
                           parse_warmup_block, build_warmup_code,
-                          parse_tool_log, _STATEK_TOOL_MARKER)
+                          parse_tool_log, _STATEK_TOOL_MARKER, get_current_job,
+                          perm_ctx_get)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.settings import get_statek_settings, ChatStyle, statek_log
+from statek.task_difficulty import (
+    TaskDifficulty,
+    max_task_difficulty,
+    parse_task_difficulty,
+)
 
 """
 READY: a fresh job instance ready for execution
@@ -66,6 +72,79 @@ def parse_warmup_code(
 
     parsed_blocks = [parse_warmup_block(block) for block in raw_blocks]
     return build_warmup_code(parsed_blocks)
+
+
+def parse_model_metadata(input: str) -> Union[str, Dict[TaskDifficulty, str]]:
+    """Parse MODEL metadata into a plain model or a difficulty mapping.
+
+    Supported forms:
+      - ``gpt-5.4-mini``
+      - ``L:gpt-5.4-nano,MH:gpt-5.4-mini``
+      - ``LM:gpt-5.4-mini,H:gpt-5.4``
+
+    If any difficulty labels are used, all three levels must be specified
+    exactly once.
+    """
+    if input is None:
+        raise ValueError("MODEL metadata must be provided")
+
+    value = str(input).strip()
+    if not value:
+        raise ValueError("MODEL metadata must not be empty")
+
+    if ":" not in value:
+        return value
+
+    result: Dict[TaskDifficulty, str] = {}
+    for part in value.split(","):
+        labels, sep, model = part.partition(":")
+        if not sep:
+            raise ValueError(
+                "MODEL metadata must use either a single model or difficulty labels for all entries"
+            )
+
+        labels = labels.strip().upper()
+        model = model.strip()
+        if not labels or not model:
+            raise ValueError("MODEL metadata difficulty labels and model names must be non-empty")
+
+        for label in labels:
+            difficulty = parse_task_difficulty(label)
+            if difficulty in result:
+                raise ValueError(f"Duplicate MODEL metadata for difficulty {difficulty}")
+            result[difficulty] = model
+
+    missing = [difficulty for difficulty in TaskDifficulty.values() if difficulty not in result]
+    if missing:
+        raise ValueError(
+            "MODEL metadata must specify all difficulty levels when using difficulty labels"
+        )
+    return result
+
+
+def _is_model_mapping(value) -> bool:
+    """Return whether value behaves like a difficulty-to-model mapping."""
+    return not isinstance(value, str) and hasattr(value, "items") and hasattr(value, "__getitem__")
+
+
+def _format_task_difficulty_short(difficulty: TaskDifficulty) -> str:
+    """Return the short label used in MODEL metadata."""
+    return str(difficulty)[0].upper()
+
+
+def _get_example_difficulty_for_job(
+    agent_name: Optional[str],
+    example_id: int,
+) -> Optional[TaskDifficulty]:
+    """Return the configured difficulty for an agent example."""
+    if agent_name is None:
+        return None
+
+    from statek.agents.list_of_examples import (  # pylint: disable=import-outside-toplevel
+        get_example_difficulty,
+    )
+
+    return get_example_difficulty(agent_name, example_id)
 
 
 def _warmup_code_text(warmup) -> str:
@@ -154,12 +233,23 @@ class JobDef:
             raise ValueError(
                 f"JobDef for agent '{role}' requires metadata field 'MODEL'"
             )
+        if not _is_model_mapping(metadata_model):
+            self.metadata["MODEL"] = parse_model_metadata(metadata_model)
 
     @property
     def model(self) -> Optional[str]:
         """Return the frozen model configured for this job definition."""
         metadata = self.metadata or {}
         model = metadata.get('MODEL')
+        if _is_model_mapping(model):
+            models = {value for _, value in model.items()}
+            if len(models) == 1:
+                return next(iter(models))
+            return ",".join(
+                f"{_format_task_difficulty_short(difficulty)}:{model[difficulty]}"
+                for difficulty in TaskDifficulty.values()
+                if difficulty in model
+            )
         return str(model) if model is not None else None
 
     @property
@@ -302,8 +392,8 @@ class Job:
         self.total_bytes_received = 0
         # Total cost as reported by the LLM API provider
         self.total_cost = 0.0
-        # Persistent execution context (created on demand by perm_ctx_set)
-        self.perm_ctx: Optional[dict] = None
+        # The last dynamically-resolved difficulty level in this task.
+        self.__last_difficulty: Optional[TaskDifficulty] = None
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
         # Application-specific external memo references, created lazily.
@@ -785,6 +875,15 @@ class Job:
                             content_src=ContentSource.CONSOLE,
                             tool_calls=cs,
                         )
+                    # python_cli output already travelled via tool_log /
+                    # TOOL items above — the console slice that also
+                    # received it (for console_pos advancement) would only
+                    # duplicate it as a USER message.  Skip that dump and
+                    # any push_log yielding for this block.
+                    from_pos = item.console_pos
+                    to_pos = end_positions[idx]
+                    yield from _yield_pushes(from_pos, to_pos)
+                    continue
                 elif block_code:
                     yield ChatHistoryItem(
                         role=ChatRole.ASSISTANT,
@@ -821,7 +920,7 @@ class Job:
             ``temperature``, and ``enable_reasoning``.
         """
         metadata = dict(self.job_def.metadata or {})
-        model = LLM_API.require_model(metadata.get("MODEL"))
+        model = LLM_API.require_model(self.get_current_model())
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
         system_prompt = self.job_def.system_prompt
@@ -853,6 +952,70 @@ class Job:
             request_params["chat_style"] = chat_style
 
         return request_params
+
+    def get_current_model(self) -> str:
+        """Return the concrete model configured for the job's current difficulty."""
+        metadata = self.job_def.metadata or {}
+        model_config = metadata.get("MODEL")
+        if not _is_model_mapping(model_config):
+            return str(model_config) if model_config is not None else None
+
+        difficulty = self.get_current_difficulty()
+        return model_config[difficulty]
+
+    def _get_last_example_id(self) -> Optional[int]:
+        perm_ctx = self.py_env.perm_ctx or {}
+        if "last_example_id" in perm_ctx:
+            # return from the permanent context if available
+            return perm_ctx["last_example_id"]
+        
+        # Return from the non-persistent current context only when this job is
+        # the registered execution job.
+        if get_current_job() is self:
+            result = perm_ctx_get("last_example_id", None)
+            if result is not None:
+                return result
+        
+        # finally, try resolving from the default_example_id in the local state
+        local_state = self.py_env.local_state or {}
+        if "default_example_id" in local_state:
+            return local_state["default_example_id"]        
+        return None
+    
+    def get_current_difficulty(self) -> TaskDifficulty:
+        """Return the current task difficulty for this job.
+
+        Resolution checks the last shown example first, then static job
+        metadata, then settings. Example difficulty is dynamic: it updates the
+        stored value only when it would keep or raise the current difficulty.
+        """        
+        last_example_id = self._get_last_example_id()
+
+        if last_example_id is not None:            
+            agent = self.job_def.agent if self.job_def is not None else None
+            agent_name = agent.role if agent is not None else None
+            difficulty = _get_example_difficulty_for_job(agent_name, last_example_id)
+            # update the dynamically resolved difficulty                 
+            if difficulty is not None:
+                if self.__last_difficulty is None:
+                    self.__last_difficulty = difficulty
+                else:
+                    max_difficulty = max_task_difficulty(self.__last_difficulty, difficulty)
+                    # only update if changed
+                    if self.__last_difficulty != max_difficulty:
+                        self.__last_difficulty = max_difficulty                    
+
+        if self.__last_difficulty is not None:
+            return self.__last_difficulty
+        
+        metadata = self.job_def.metadata or {}
+        default_difficulty_value = metadata.get("DEFAULT_DIFFICULTY")
+        difficulty = parse_task_difficulty(default_difficulty_value)
+        if difficulty is not None:
+            return difficulty
+
+        # Fallback to the global default difficulty
+        return parse_task_difficulty(get_statek_settings().statek_default_difficulty)
 
     def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
         """

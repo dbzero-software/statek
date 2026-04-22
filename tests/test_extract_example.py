@@ -2,9 +2,11 @@
 
 # pylint: disable=no-member
 
+import pytest
+
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.example import Example, extract_example, format_example
-from statek.executors.job import Job, JobStatus, JobDef
+from statek.executors.job import Job, JobStatus, JobDef, TaskDifficulty
 from statek.agents.agent import Agent
 from statek.settings import ChatStyle
 
@@ -63,6 +65,26 @@ class TestExtractExampleMetadata:
     def test_returns_example_instance(self, job_factory):
         result = extract_example(job_factory(), "x")
         assert isinstance(result, Example)
+
+    @pytest.mark.usefixtures("db0_fixture")
+    def test_difficulty_property_returns_parsed_metadata(self):
+        example = Example(
+            example_metadata={"difficulty": "medium"},
+            warmup_items=[],
+            example_items=[],
+        )
+        assert example.difficulty == TaskDifficulty.medium
+
+    def test_difficulty_property_returns_none_when_missing(self):
+        example = Example(example_metadata={}, warmup_items=[], example_items=[])
+        assert example.difficulty is None
+
+    def test_extract_example_does_not_include_job_last_difficulty(self, job_factory):
+        job = job_factory()
+        job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
+        result = extract_example(job, "x")
+        assert "difficulty" not in result.example_metadata
+        assert result.difficulty is None
 
 
 class TestExtractWarmupItems:

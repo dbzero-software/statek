@@ -76,6 +76,8 @@ class StatekSettings(BaseSettings):
     statek_rpc_host: Optional[str] = None
     """Port for the STATEK RPC server"""
     statek_rpc_port: Optional[int] = None
+    """Default task difficulty used when neither example nor job metadata specifies one."""
+    statek_default_difficulty: str = "M"
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -146,6 +148,10 @@ class StatekSettings(BaseSettings):
         env_val = os.environ.get('STATEK_RPC_PORT')
         if env_val is not None and 'statek_rpc_port' not in data:
             self.statek_rpc_port = int(env_val)
+
+        env_val = os.environ.get('STATEK_DEFAULT_DIFFICULTY')
+        if env_val is not None and 'statek_default_difficulty' not in data:
+            self.statek_default_difficulty = env_val
 
         if not self.prompt_defs:
             self.prompt_defs = (

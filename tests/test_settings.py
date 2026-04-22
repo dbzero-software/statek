@@ -198,3 +198,20 @@ def test_default_acl_loaded_from_environment_variable():
     acl = settings.default_acl
     assert isinstance(acl, Statek_ACL)
     assert acl.acl == [ACL_Item(access=True, name="", is_prefix=True, scope=[])]
+
+
+def test_statek_default_difficulty_defaults_to_medium_short_label():
+    """The settings default difficulty uses the short medium label by default."""
+    settings = StatekSettings()
+    assert settings.statek_default_difficulty == "M"
+
+
+def test_statek_default_difficulty_loaded_from_environment_variable():
+    """STATEK_DEFAULT_DIFFICULTY configures the settings default difficulty."""
+    os.environ['STATEK_DEFAULT_DIFFICULTY'] = 'H'
+    try:
+        settings = StatekSettings()
+    finally:
+        del os.environ['STATEK_DEFAULT_DIFFICULTY']
+
+    assert settings.statek_default_difficulty == "H"

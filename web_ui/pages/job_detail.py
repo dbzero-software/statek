@@ -156,11 +156,11 @@ def _get_locale_str(job) -> str:
 
 
 def _get_job_model(job) -> str:
-    """Return the frozen job model from the job definition, or an empty fallback."""
+    """Return the concrete model for the job's current difficulty."""
     try:
         if not job.job_def:
             return '—'
-        model = job.job_def.model
+        model = job.get_current_model()
         return str(model) if model else '—'
     except Exception:  # pylint: disable=broad-except
         return '—'

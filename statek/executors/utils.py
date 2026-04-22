@@ -233,28 +233,26 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['_wrap_param'] = _wrap_param
     global_context['_fmt_fstring_arg'] = _fmt_print_arg
 
-    # Inject _STATEK_CTX with job-level context (agent, job, etc.)
     statek_ctx = {}
-    statek_ctx['job'] = job
+    statek_ctx['job'] = job    
     if job.job_def.agent is not None:
         statek_ctx['agent'] = job.job_def.agent
     local_context['_STATEK_CTX'] = statek_ctx
     global_context['_STATEK_CTX'] = statek_ctx
 
-    # Inject _PERM_CTX if it was previously created on the job
-    if job.perm_ctx is not None:
-        local_context['_PERM_CTX'] = job.perm_ctx
-        global_context['_PERM_CTX'] = job.perm_ctx
+    # Make an existing persistent context visible to injected tools.
+    if '_PERM_CTX' in local_context:
+        global_context['_PERM_CTX'] = local_context['_PERM_CTX']
 
     try:
         yield custom_print_fn, custom_exit_fn
-    finally:
+    finally:        
         # Restore original built-ins
         builtins.print = original_print
         builtins.exit = original_exit
 
         # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX', '_PERM_CTX']:
+        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX']:
             if key in local_context:
                 del local_context[key]
 
@@ -278,6 +276,23 @@ def _is_empty_code(code_str: Optional[str]) -> bool:
                 and isinstance(node.value.value, str)):
             return False
     return True
+
+
+def _value_changed(before, after) -> bool:
+    """Return whether an executed local binding should be written back."""
+    if before is after:
+        return False
+    try:
+        return before != after
+    except Exception:  # pylint: disable=broad-except
+        return True
+
+
+def _copy_modified_locals(current_locals: dict, job_locals: dict) -> None:
+    """Copy locals from then current execution step into job persistent locals without dropping keys"""
+    for key, value in current_locals.items():
+        if key not in job_locals or _value_changed(job_locals[key], value):
+            job_locals[key] = value
 
 
 def _exec_code_body(code_str: str, job: Job, global_context: dict,
@@ -437,6 +452,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
         global_context = {key: value for key, value in job.py_env.global_state.items()}
     if local_context is None:
         local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+    initial_context = dict(local_context)
 
     try:
         _exec_code_body(
@@ -446,7 +462,9 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
             instr_num=instr_num,
         )
     finally:
-        job.py_env.local_state = local_context
+        if job.py_env.local_state is None:
+            job.py_env.local_state = {}        
+        _copy_modified_locals(local_context, job.py_env.local_state)
 
     return job.py_env.exit_status is None
 
@@ -476,7 +494,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
     else:
         global_context = {key: value for key, value in job.py_env.global_state.items()}
     if local_context is None:
-        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}    
 
     def cli_print(*args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
@@ -491,7 +509,9 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
             instr_num=instr_num,
         )
     finally:
-        job.py_env.local_state = local_context
+        if job.py_env.local_state is None:
+            job.py_env.local_state = {}
+        _copy_modified_locals(local_context, job.py_env.local_state)
 
     return job.py_env.exit_status is not None
 
@@ -826,16 +846,22 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         last_chat_log_item = job.chat_log[-1] if job.chat_log else None
 
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
-            regular_calls = code.get_regular_tool_calls()
-            if regular_calls:
-                for call_spec in regular_calls:
-                    result, error = await exec_tool(call_spec, job, local_context=dict(local_context))
-                    if last_chat_log_item is not None:
-                        if error is not None:
-                            last_chat_log_item.push_tool_result(ToolError(err_message=error))
-                        else:
-                            last_chat_log_item.push_tool_result(result)
-                    job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
+            # Pre-allocate tool_log slots aligned 1-to-1 with the full
+            # tool_calls order so both regular (Step 5) and python_cli
+            # (Step 6 finally) results can be written directly at their
+            # correct index.  Default slot value "" keeps get_tool_result(j)
+            # well-defined even if a call is skipped.
+            if last_chat_log_item is not None:
+                last_chat_log_item.tool_log = ["" for _ in code.tool_calls]
+            for j, call_spec in enumerate(code.tool_calls):
+                if call_spec.func_name == "python_cli":
+                    continue  # CLI calls are executed and logged in Step 6
+                result, error = await exec_tool(call_spec, job, local_context=dict(local_context))
+                if last_chat_log_item is not None:
+                    last_chat_log_item.tool_log[j] = (
+                        ToolError(err_message=error) if error is not None else result
+                    )
+                job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
 
         # Step 6: Execute code and CLI tool calls using exec_all_steps
         cli_outputs = {}  # cli_idx -> list of output lines
@@ -872,15 +898,27 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Non-warmup exception: already printed to console by exec_step
             pass
         finally:
-            # Push CLI output to job console (batched at end of step).
-            # Must run even on exception so the console position advances
-            # between LLM turns, preventing console_pos collisions.
+            # Push CLI output to job console (batched at end of step) and
+            # write each CLI call's joined output into its pre-allocated
+            # tool_log slot.  Must run even on exception so the console
+            # position advances between LLM turns, preventing console_pos
+            # collisions.
             cli_calls = code_block.get_cli_tool_calls()
             if cli_calls:
+                cli_tool_log_positions = [
+                    j for j, cs in enumerate(code_block.tool_calls or [])
+                    if cs.func_name == "python_cli"
+                ]
                 for cli_idx in range(len(cli_calls)):
                     joined = "\n".join(cli_outputs.get(cli_idx, []))
                     if joined:
                         job.py_env.console_append(joined)
+                    if (last_chat_log_item is not None
+                            and last_chat_log_item.tool_log is not None
+                            and cli_idx < len(cli_tool_log_positions)):
+                        j = cli_tool_log_positions[cli_idx]
+                        if j < len(last_chat_log_item.tool_log):
+                            last_chat_log_item.tool_log[j] = joined
 
 
         # Step 6 & 7: Check if code has finished (exit_status not None)

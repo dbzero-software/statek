@@ -31,3 +31,17 @@ class TestPyEnv:  # pylint: disable=too-few-public-methods
         env.update_locals(answer=42)
 
         assert env.local_state == {"answer": 42}
+
+    def test_perm_ctx_returns_existing_context(self, db0_fixture):  # pylint: disable=unused-argument
+        """perm_ctx exposes _PERM_CTX from local_state."""
+        ctx = {"last_example_id": 1}
+        env = PyEnv(local_state={"_PERM_CTX": ctx})
+
+        assert env.perm_ctx == ctx
+
+    def test_perm_ctx_returns_none_when_missing(self, db0_fixture):  # pylint: disable=unused-argument
+        """perm_ctx is read-only and does not create _PERM_CTX."""
+        env = PyEnv(local_state={})
+
+        assert env.perm_ctx is None
+        assert "_PERM_CTX" not in env.local_state

@@ -237,6 +237,27 @@ def set_warmup_positions(job, positions):
     job.chat_log = warmup_items + job.chat_log
 
 
+class StatekContextJob:
+    """Minimal job object for tests that only need PyEnv-backed context."""
+
+    class _PyEnv:
+        def __init__(self):
+            self.local_state = {}
+
+        @property
+        def perm_ctx(self):
+            return self.local_state.get("_PERM_CTX")
+
+    def __init__(self):
+        self.py_env = self._PyEnv()
+
+
+def run_with_statek_job(job, func):
+    """Run func while job is registered in _STATEK_CTX on the call stack."""
+    _STATEK_CTX = {"job": job}  # noqa: F841
+    return func()
+
+
 # Mock tool functions for testing
 def clock():
     """Get the current time.

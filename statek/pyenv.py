@@ -31,6 +31,13 @@ class PyEnv:
     # Result of the last instruction awaiting completion
     future_result: FutureResult = None
 
+    @property
+    def perm_ctx(self):
+        """Return the persistent context dict if it exists in local_state."""
+        if self.local_state is None:
+            return None
+        return self.local_state.get("_PERM_CTX")
+
     def console_append(self, out: str):
         """
         Append element into console buffer - creates new one if it does not exist.
