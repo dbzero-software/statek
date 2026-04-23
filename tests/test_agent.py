@@ -8,11 +8,18 @@ from unittest.mock import patch
 import pytest
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
+from statek.prompt_config import SystemPrompt, make_system_prompt, parse_system_prompt
+from statek.task_difficulty import TaskDifficulty
 from tests.conftest import clock, docstr, exit_tool
 
 
 def _internal_tool(**kwargs):  # pylint: disable=unused-argument
     """An internal tool that should not appear in the system prompt."""
+
+
+def _system_prompt(agent, task_difficulty=TaskDifficulty.medium, **kwargs):
+    """Format an agent prompt with the default test difficulty."""
+    return agent.system_prompt(task_difficulty=task_difficulty, **kwargs)
 
 
 class TestAgent:
@@ -25,14 +32,14 @@ class TestAgent:
 
         agent = Agent(
             role="test",
-            _system_prompt=system_prompt,
+            _system_prompt=make_system_prompt(system_prompt),
 
             _tools=tools
         )
 
-        assert "clock()" in agent.system_prompt()
-        assert "Get the current time." in agent.system_prompt()
-        assert "Available tools:\n" in agent.system_prompt()
+        assert "clock()" in _system_prompt(agent)
+        assert "Get the current time." in _system_prompt(agent)
+        assert "Available tools:\n" in _system_prompt(agent)
 
     def test_system_prompt_formatting_multiple_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with multiple tools."""
@@ -41,15 +48,15 @@ class TestAgent:
 
         agent = Agent(
             role="test",
-            _system_prompt=system_prompt,
+            _system_prompt=make_system_prompt(system_prompt),
 
             _tools=tools
         )
 
-        assert "clock()" in agent.system_prompt()
-        assert "docstr(class_name, method_name" in agent.system_prompt()
-        assert "exit_tool(reason)" in agent.system_prompt()
-        assert "You have access to these tools:" in agent.system_prompt()
+        assert "clock()" in _system_prompt(agent)
+        assert "docstr(class_name, method_name" in _system_prompt(agent)
+        assert "exit_tool(reason)" in _system_prompt(agent)
+        assert "You have access to these tools:" in _system_prompt(agent)
 
     def test_system_prompt_formatting_no_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with empty explicit tools list"""
@@ -58,15 +65,15 @@ class TestAgent:
 
         agent = Agent(
             role="test",
-            _system_prompt=system_prompt,
+            _system_prompt=make_system_prompt(system_prompt),
 
             _tools=tools
         )
 
-        assert "Available tools:" in agent.system_prompt()
+        assert "Available tools:" in _system_prompt(agent)
         # System tools are in the registry, not on the agent
-        assert "list_of_examples" not in agent.system_prompt()
-        assert "show_example" not in agent.system_prompt()
+        assert "list_of_examples" not in _system_prompt(agent)
+        assert "show_example" not in _system_prompt(agent)
 
     def test_system_prompt_with_block_comment(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with block comment placeholder."""
@@ -75,14 +82,14 @@ class TestAgent:
 
         agent = Agent(
             role="test",
-            _system_prompt=system_prompt,
+            _system_prompt=make_system_prompt(system_prompt),
 
             _tools=tools
         )
 
         # Each line should be prefixed with #
-        assert "# clock()" in agent.system_prompt()
-        assert "#     Get the current time." in agent.system_prompt()
+        assert "# clock()" in _system_prompt(agent)
+        assert "#     Get the current time." in _system_prompt(agent)
 
     def test_system_prompt_detailed_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with detailed_tools placeholder."""
@@ -91,18 +98,18 @@ class TestAgent:
 
         agent = Agent(
             role="test",
-            _system_prompt=system_prompt,
+            _system_prompt=make_system_prompt(system_prompt),
 
             _tools=tools
         )
 
         # detailed_tools uses py_syntax=True
-        assert "def clock()" in agent.system_prompt()
-        assert '"""Get the current time.' in agent.system_prompt()
+        assert "def clock()" in _system_prompt(agent)
+        assert '"""Get the current time.' in _system_prompt(agent)
 
     def test_format_tools_passes_agent_name(self, db0_fixture):  # pylint: disable=unused-argument
         """_format_tools passes the agent's type name to format_docstring."""
-        agent = Agent(role="test", _system_prompt="{tools}", _tools=[clock])
+        agent = Agent(role="test", _system_prompt=make_system_prompt("{tools}"), _tools=[clock])
 
         with patch('statek.agents.agent.format_docstring', wraps=__import__(
                 'statek.docstring', fromlist=['format_docstring']).format_docstring) as mock_fmt:
@@ -114,13 +121,21 @@ class TestAgent:
 
     def test_internal_tool_excluded_from_system_prompt(self, db0_fixture):  # pylint: disable=unused-argument
         """Tools with names starting with '_' are not reported in the system prompt."""
-        agent = Agent(role="test", _system_prompt="{tools}", _tools=[_internal_tool])
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("{tools}"),
+            _tools=[_internal_tool],
+        )
 
-        assert "_internal_tool" not in agent.system_prompt()
+        assert "_internal_tool" not in _system_prompt(agent)
 
     def test_internal_tool_included_in_all_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Tools with names starting with '_' are available in all_tools (execution context)."""
-        agent = Agent(role="test", _system_prompt="{tools}", _tools=[_internal_tool])
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("{tools}"),
+            _tools=[_internal_tool],
+        )
 
         assert _internal_tool in agent.all_tools
 
@@ -132,30 +147,45 @@ class TestAgent:
 
     def test_description_default_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Agent description defaults to None."""
-        agent = Agent(role="test", _system_prompt="test", _tools=[])
+        agent = Agent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         assert agent.description is None
 
     def test_description_set_at_init(self, db0_fixture):  # pylint: disable=unused-argument
         """Agent description can be set at initialization."""
-        agent = Agent(role="test", _system_prompt="test", _tools=[], _description="A test agent")
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+            _description="A test agent",
+        )
         assert agent.description == "A test agent"
 
     def test_update_description_sets_value(self, db0_fixture):  # pylint: disable=unused-argument
         """update_description sets description when previously None."""
-        agent = Agent(role="test", _system_prompt="test", _tools=[])
+        agent = Agent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         result = agent.update_description("New description")
         assert result is True
         assert agent.description == "New description"
 
     def test_update_description_no_change(self, db0_fixture):  # pylint: disable=unused-argument
         """update_description returns False when value hasn't changed."""
-        agent = Agent(role="test", _system_prompt="test", _tools=[], _description="Same")
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+            _description="Same",
+        )
         result = agent.update_description("Same")
         assert result is False
 
     def test_update_description_changed_value(self, db0_fixture):  # pylint: disable=unused-argument
         """update_description returns True and updates when value changes."""
-        agent = Agent(role="test", _system_prompt="test", _tools=[], _description="Old")
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+            _description="Old",
+        )
         result = agent.update_description("New")
         assert result is True
         assert agent.description == "New"
@@ -164,7 +194,7 @@ class TestAgent:
         """update_metadata avoids replacing metadata when the content is unchanged."""
         agent = Agent(
             role="test",
-            _system_prompt="test",
+            _system_prompt=make_system_prompt("test"),
             _tools=[],
             _metadata={"MODEL": "test-model", "TEMPERATURE": "0.1"},
         )
@@ -179,31 +209,77 @@ class TestAgent:
         """shared_var_names placeholder is resolved to comma-delimited shared_vars keys."""
         agent = Agent(
             role="test",
-            _system_prompt="Available variables: {shared_var_names}",
+            _system_prompt=make_system_prompt("Available variables: {shared_var_names}"),
             _tools=[]
         )
-        result = agent.system_prompt(job_params={"shared_vars": ["user", "message"]})
+        result = _system_prompt(agent, job_params={"shared_vars": ["user", "message"]})
         assert result == "Available variables: user, message"
 
     def test_shared_var_names_empty_when_no_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
         """shared_var_names resolves to empty string when shared_vars not in job_params."""
         agent = Agent(
             role="test",
-            _system_prompt="Variables: {shared_var_names}",
+            _system_prompt=make_system_prompt("Variables: {shared_var_names}"),
             _tools=[]
         )
-        result = agent.system_prompt(job_params={"other": "value"})
+        result = _system_prompt(agent, job_params={"other": "value"})
         assert result == "Variables: "
 
     def test_shared_var_names_empty_when_no_job_params(self, db0_fixture):  # pylint: disable=unused-argument
         """shared_var_names resolves to empty string when job_params is None."""
         agent = Agent(
             role="test",
-            _system_prompt="Variables: {shared_var_names}",
+            _system_prompt=make_system_prompt("Variables: {shared_var_names}"),
             _tools=[]
         )
-        result = agent.system_prompt()
+        result = _system_prompt(agent)
         assert result == "Variables: "
+
+
+def test_system_prompt_stored_as_persistent_prompt(db0_fixture):  # pylint: disable=unused-argument
+    """Raw prompt strings are parsed into persistent SystemPrompt objects."""
+    agent = Agent(
+        role="test",
+        _system_prompt=make_system_prompt("Intro\n\n--- high: Details ---\nHigh only."),
+        _tools=[],
+    )
+
+    assert isinstance(agent._system_prompt, SystemPrompt)  # pylint: disable=protected-access
+    assert agent._system_prompt.intro == "Intro"  # pylint: disable=protected-access
+
+
+def test_update_system_prompt_uses_structural_compare(db0_fixture):  # pylint: disable=unused-argument
+    """Equivalent parsed prompts do not replace the stored SystemPrompt."""
+    agent = Agent(
+        role="test",
+        _system_prompt=make_system_prompt("--- Identity ---\nSame."),
+        _tools=[],
+    )
+    original_prompt = agent._system_prompt  # pylint: disable=protected-access
+
+    result = agent.update_system_prompt(parse_system_prompt("## Identity\nSame."))
+
+    assert result is False
+    assert agent._system_prompt is original_prompt  # pylint: disable=protected-access
+
+
+def test_system_prompt_filters_sections_by_task_difficulty(db0_fixture):  # pylint: disable=unused-argument
+    """Prompt sections are formatted for the supplied task difficulty."""
+    agent = Agent(
+        role="test",
+        _system_prompt=make_system_prompt(
+            "Intro.\n\n"
+            "--- low: Scope ---\nLow instructions.\n\n"
+            "--- high: Scope ---\nHigh instructions."
+        ),
+        _tools=[],
+    )
+
+    result = agent.system_prompt(task_difficulty=TaskDifficulty.low)
+
+    assert "Intro." in result
+    assert "Low instructions." in result
+    assert "High instructions." not in result
 
 
 class TestSupervisedAgentCustomRole:
@@ -211,14 +287,18 @@ class TestSupervisedAgentCustomRole:
 
     def test_supervised_agent_default_role(self, db0_fixture):  # pylint: disable=unused-argument
         """Test SupervisedAgent stores provided role."""
-        agent = SupervisedAgent(role="test_role", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(
+            role="test_role",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+        )
         assert agent.role == "test_role"
 
     def test_supervised_agent_role_in_job_def(self, db0_fixture):  # pylint: disable=unused-argument
         """Test that custom role propagates to job definitions."""
         agent = SupervisedAgent(
             role="custom_worker",
-            _system_prompt="test",
+            _system_prompt=make_system_prompt("test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -246,12 +326,12 @@ class TestWarmupDef:
 
     def test_supervised_agent_warmup_def_default_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Test SupervisedAgent has warmup_def defaulting to None."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         assert agent.warmup_def is None
 
     def test_update_warmup_def_sets_value(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def sets warmup_def when previously None."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         result = agent.update_warmup_def("print('hello')")
         assert result is True
         assert agent.warmup_def is not None
@@ -259,14 +339,14 @@ class TestWarmupDef:
 
     def test_update_warmup_def_no_change(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def returns False when value hasn't changed."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         agent.update_warmup_def("print('hello')")
         result = agent.update_warmup_def("print('hello')")
         assert result is False
 
     def test_update_warmup_def_changed_value(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def returns True and updates when value changes."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         agent.update_warmup_def("print('hello')")
         result = agent.update_warmup_def("print('world')")
         assert result is True
@@ -274,7 +354,7 @@ class TestWarmupDef:
 
     def test_update_warmup_def_parses_code(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def parses warmup code through parse_warmup_code."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         # Multi-block warmup separated by dashes
         multi_block = "block1\n# ----------\nblock2"
         result = agent.update_warmup_def(multi_block)
@@ -287,7 +367,7 @@ class TestWarmupDef:
 
     def test_update_warmup_def_to_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def can set warmup_def to None."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         agent.update_warmup_def("print('hello')")
         result = agent.update_warmup_def(None)
         assert result is True
@@ -295,7 +375,7 @@ class TestWarmupDef:
 
     def test_update_warmup_def_none_to_none_no_change(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def returns False when None to None."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         result = agent.update_warmup_def(None)
         assert result is False
 
@@ -307,7 +387,7 @@ class TestCreateJobDefWarmup:
     def _agent():
         return SupervisedAgent(
             role="test",
-            _system_prompt="test",
+            _system_prompt=make_system_prompt("test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -316,7 +396,7 @@ class TestCreateJobDefWarmup:
         """JobDef freezes model metadata at creation time."""
         agent = SupervisedAgent(
             role="test",
-            _system_prompt="test",
+            _system_prompt=make_system_prompt("test"),
             _metadata={"MODEL": "deepseek/deepseek-v3.2"},
             _tools=[],
         )
@@ -329,7 +409,7 @@ class TestCreateJobDefWarmup:
         """Existing JobDefs keep their metadata object when the agent metadata changes."""
         agent = SupervisedAgent(
             role="test",
-            _system_prompt="test",
+            _system_prompt=make_system_prompt("test"),
             _metadata={"MODEL": "deepseek/deepseek-v3.2", "TEMPERATURE": "0.3"},
             _tools=[],
         )
@@ -345,7 +425,7 @@ class TestCreateJobDefWarmup:
 
     def test_create_job_def_requires_model_metadata(self, db0_fixture):  # pylint: disable=unused-argument
         """create_job_def fails fast when MODEL metadata is missing."""
-        agent = SupervisedAgent(role="test", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         with pytest.raises(ValueError, match="MODEL"):
             agent.create_job_def()
 
@@ -408,7 +488,7 @@ class TestCreateJobDefSharedVars:
     def _agent():
         return SupervisedAgent(
             role="test",
-            _system_prompt="test",
+            _system_prompt=make_system_prompt("test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -456,7 +536,7 @@ class TestCreateJobDefLocale:
     def _agent():
         return SupervisedAgent(
             role="test",
-            _system_prompt="test",
+            _system_prompt=make_system_prompt("test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -509,7 +589,11 @@ class TestUpdateWarmupDefs:
 
     def test_updates_matching_agent(self, db0_fixture, temp_dir):  # pylint: disable=unused-argument
         """update_warmup_defs applies warmup from file matching agent role."""
-        agent = SupervisedAgent(role="researcher", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(
+            role="researcher",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+        )
         self._create_warmup_file(temp_dir, "researcher.py", "print('warmup')")
 
         update_warmup_defs(Path(temp_dir))
@@ -519,7 +603,11 @@ class TestUpdateWarmupDefs:
 
     def test_ignores_non_matching_files(self, db0_fixture, temp_dir):  # pylint: disable=unused-argument
         """update_warmup_defs ignores files that don't match any agent role."""
-        agent = SupervisedAgent(role="researcher", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(
+            role="researcher",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+        )
         self._create_warmup_file(temp_dir, "unknown_agent.py", "print('no match')")
 
         update_warmup_defs(Path(temp_dir))
@@ -528,8 +616,16 @@ class TestUpdateWarmupDefs:
 
     def test_updates_multiple_agents(self, db0_fixture, temp_dir):  # pylint: disable=unused-argument
         """update_warmup_defs updates multiple agents from their respective files."""
-        agent_a = SupervisedAgent(role="planner", _system_prompt="test", _tools=[])
-        agent_b = SupervisedAgent(role="coder", _system_prompt="test", _tools=[])
+        agent_a = SupervisedAgent(
+            role="planner",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+        )
+        agent_b = SupervisedAgent(
+            role="coder",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+        )
         self._create_warmup_file(temp_dir, "planner.py", "plan_code")
         self._create_warmup_file(temp_dir, "coder.py", "code_block")
 
@@ -542,7 +638,11 @@ class TestUpdateWarmupDefs:
 
     def test_skips_non_py_files(self, db0_fixture, temp_dir):  # pylint: disable=unused-argument
         """update_warmup_defs only processes .py files."""
-        agent = SupervisedAgent(role="researcher", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(
+            role="researcher",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+        )
         self._create_warmup_file(temp_dir, "researcher.txt", "print('txt')")
 
         update_warmup_defs(Path(temp_dir))
@@ -551,7 +651,11 @@ class TestUpdateWarmupDefs:
 
     def test_no_update_when_unchanged(self, db0_fixture, temp_dir):  # pylint: disable=unused-argument
         """update_warmup_defs does not update when content hasn't changed."""
-        agent = SupervisedAgent(role="researcher", _system_prompt="test", _tools=[])
+        agent = SupervisedAgent(
+            role="researcher",
+            _system_prompt=make_system_prompt("test"),
+            _tools=[],
+        )
         self._create_warmup_file(temp_dir, "researcher.py", "print('warmup')")
 
         update_warmup_defs(Path(temp_dir))
@@ -563,7 +667,7 @@ class TestUpdateWarmupDefs:
 
     def test_skips_plain_agent_instances(self, db0_fixture, temp_dir):  # pylint: disable=unused-argument
         """update_warmup_defs only processes SupervisedAgent, not plain Agent."""
-        Agent(role="researcher", _system_prompt="test", _tools=[])
+        Agent(role="researcher", _system_prompt=make_system_prompt("test"), _tools=[])
         self._create_warmup_file(temp_dir, "researcher.py", "print('warmup')")
 
         # Should not raise - plain Agent instances are not returned by db0.find(SupervisedAgent)
@@ -571,7 +675,7 @@ class TestUpdateWarmupDefs:
 
     def test_empty_directory(self, db0_fixture, temp_dir):  # pylint: disable=unused-argument
         """update_warmup_defs handles empty directory gracefully."""
-        SupervisedAgent(role="researcher", _system_prompt="test", _tools=[])
+        SupervisedAgent(role="researcher", _system_prompt=make_system_prompt("test"), _tools=[])
 
         # Should not raise
         update_warmup_defs(Path(temp_dir))

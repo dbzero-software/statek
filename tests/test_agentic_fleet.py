@@ -5,6 +5,7 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import SupervisedAgent
+from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef
 from statek.executors.utils import AgentLoopDef, run_agentic_fleet, find_existing_job_def
 
@@ -12,7 +13,7 @@ from statek.executors.utils import AgentLoopDef, run_agentic_fleet, find_existin
 def _make_supervised_agent(role="fleet_agent"):
     return SupervisedAgent(
         role=role,
-        _system_prompt="Test",
+        _system_prompt=make_system_prompt("Test"),
         _metadata={"MODEL": "test-model"},
         _tools=[],
     )

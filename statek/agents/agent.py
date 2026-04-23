@@ -8,7 +8,15 @@ from statek.system import tool
 from statek.docstring import parse_tool_docstring, format_docstring
 from statek.utils import CodeBlock
 from statek.executors.job import JobDef, parse_warmup_code
+from statek.prompt_config import (
+    SystemPrompt,
+    SystemPromptData,
+    compare_prompts,
+    format_system_prompt,
+    make_system_prompt,
+)
 from statek.settings import get_statek_logger
+from statek.task_difficulty import TaskDifficulty
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -94,7 +102,7 @@ class Agent:
         This is the fundamental class to hold the workflow specification and available tools.
     """
     role: str  # An arbitrary role name
-    _system_prompt: str  # f-string with the {tools} placeholder
+    _system_prompt: Optional[SystemPrompt]  # f-string sections with placeholders
     _tools: List[Callable]
     # NOTE: dynamically created tools are stored by their name
     _tools_by_name: Optional[List[str]] = field(default_factory=list)
@@ -126,7 +134,7 @@ class Agent:
 
         if prompt_def is not None:
             if prompt_def.system:
-                self._system_prompt = prompt_def.system
+                self.update_system_prompt(prompt_def.system)
             if prompt_def.metadata:
                 self.update_metadata(prompt_def.metadata)
         # Migrate any '_'-prefixed tools passed directly to _tools into _internal_tools
@@ -139,18 +147,18 @@ class Agent:
                 self._internal_tools.append(fn)
 
 
-    def update_system_prompt(self, new_prompt: str) -> bool:
+    def update_system_prompt(self, new_prompt: SystemPromptData) -> bool:
         """Update _system_prompt only if it differs from the current value.
 
         Args:
-            new_prompt: New system prompt string to apply.
+            new_prompt: New non-persistent system prompt data to apply.
 
         Returns:
             True if the prompt was updated, False if it was already up to date.
         """
-        if self._system_prompt == new_prompt:
+        if self._system_prompt is not None and compare_prompts(self._system_prompt, new_prompt):
             return False
-        self._system_prompt = new_prompt
+        self._system_prompt = make_system_prompt(new_prompt)
         STATEK_LOGGER.debug("Agent '%s' system prompt updated", self.role)
         return True
 
@@ -211,7 +219,12 @@ class Agent:
                 text = text.replace(f'{{{name}}}', tools_str)
         return text
 
-    def system_prompt(self, job_params: Dict = None, **kwargs) -> str:
+    def system_prompt(
+        self,
+        task_difficulty: TaskDifficulty,
+        job_params: Dict = None,
+        **kwargs,
+    ) -> str:
         """
         Format system_prompt with tool descriptions and job-specific parameters.
 
@@ -225,6 +238,7 @@ class Agent:
         format_map, allowing job-specific values to be injected into the system prompt.
 
         Args:
+            task_difficulty: difficulty to select prompt sections
             job_params: optional context for format (e.g. job local variables)
             kwargs: optional additional params
 
@@ -233,7 +247,11 @@ class Agent:
         """
         if self._system_prompt is None:
             return ""
-        result = self._expand_tool_placeholders(self._system_prompt)
+        result = format_system_prompt(
+            self._system_prompt,
+            task_difficulty,
+            prompt_part_formatter=self._expand_tool_placeholders,
+        )
         format_ctx = {}
         if job_params:
             format_ctx.update(job_params)

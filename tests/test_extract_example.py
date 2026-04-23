@@ -8,6 +8,7 @@ from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.example import Example, extract_example, format_example
 from statek.executors.job import Job, JobStatus, JobDef, TaskDifficulty
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.settings import ChatStyle
 
 
@@ -273,7 +274,7 @@ class TestFormatExample:
     def _make_example(self, job_factory, warmup_code=None, console=None, turns=()):
         """Helper: build an Example from a job with given console and turns."""
         if warmup_code is not None:
-            agent = Agent(role="test", _system_prompt="Test agent",
+            agent = Agent(role="test", _system_prompt=make_system_prompt("Test agent"),
                           _metadata={
                               'MODEL': 'test-model',
                           }, _tools=[])

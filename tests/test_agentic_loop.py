@@ -5,6 +5,7 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.job import parse_warmup_code
 from statek.executors.utils import _make_start_jobs_func, find_existing_job_def, run_agentic_loop
@@ -129,8 +130,8 @@ class TestMakeStartJobsFunc:
 
     def test_only_counts_this_agents_ready_jobs(self, db0_fixture):  # pylint: disable=unused-argument
         """Only READY/WARMING_UP jobs for this specific agent are counted."""
-        agent_a = Agent(role="agent_a", _system_prompt="A", _tools=[])
-        agent_b = Agent(role="agent_b", _system_prompt="B", _tools=[])
+        agent_a = Agent(role="agent_a", _system_prompt=make_system_prompt("A"), _tools=[])
+        agent_b = Agent(role="agent_b", _system_prompt=make_system_prompt("B"), _tools=[])
 
         job_def_a = _make_job_def(agent_a)
         job_def_b = _make_job_def(agent_b)
@@ -182,8 +183,8 @@ class TestFindExistingJobDef:
 
     def test_returns_none_when_different_agent(self, db0_fixture):  # pylint: disable=unused-argument
         """Returns None when the JobDef belongs to a different agent."""
-        agent_a = Agent(role="agent_a", _system_prompt="A", _tools=[])
-        agent_b = Agent(role="agent_b", _system_prompt="B", _tools=[])
+        agent_a = Agent(role="agent_a", _system_prompt=make_system_prompt("A"), _tools=[])
+        agent_b = Agent(role="agent_b", _system_prompt=make_system_prompt("B"), _tools=[])
 
         _make_tagged_job_def(agent_a, "print('hello')")
 
@@ -214,7 +215,7 @@ class TestRunAgenticLoop:
         """Loop-created JobDefs initially reference the agent metadata dict."""
         agent = Agent(
             role="loop_agent",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model", "TEMPERATURE": "0.3"},
             _tools=[],
         )

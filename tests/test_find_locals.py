@@ -8,6 +8,7 @@ from statek.system import inject_context, tool
 from statek.executors.utils import exec_step, _smart_call
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.future import FutureResult, temporal
 from statek.exceptions import FutureError
 
@@ -459,7 +460,7 @@ def _make_job_with_tools(role, tools):
     """Create a job with the given agent tools."""
     agent = Agent(
         role=role,
-        _system_prompt="Test",
+        _system_prompt=make_system_prompt("Test"),
         _metadata={"MODEL": "test-model"},
         _tools=tools,
     )

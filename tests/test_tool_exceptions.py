@@ -7,6 +7,7 @@ from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, ToolError, 
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.utils import exec_tool, run_job_step
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.utils import CallSpec, CodeBlock
 
 
@@ -50,7 +51,7 @@ class TestToolErrorInToolLog:
 def _make_job(role, tools=None, context_extras=None):
     agent = Agent(
         role=role,
-        _system_prompt="Test",
+        _system_prompt=make_system_prompt("Test"),
         _metadata={"MODEL": "test-model"},
         _tools=tools or [],
     )
@@ -118,7 +119,7 @@ class TestRunJobStepRecordsToolErrors:
     def _make_warmup_job(role, warmup_code, context_extras=None):
         agent = Agent(
             role=role,
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
