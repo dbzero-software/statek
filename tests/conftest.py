@@ -13,6 +13,7 @@ import dbzero as db0
 
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent, SupervisedAgent
+from statek.prompt_config import make_system_prompt
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
@@ -140,7 +141,7 @@ def db0_fixture():
 @pytest.fixture
 def agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
-    return Agent(role="test", _system_prompt="Test agent", _tools=[],
+    return Agent(role="test", _system_prompt=make_system_prompt("Test agent"), _tools=[],
                  _metadata={'MODEL': 'test-model'} )
 
 
@@ -150,7 +151,7 @@ def agent_factory(db0_fixture):  # pylint: disable=unused-argument
     def _create_agent(role="test", system_prompt="Test", tools=None):
         return Agent(
             role=role,
-            _system_prompt=system_prompt,
+            _system_prompt=make_system_prompt(system_prompt),
             _metadata={'MODEL': 'test-model'},
             _tools=tools or []
         )
@@ -162,7 +163,7 @@ def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
     """Create a test agent."""
     return SupervisedAgent(
         role="test",
-        _system_prompt="Test agent",
+        _system_prompt=make_system_prompt("Test agent"),
         _metadata={'MODEL': 'test-model'},
         _tools=[]
     )

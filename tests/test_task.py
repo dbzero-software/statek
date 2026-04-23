@@ -14,6 +14,7 @@ from statek.agents.dialog_agent import DialogAgent
 from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
+from statek.prompt_config import make_system_prompt
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
@@ -231,7 +232,7 @@ class TestDelegateTask:
         # Create agent with prompt template that uses job_params
         agent = SupervisedAgent(
             role="test",
-            _system_prompt="Test agent",
+            _system_prompt=make_system_prompt("Test agent"),
             _metadata={'MODEL': 'test-model'},
             _tools=[]
         )
@@ -831,7 +832,7 @@ class TestSubmitNewJob:
         from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
         agent = SupervisedAgent(
             role="test",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={'MODEL': 'test-model'},
             _tools=[]
         )

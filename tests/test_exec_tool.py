@@ -8,6 +8,7 @@ from statek.executors.utils import exec_tool
 from statek.utils import CallSpec
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.system import tool, docstr as docs_tool, brief as brief_tool
 from statek.future import FutureResult
 from tests.test_exec_step import (
@@ -74,7 +75,7 @@ def _make_job(role, tools=None, context_extras=None):
     """Create a job with the given agent tools and context additions."""
     agent = Agent(
         role=role,
-        _system_prompt="Test",
+        _system_prompt=make_system_prompt("Test"),
         _metadata={"MODEL": "test-model"},
         _tools=tools or [],
     )
@@ -304,7 +305,7 @@ class TestExecToolStatekCtx:  # pylint: disable=too-few-public-methods
         """_STATEK_CTX with 'agent' key is available to tools via _local_context."""
         agent_obj = Agent(
             role="ctx_tool_test",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[_ctx_checker_tool],
         )

@@ -9,39 +9,14 @@ from statek.docstring import parse_tool_docstring, format_docstring
 from statek.utils import CodeBlock
 from statek.executors.job import JobDef, parse_warmup_code
 from statek.prompt_config import (
-    PromptSection,
     SystemPrompt,
-    SystemPromptLike,
     compare_prompts,
     format_system_prompt,
-    parse_system_prompt,
 )
 from statek.settings import get_statek_logger
 from statek.task_difficulty import TaskDifficulty, parse_task_difficulty
 
 STATEK_LOGGER = get_statek_logger()
-
-SystemPromptInput = Optional[Union[str, SystemPromptLike]]
-
-
-def _persistent_system_prompt(prompt: SystemPromptInput) -> Optional[SystemPrompt]:
-    """Return a persistent SystemPrompt for raw, volatile, or persistent prompts."""
-    if prompt is None:
-        return None
-    if isinstance(prompt, SystemPrompt):
-        return prompt
-    if isinstance(prompt, str):
-        prompt = parse_system_prompt(prompt)
-
-    sections = [
-        section if isinstance(section, PromptSection) else PromptSection(
-            title=section.title,
-            contents=section.contents,
-            target_difficulties=section.target_difficulties,
-        )
-        for section in prompt.sections
-    ]
-    return SystemPrompt(intro=prompt.intro, sections=sections)
 
 
 @tool(system=True)
@@ -144,7 +119,7 @@ class Agent:
         the _system_prompt and _metadata values.
         """
         # pylint: disable=import-outside-toplevel,cyclic-import
-        from statek.prompt_config import load_prompt_files
+        from statek.prompt_config import load_prompt_files, make_system_prompt
         from statek.settings import get_statek_settings
 
         settings = get_statek_settings()
@@ -157,11 +132,9 @@ class Agent:
 
         if prompt_def is not None:
             if prompt_def.system:
-                self.update_system_prompt(prompt_def.system)
+                self.update_system_prompt(make_system_prompt(prompt_def.system))
             if prompt_def.metadata:
                 self.update_metadata(prompt_def.metadata)
-        if not isinstance(self._system_prompt, SystemPrompt):
-            self._system_prompt = _persistent_system_prompt(self._system_prompt)
         # Migrate any '_'-prefixed tools passed directly to _tools into _internal_tools
         internal = [fn for fn in self._tools if fn.__name__.startswith('_')]
         if internal:
@@ -172,7 +145,7 @@ class Agent:
                 self._internal_tools.append(fn)
 
 
-    def update_system_prompt(self, new_prompt: SystemPromptInput) -> bool:
+    def update_system_prompt(self, new_prompt: Optional[SystemPrompt]) -> bool:
         """Update _system_prompt only if it differs from the current value.
 
         Args:
@@ -181,16 +154,15 @@ class Agent:
         Returns:
             True if the prompt was updated, False if it was already up to date.
         """
-        new_system_prompt = _persistent_system_prompt(new_prompt)
-        if self._system_prompt is None and new_system_prompt is None:
+        if self._system_prompt is None and new_prompt is None:
             return False
         if (
             self._system_prompt is not None
-            and new_system_prompt is not None
-            and compare_prompts(self._system_prompt, new_system_prompt)
+            and new_prompt is not None
+            and compare_prompts(self._system_prompt, new_prompt)
         ):
             return False
-        self._system_prompt = new_system_prompt
+        self._system_prompt = new_prompt
         STATEK_LOGGER.debug("Agent '%s' system prompt updated", self.role)
         return True
 
@@ -293,8 +265,6 @@ class Agent:
         """
         if self._system_prompt is None:
             return ""
-        if not isinstance(self._system_prompt, SystemPrompt):
-            self._system_prompt = _persistent_system_prompt(self._system_prompt)
         difficulty = self._resolve_task_difficulty(task_difficulty)
         result = format_system_prompt(self._system_prompt, difficulty)
         result = self._expand_tool_placeholders(result)

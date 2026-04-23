@@ -1,10 +1,14 @@
 """Tests for statek.settings module."""
 
+# pylint: disable=no-member
+
 import os
 import tempfile
 from pathlib import Path
 from statek.settings import StatekSettings, get_provider_settings
 from statek.docstring import ACL_Item, Statek_ACL
+from statek.prompt_config import format_system_prompt
+from statek.task_difficulty import TaskDifficulty
 
 
 def test_statek_settings_parses_environment_variables():
@@ -113,15 +117,20 @@ You are another agent.
         # Test retrieving existing prompt definition
         prompt_def = settings.get_prompt_def("test_agent")
         assert prompt_def is not None
-        assert "test agent" in prompt_def.system.lower()
-        assert "testing" in prompt_def.system.lower()
+        system_prompt = format_system_prompt(prompt_def.system, TaskDifficulty.medium).lower()
+        assert "test agent" in system_prompt
+        assert "testing" in system_prompt
         assert prompt_def.metadata.get("MODEL") == "gpt-4o"
         assert prompt_def.metadata.get("LLM_TOOLS_SCOPE") == "SYSTEM"
 
         # Test retrieving another prompt definition
         another_def = settings.get_prompt_def("another_agent")
         assert another_def is not None
-        assert "another agent" in another_def.system.lower()
+        another_system_prompt = format_system_prompt(
+            another_def.system,
+            TaskDifficulty.medium,
+        ).lower()
+        assert "another agent" in another_system_prompt
         assert another_def.metadata.get("MODEL") == "openai/gpt-4o"
         assert another_def.metadata.get("CHAT_STYLE") == "CONSOLE"
 

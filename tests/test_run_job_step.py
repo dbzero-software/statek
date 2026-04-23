@@ -9,6 +9,7 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.agents.dialog_agent import DialogAgent
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.utils import handle_dialog, run_job_step
@@ -292,7 +293,7 @@ def _make_job_with_tool(role, tool_name, tool_fn, warmup_code):
     """Create a Job with a named tool in agent context and given warmup code."""
     agent = Agent(
         role=role,
-        _system_prompt="Test",
+        _system_prompt=make_system_prompt("Test"),
         _metadata={"MODEL": "test-model"},
         _tools=[],
     )
@@ -337,7 +338,7 @@ class TestRunJobStepToolExecution:
         warmup_code = CodeBlock(code='exit("ok")', tool_calls=[cs1, cs2])
         agent = Agent(
             role="role_multi",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -386,7 +387,7 @@ class TestRunJobStepToolExecution:
         """Warmup code without tool calls creates WarmupLogItem with tool_log=None."""
         agent = Agent(
             role="role_no_tc",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -514,7 +515,7 @@ class TestRunJobStepToolCallLogging:
         warmup_code = CodeBlock(code='exit("ok")', tool_calls=[cs1, cs2])
         agent = Agent(
             role="log_multi",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -555,7 +556,7 @@ class TestRunJobStepToolCallLogging:
         """No #STATEK: as tool entries in the log when warmup has no tool calls."""
         agent = Agent(
             role="log_no_tc",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -578,7 +579,7 @@ class TestRunJobStepToolCallLogging:
         warmup_code = CodeBlock(code='print("printed_output")\nexit("ok")', tool_calls=[cs])
         agent = Agent(
             role="log_order",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -677,7 +678,7 @@ class TestMultiBlockWarmupToolLog:
         block2 = CodeBlock(code='exit("ok")', tool_calls=[cs2])
         agent = Agent(
             role="multi_warmup_tl",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -717,7 +718,7 @@ class TestRunJobStepWarmupException:
         """A non-FutureError exception in warmup sets job status to DONE."""
         agent = Agent(
             role="warmup_exc_done",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -734,7 +735,7 @@ class TestRunJobStepWarmupException:
         """A non-FutureError exception in warmup calls job_def.set_error with the exception."""
         agent = Agent(
             role="warmup_exc_set_error",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -754,7 +755,7 @@ class TestRunJobStepWarmupException:
         """run_job_step returns True when warmup raises a non-FutureError exception."""
         agent = Agent(
             role="warmup_exc_ret",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -771,7 +772,7 @@ class TestRunJobStepWarmupException:
         """No LLM API call is made when warmup raises a non-FutureError exception."""
         agent = Agent(
             role="warmup_exc_no_llm",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -793,7 +794,7 @@ class TestRunJobStepWarmupException:
         """FutureError from warmup still suspends the job (not treated as critical failure)."""
         agent = Agent(
             role="warmup_future_suspend",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -815,7 +816,7 @@ class TestRunJobStepWarmupException:
         """A non-FutureError exception in STARTED (non-warmup) code does NOT call set_error."""
         agent = Agent(
             role="started_exc_no_error",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -850,7 +851,7 @@ class TestRunJobStepWarmupException:
         """Exception in the second warmup block is also treated as critical failure."""
         agent = Agent(
             role="warmup_blk2_exc",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -879,7 +880,7 @@ class TestRunJobStepEmptyLLMSubmission:
         """LLM responding with empty string prints error to console."""
         agent = Agent(
             role="empty_resp",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -917,7 +918,7 @@ class TestRunJobStepEmptyLLMSubmission:
         """LLM responding with only comments prints error to console."""
         agent = Agent(
             role="comment_resp",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -956,7 +957,7 @@ class TestRunJobStepEmptyLLMSubmission:
         """LLM responding with only block comments (docstrings) prints error to console."""
         agent = Agent(
             role="block_comment_resp",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -997,7 +998,7 @@ class TestRunJobStepEmptyLLMSubmission:
         warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
         agent = Agent(
             role="tool_no_error",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1018,7 +1019,7 @@ class TestRunJobStepEmptyLLMSubmission:
         """Normal code response should NOT print error."""
         agent = Agent(
             role="valid_code",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1047,7 +1048,7 @@ class TestRunJobStepEmptyCodeBlock:
         warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
         agent = Agent(
             role="role_empty_code",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1071,7 +1072,7 @@ class TestRunJobStepEmptyCodeBlock:
         warmup_blocks = [CodeBlock(code=None, tool_calls=[call_spec]), 'exit("ok")']
         agent = Agent(
             role="role_empty_tool",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1105,7 +1106,7 @@ class TestRunJobStepCliToolCalls:
         warmup_blocks = [CodeBlock(code='x = 1', tool_calls=[cs]), 'exit("ok")']
         agent = Agent(
             role="cli_tl",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1136,7 +1137,7 @@ class TestRunJobStepCliToolCalls:
         warmup_code = [CodeBlock(code='y = 2', tool_calls=[cs_regular, cs_cli]), 'exit("ok")']
         agent = Agent(
             role="mixed_tc",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1160,7 +1161,7 @@ class TestRunJobStepCliToolCalls:
         warmup_code = [CodeBlock(code='x = 1', tool_calls=[cs_regular, cs_cli]), 'exit("ok")']
         agent = Agent(
             role="mixed_order",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1190,7 +1191,7 @@ class TestRunJobStepCliToolCalls:
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
         agent = Agent(
             role="cli_err",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1216,7 +1217,7 @@ class TestRunJobStepCliToolCalls:
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
         agent = Agent(
             role="cli_none",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1242,7 +1243,7 @@ class TestRunJobStepCliToolCalls:
         warmup_code = CodeBlock(code=None, tool_calls=[cs])
         agent = Agent(
             role="cli_future",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
         )
@@ -1669,7 +1670,7 @@ class TestProviderRouting:
     def _make_job(self, db0_fixture, metadata):  # pylint: disable=unused-argument
         agent = Agent(
             role="test",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata=metadata,
             _tools=[],
         )

@@ -3,13 +3,14 @@
 import dbzero as db0
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.statek_push_queue import StatekPushQueue
 
 
 def _make_job(db0_fixture):  # pylint: disable=unused-argument
     agent = Agent(
         role="test",
-        _system_prompt="test",
+        _system_prompt=make_system_prompt("test"),
         _metadata={"MODEL": "test-model"},
         _tools=[],
     )
@@ -22,7 +23,7 @@ def _make_job_on_current_prefix():
     """Create a Job (with its own Agent/JobDef) on whatever prefix is currently active."""
     agent = Agent(
         role="test",
-        _system_prompt="test",
+        _system_prompt=make_system_prompt("test"),
         _metadata={"MODEL": "test-model"},
         _tools=[],
     )

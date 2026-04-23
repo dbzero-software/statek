@@ -49,6 +49,7 @@ class SystemPrompt:
 
 PromptSectionLike = Union[PromptSection, PromptSectionData]
 SystemPromptLike = Union[SystemPrompt, SystemPromptData]
+SystemPromptInput = Union[str, SystemPromptLike]
 
 
 @db0.enum(values=["XML", "DASHED", "ASTERISK", "MARKDOWN"])
@@ -224,6 +225,26 @@ def parse_system_prompt(input: str) -> SystemPromptData:  # pylint: disable=rede
     )
 
 
+def make_system_prompt(prompt: SystemPromptInput) -> SystemPrompt:
+    """Build a persistent SystemPrompt from raw text or parsed prompt data."""
+    if isinstance(prompt, SystemPrompt):
+        return prompt
+    if isinstance(prompt, str):
+        prompt = parse_system_prompt(prompt)
+
+    return SystemPrompt(
+        intro=prompt.intro,
+        sections=[
+            section if isinstance(section, PromptSection) else PromptSection(
+                title=section.title,
+                contents=section.contents,
+                target_difficulties=section.target_difficulties,
+            )
+            for section in prompt.sections
+        ],
+    )
+
+
 def _section_matches_difficulty(
     section: PromptSectionLike,
     task_difficulty: TaskDifficulty,
@@ -363,7 +384,7 @@ def parse_prompt_file(file_path: Path) -> PromptDef:
             f"Prompt file '{file_path}' is missing the '# System Prompt' section."
         )
 
-    system_prompt = '\n'.join(system_lines).strip()
+    system_prompt = parse_system_prompt('\n'.join(system_lines).strip())
     return PromptDef(system=system_prompt, metadata=metadata)
 
 
@@ -419,7 +440,7 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
 
         # Update agent's system prompt if changed
         if prompt_def.system:
-            agent.update_system_prompt(prompt_def.system)
+            agent.update_system_prompt(make_system_prompt(prompt_def.system))
 
         # Update agent's metadata if changed
         if prompt_def.metadata:

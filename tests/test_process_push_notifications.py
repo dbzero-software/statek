@@ -3,6 +3,7 @@
 import dbzero as db0
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.statek_push_queue import StatekPushQueue
 from statek.executors.utils import process_push_notifications
 
@@ -10,7 +11,7 @@ from statek.executors.utils import process_push_notifications
 def _make_started_job():
     agent = Agent(
         role="test",
-        _system_prompt="test",
+        _system_prompt=make_system_prompt("test"),
         _metadata={"MODEL": "test-model"},
         _tools=[],
     )

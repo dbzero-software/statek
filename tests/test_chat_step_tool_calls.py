@@ -2,6 +2,7 @@
 """Tests that get_next_request emits ChatHistoryItem objects with tool calls."""
 
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.chat_log_item import WarmupLogItem
 from statek.chat_history import ChatRole
@@ -10,7 +11,7 @@ from tests.conftest import create_chat_log_item
 
 
 def _make_agent(role):
-    return Agent(role=role, _system_prompt="Sys",
+    return Agent(role=role, _system_prompt=make_system_prompt("Sys"),
                  _metadata={"MODEL": "test-model"}, _tools=[])
 
 

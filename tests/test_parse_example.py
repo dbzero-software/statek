@@ -9,6 +9,7 @@ from statek.executors.example import (
 )
 from statek.executors.job import Job, JobDef, JobStatus, TaskDifficulty
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.settings import ChatStyle
 from tests.conftest import create_chat_log_item
 
@@ -26,7 +27,7 @@ def _fmt(example, style=ChatStyle.MARKDOWN, warmup=True, metadata=False) -> str:
 
 
 def _job_with_warmup():
-    agent = Agent(role="test", _system_prompt="sys",
+    agent = Agent(role="test", _system_prompt=make_system_prompt("sys"),
                   _metadata={'MODEL': 'test-model'}, _tools=[])
     job_def = JobDef(agent=agent, warmup_code="setup = True")
     job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)

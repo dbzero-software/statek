@@ -11,6 +11,7 @@ from statek.future import FutureResult, FutureElement, temporal
 from statek.exceptions import FutureError
 from statek.system import tool
 from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef, JobStatus
 
 
@@ -842,7 +843,7 @@ print(f"Result: {result}")
         # Create agent with private context
         agent = Agent(
             role="test",
-            _system_prompt="Test agent with context",
+            _system_prompt=make_system_prompt("Test agent with context"),
             _metadata={"MODEL": "test-model"},
             _tools=[],
             _X__context={"custom_tool": custom_tool, "agent_var": 42}
@@ -1098,7 +1099,7 @@ class TestExecStepWithAsyncTools:
         """Create a minimal job whose agent has thesq given tools registered."""
         agent = Agent(
             role="async_tools_exec_test",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=tools,
         )
@@ -1236,7 +1237,7 @@ class TestExecStepStringNameResolution:
         """Create a minimal job whose agent has the given tools and context."""
         agent = Agent(
             role="string_resolution_test",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=tools,
             _X__context=context or {},
@@ -1322,7 +1323,7 @@ class TestExecStepIsoDateParsing:
     def _make_job(self, tools, context=None):
         agent = Agent(
             role="iso_date_parse_test",
-            _system_prompt="Test",
+            _system_prompt=make_system_prompt("Test"),
             _metadata={"MODEL": "test-model"},
             _tools=tools,
             _X__context=context or {},
