@@ -5,6 +5,7 @@ from typing import List, Optional
 
 import dbzero as db0
 
+from statek.executors.job import _get_static_task_difficulty
 from web_ui.nicegui_compat import ui
 from web_ui.model_bindings import get_all_job_defs
 
@@ -40,6 +41,21 @@ def _format_traceback(traceback: Optional[List[str]]) -> str:
     if not traceback:
         return ''
     return ''.join(traceback)
+
+
+def _get_job_def_system_prompt(job_def) -> str:
+    """Return the formatted system prompt for a job definition."""
+    agent = job_def.agent
+    if agent is None:
+        return ''
+    try:
+        return agent.system_prompt(
+            task_difficulty=_get_static_task_difficulty(job_def.metadata),
+            job_params=job_def.job_params,
+        )
+    except Exception:  # pylint: disable=broad-except
+        log.exception("Failed to format system prompt for job definition")
+        return ''
 
 
 def _render_warmup_preview(warmup_code) -> None:
@@ -122,7 +138,7 @@ def _render_job_def_card(job_def) -> None:
             _render_warmup_preview(job_def.warmup_code)
 
         # System prompt preview
-        prompt_text = job_def.system_prompt
+        prompt_text = _get_job_def_system_prompt(job_def)
         if prompt_text:
             with ui.expansion('System Prompt', icon='chat').classes('w-full'):
                 preview = prompt_text[:500] + ('…' if len(prompt_text) > 500 else '')
