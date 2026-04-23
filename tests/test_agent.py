@@ -17,6 +17,11 @@ def _internal_tool(**kwargs):  # pylint: disable=unused-argument
     """An internal tool that should not appear in the system prompt."""
 
 
+def _system_prompt(agent, task_difficulty=TaskDifficulty.medium, **kwargs):
+    """Format an agent prompt with the default test difficulty."""
+    return agent.system_prompt(task_difficulty=task_difficulty, **kwargs)
+
+
 class TestAgent:
     """Test cases for Agent class."""
 
@@ -32,9 +37,9 @@ class TestAgent:
             _tools=tools
         )
 
-        assert "clock()" in agent.system_prompt()
-        assert "Get the current time." in agent.system_prompt()
-        assert "Available tools:\n" in agent.system_prompt()
+        assert "clock()" in _system_prompt(agent)
+        assert "Get the current time." in _system_prompt(agent)
+        assert "Available tools:\n" in _system_prompt(agent)
 
     def test_system_prompt_formatting_multiple_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with multiple tools."""
@@ -48,10 +53,10 @@ class TestAgent:
             _tools=tools
         )
 
-        assert "clock()" in agent.system_prompt()
-        assert "docstr(class_name, method_name" in agent.system_prompt()
-        assert "exit_tool(reason)" in agent.system_prompt()
-        assert "You have access to these tools:" in agent.system_prompt()
+        assert "clock()" in _system_prompt(agent)
+        assert "docstr(class_name, method_name" in _system_prompt(agent)
+        assert "exit_tool(reason)" in _system_prompt(agent)
+        assert "You have access to these tools:" in _system_prompt(agent)
 
     def test_system_prompt_formatting_no_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt property with empty explicit tools list"""
@@ -65,10 +70,10 @@ class TestAgent:
             _tools=tools
         )
 
-        assert "Available tools:" in agent.system_prompt()
+        assert "Available tools:" in _system_prompt(agent)
         # System tools are in the registry, not on the agent
-        assert "list_of_examples" not in agent.system_prompt()
-        assert "show_example" not in agent.system_prompt()
+        assert "list_of_examples" not in _system_prompt(agent)
+        assert "show_example" not in _system_prompt(agent)
 
     def test_system_prompt_with_block_comment(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with block comment placeholder."""
@@ -83,8 +88,8 @@ class TestAgent:
         )
 
         # Each line should be prefixed with #
-        assert "# clock()" in agent.system_prompt()
-        assert "#     Get the current time." in agent.system_prompt()
+        assert "# clock()" in _system_prompt(agent)
+        assert "#     Get the current time." in _system_prompt(agent)
 
     def test_system_prompt_detailed_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Test system_prompt with detailed_tools placeholder."""
@@ -99,8 +104,8 @@ class TestAgent:
         )
 
         # detailed_tools uses py_syntax=True
-        assert "def clock()" in agent.system_prompt()
-        assert '"""Get the current time.' in agent.system_prompt()
+        assert "def clock()" in _system_prompt(agent)
+        assert '"""Get the current time.' in _system_prompt(agent)
 
     def test_format_tools_passes_agent_name(self, db0_fixture):  # pylint: disable=unused-argument
         """_format_tools passes the agent's type name to format_docstring."""
@@ -122,7 +127,7 @@ class TestAgent:
             _tools=[_internal_tool],
         )
 
-        assert "_internal_tool" not in agent.system_prompt()
+        assert "_internal_tool" not in _system_prompt(agent)
 
     def test_internal_tool_included_in_all_tools(self, db0_fixture):  # pylint: disable=unused-argument
         """Tools with names starting with '_' are available in all_tools (execution context)."""
@@ -207,7 +212,7 @@ class TestAgent:
             _system_prompt=make_system_prompt("Available variables: {shared_var_names}"),
             _tools=[]
         )
-        result = agent.system_prompt(job_params={"shared_vars": ["user", "message"]})
+        result = _system_prompt(agent, job_params={"shared_vars": ["user", "message"]})
         assert result == "Available variables: user, message"
 
     def test_shared_var_names_empty_when_no_shared_vars(self, db0_fixture):  # pylint: disable=unused-argument
@@ -217,7 +222,7 @@ class TestAgent:
             _system_prompt=make_system_prompt("Variables: {shared_var_names}"),
             _tools=[]
         )
-        result = agent.system_prompt(job_params={"other": "value"})
+        result = _system_prompt(agent, job_params={"other": "value"})
         assert result == "Variables: "
 
     def test_shared_var_names_empty_when_no_job_params(self, db0_fixture):  # pylint: disable=unused-argument
@@ -227,7 +232,7 @@ class TestAgent:
             _system_prompt=make_system_prompt("Variables: {shared_var_names}"),
             _tools=[]
         )
-        result = agent.system_prompt()
+        result = _system_prompt(agent)
         assert result == "Variables: "
 
 

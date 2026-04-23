@@ -132,6 +132,15 @@ def _format_task_difficulty_short(difficulty: TaskDifficulty) -> str:
     return str(difficulty)[0].upper()
 
 
+def _get_static_task_difficulty(metadata: Optional[Dict[str, Any]]) -> TaskDifficulty:
+    """Return the configured static difficulty, falling back to StatekSettings."""
+    metadata = metadata or {}
+    difficulty = parse_task_difficulty(metadata.get("DEFAULT_DIFFICULTY"))
+    if difficulty is not None:
+        return difficulty
+    return parse_task_difficulty(get_statek_settings().statek_default_difficulty)
+
+
 def _get_example_difficulty_for_job(
     agent_name: Optional[str],
     example_id: int,
@@ -316,15 +325,6 @@ class JobDef:
             return self._chat_style
         return get_statek_settings().chat_style
 
-    @property
-    def system_prompt(self) -> str:
-        """Return the agent's system prompt formatted with job-specific parameters."""
-        if self.agent is None:
-            return ""
-        return self.agent.system_prompt(job_params=self.job_params)
-
-
-
 @memo
 @dataclass
 class ErrorHandler:
@@ -401,7 +401,7 @@ class Job:
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
-            self._log(self.job_def.system_prompt)
+            self._log(self.system_prompt())
 
     @property
     def model_family(self) -> Optional[str]:
@@ -412,6 +412,15 @@ class Job:
     def model(self) -> Optional[str]:
         """Return the frozen model stored on the job definition."""
         return self.job_def.model if self.job_def is not None else None
+
+    def system_prompt(self, difficulty: Optional[TaskDifficulty] = None) -> str:
+        """Return the agent system prompt formatted for this job's current difficulty."""
+        if self.job_def is None or self.job_def.agent is None:
+            return ""
+        return self.job_def.agent.system_prompt(
+            task_difficulty=difficulty or self.get_current_difficulty(),
+            job_params=self.job_def.job_params,
+        )
 
     def _ensure_ext_ref_storage(self):
         """Return external-reference storage, creating it for older persisted jobs."""
@@ -683,7 +692,7 @@ class Job:
                 return "\n".join(parts)
             else:
                 # No warmup: system_prompt + all console is the first user prompt
-                sys_prompt = self.job_def.system_prompt or None
+                sys_prompt = self.system_prompt() or None
                 console_part = prompt_append_console(
                     self.py_env.console, chat_style, from_pos=0, xml_tags=xml_tags
                 )
@@ -923,10 +932,7 @@ class Job:
         model = LLM_API.require_model(self.get_current_model())
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
-        system_prompt = self.job_def.agent.system_prompt(
-            job_params=self.job_def.job_params,
-            task_difficulty=self.get_current_difficulty(),
-        )
+        system_prompt = self.system_prompt()
 
         # Append language rule when locale specifies a non-EN language
         # and AUTO_LANG_RULE is not explicitly disabled in metadata.
@@ -1011,14 +1017,7 @@ class Job:
         if self.__last_difficulty is not None:
             return self.__last_difficulty
         
-        metadata = self.job_def.metadata or {}
-        default_difficulty_value = metadata.get("DEFAULT_DIFFICULTY")
-        difficulty = parse_task_difficulty(default_difficulty_value)
-        if difficulty is not None:
-            return difficulty
-
-        # Fallback to the global default difficulty
-        return parse_task_difficulty(get_statek_settings().statek_default_difficulty)
+        return _get_static_task_difficulty(self.job_def.metadata)
 
     def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
         """
@@ -1266,7 +1265,7 @@ class Job:
         sent with every first LLM request. Token counts use the ``len // 4``
         approximation. Output tokens are always zero (no LLM output at this stage).
         """
-        system_prompt = self.job_def.system_prompt if self.job_def else ""
+        system_prompt = self.system_prompt()
         warmup_text = _warmup_code_text(self.job_def.warmup_code if self.job_def else None)
         return (len(system_prompt) + len(warmup_text)) // 4, 0
 

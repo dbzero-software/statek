@@ -145,32 +145,61 @@ class TestJobDef:
         )
         assert job_def.model == "L:small,M:medium,H:large"
 
-    def test_system_prompt_delegates_to_agent(self, agent_factory, job_def_factory):
-        """system_prompt property delegates to agent.system_prompt with job_params."""
-        agent = agent_factory(system_prompt="You are a {role} assistant")
-        job_def = job_def_factory(job_params={"role": "helpful"})
-        job_def.agent = agent
-        assert job_def.system_prompt == "You are a helpful assistant"
+def test_job_system_prompt_delegates_to_agent(agent_factory, job_def_factory):
+    """system_prompt delegates to agent.system_prompt with job params and difficulty."""
+    agent = agent_factory(system_prompt="You are a {role} assistant")
+    job_def = job_def_factory(job_params={"role": "helpful"})
+    job_def.agent = agent
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    assert job.system_prompt() == "You are a helpful assistant"
 
-    def test_system_prompt_without_job_params(self, agent_factory, job_def_factory):
-        """system_prompt property returns unformatted prompt when no job_params."""
-        agent = agent_factory(system_prompt="You are a test assistant")
-        job_def = job_def_factory(job_params=None)
-        job_def.agent = agent
-        assert job_def.system_prompt == "You are a test assistant"
 
-    def test_system_prompt_no_agent(self, job_def_factory):
-        """system_prompt returns empty string when agent is None."""
-        job_def = job_def_factory()
-        job_def.agent = None
-        assert job_def.system_prompt == ""
+def test_job_system_prompt_without_job_params(agent_factory, job_def_factory):
+    """system_prompt returns the formatted prompt when no job params are present."""
+    agent = agent_factory(system_prompt="You are a test assistant")
+    job_def = job_def_factory(job_params=None)
+    job_def.agent = agent
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    assert job.system_prompt() == "You are a test assistant"
 
-    def test_system_prompt_resolves_shared_var_names(self, agent_factory, job_def_factory):
-        """system_prompt resolves {shared_var_names} from job_params shared_vars."""
-        agent = agent_factory(system_prompt="Variables: {shared_var_names}")
-        job_def = job_def_factory(job_params={"shared_vars": ["user", "message"]})
-        job_def.agent = agent
-        assert job_def.system_prompt == "Variables: user, message"
+
+def test_job_system_prompt_no_agent(job_def_factory):
+    """system_prompt returns empty string when the job definition has no agent."""
+    job_def = job_def_factory()
+    job_def.agent = None
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    assert job.system_prompt() == ""
+
+
+def test_job_system_prompt_resolves_shared_var_names(agent_factory, job_def_factory):
+    """system_prompt resolves {shared_var_names} from job_params shared_vars."""
+    agent = agent_factory(system_prompt="Variables: {shared_var_names}")
+    job_def = job_def_factory(job_params={"shared_vars": ["user", "message"]})
+    job_def.agent = agent
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    assert job.system_prompt() == "Variables: user, message"
+
+
+def test_job_system_prompt_allows_difficulty_override(agent):
+    """system_prompt can be formatted for an explicit difficulty."""
+    agent.update_system_prompt(parse_system_prompt(
+        "Intro.\n\n"
+        "--- low: Scope ---\nLow instructions.\n\n"
+        "--- high: Scope ---\nHigh instructions."
+    ))
+    job_def = JobDef(
+        agent=agent,
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "high",
+        },
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    result = job.system_prompt(TaskDifficulty.low)
+
+    assert "Low instructions." in result
+    assert "High instructions." not in result
 
 
 class TestJob:
@@ -2355,7 +2384,7 @@ class TestGetLlmStepSizes:
         """get_llm_initial_step_size counts system prompt and warmup code tokens."""
         warmup = "x = 1"
         job = job_factory(warmup_code=warmup)
-        system_prompt = job.job_def.system_prompt
+        system_prompt = job.system_prompt()
         input_tokens, output_tokens = job.get_llm_initial_step_size()
         assert output_tokens == 0
         assert input_tokens == (len(system_prompt) + len(warmup)) // 4

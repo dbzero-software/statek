@@ -16,7 +16,7 @@ from statek.prompt_config import (
     make_system_prompt,
 )
 from statek.settings import get_statek_logger
-from statek.task_difficulty import TaskDifficulty, parse_task_difficulty
+from statek.task_difficulty import TaskDifficulty
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -219,24 +219,10 @@ class Agent:
                 text = text.replace(f'{{{name}}}', tools_str)
         return text
 
-    def _resolve_task_difficulty(self, task_difficulty: Optional[TaskDifficulty]) -> TaskDifficulty:
-        """Resolve the formatting difficulty when no live Job supplies one."""
-        if task_difficulty is not None:
-            return parse_task_difficulty(task_difficulty)
-
-        default_difficulty = None
-        if self._metadata:
-            default_difficulty = parse_task_difficulty(self._metadata.get("DEFAULT_DIFFICULTY"))
-        if default_difficulty is not None:
-            return default_difficulty
-
-        from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
-        return parse_task_difficulty(get_statek_settings().statek_default_difficulty)
-
     def system_prompt(
         self,
+        task_difficulty: TaskDifficulty,
         job_params: Dict = None,
-        task_difficulty: Optional[TaskDifficulty] = None,
         **kwargs,
     ) -> str:
         """
@@ -252,8 +238,8 @@ class Agent:
         format_map, allowing job-specific values to be injected into the system prompt.
 
         Args:
+            task_difficulty: difficulty to select prompt sections
             job_params: optional context for format (e.g. job local variables)
-            task_difficulty: optional difficulty to select prompt sections
             kwargs: optional additional params
 
         Returns:
@@ -261,8 +247,7 @@ class Agent:
         """
         if self._system_prompt is None:
             return ""
-        difficulty = self._resolve_task_difficulty(task_difficulty)
-        result = format_system_prompt(self._system_prompt, difficulty)
+        result = format_system_prompt(self._system_prompt, task_difficulty)
         result = self._expand_tool_placeholders(result)
         format_ctx = {}
         if job_params:
