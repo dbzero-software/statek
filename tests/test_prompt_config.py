@@ -4,11 +4,13 @@
 import pytest
 
 from statek.prompt_config import (
+    PromptStyle,
     PromptSection,
     PromptSectionData,
     SystemPrompt,
     SystemPromptData,
     compare_prompts,
+    format_system_prompt,
     parse_system_prompt,
 )
 from statek.task_difficulty import TaskDifficulty
@@ -131,6 +133,87 @@ def test_parse_system_prompt_invalid_xml_difficulty_raises():
     """Invalid XML difficulty metadata is rejected."""
     with pytest.raises(ValueError, match="Invalid task difficulty"):
         parse_system_prompt("<identity difficulty='urgent'>Identity.</identity>")
+
+
+def test_format_system_prompt_defaults_to_dashed_sections():
+    """The default formatter renders the intro and eligible dashed sections."""
+    prompt = SystemPromptData(
+        intro="Intro.",
+        sections=[
+            PromptSectionData(title="identity", contents="Identity."),
+            PromptSectionData(
+                title="advanced",
+                contents="High only.",
+                target_difficulties={TaskDifficulty.high},
+            ),
+            PromptSectionData(
+                title="rules",
+                contents="Low and medium.",
+                target_difficulties={TaskDifficulty.low, TaskDifficulty.medium},
+            ),
+        ],
+    )
+
+    assert format_system_prompt(prompt, TaskDifficulty.medium) == (
+        "Intro.\n\n"
+        "--- identity ---\n"
+        "Identity.\n\n"
+        "--- rules ---\n"
+        "Low and medium."
+    )
+
+
+@pytest.mark.parametrize(
+    ("style", "expected"),
+    [
+        (PromptStyle.XML, "Intro.\n\n<identity>Identity.</identity>"),
+        (PromptStyle.DASHED, "Intro.\n\n--- identity ---\nIdentity."),
+        (PromptStyle.ASTERISK, "Intro.\n\n*** identity ***\nIdentity."),
+        (PromptStyle.MARKDOWN, "Intro.\n\n## identity\nIdentity."),
+    ],
+)
+def test_format_system_prompt_supports_section_styles(style, expected):
+    """Supported styles control section delimiters."""
+    prompt = SystemPromptData(
+        intro="Intro.",
+        sections=[PromptSectionData(title="identity", contents="Identity.")],
+    )
+
+    assert format_system_prompt(prompt, TaskDifficulty.low, style=style) == expected
+
+
+def test_format_system_prompt_uses_section_formatter():
+    """A custom section formatter can transform section contents before render."""
+    prompt = SystemPromptData(
+        intro="Intro.",
+        sections=[PromptSectionData(title="identity", contents="{{agent}}")],
+    )
+
+    assert format_system_prompt(
+        prompt,
+        TaskDifficulty.low,
+        section_formatter=lambda contents: contents.replace("{{agent}}", "Codex"),
+    ) == "Intro.\n\n--- identity ---\nCodex"
+
+
+def test_format_system_prompt_accepts_persistent_prompt(db0_fixture):  # pylint: disable=unused-argument
+    """Persistent SystemPrompt objects are formatted like volatile data prompts."""
+    prompt = SystemPrompt(
+        intro="Intro.",
+        sections=[
+            PromptSection(
+                title="identity",
+                contents="Identity.",
+                target_difficulties={TaskDifficulty.high},
+            ),
+        ],
+    )
+
+    assert format_system_prompt(
+        prompt,
+        TaskDifficulty.high,
+        style=PromptStyle.MARKDOWN,
+    ) == "Intro.\n\n## identity\nIdentity."
 
 
 def test_compare_prompts_matches_data_and_memo_prompts(db0_fixture):  # pylint: disable=unused-argument

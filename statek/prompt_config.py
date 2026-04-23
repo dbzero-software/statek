@@ -4,7 +4,7 @@ import re
 from collections import namedtuple
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 import dbzero as db0
 from statek.task_difficulty import TaskDifficulty
@@ -49,6 +49,11 @@ class SystemPrompt:
 
 PromptSectionLike = Union[PromptSection, PromptSectionData]
 SystemPromptLike = Union[SystemPrompt, SystemPromptData]
+
+
+@db0.enum(values=["XML", "DASHED", "ASTERISK", "MARKDOWN"])
+class PromptStyle:
+    """Supported system prompt section formatting styles."""
 
 
 _LINE_SECTION_RE = re.compile(
@@ -217,6 +222,81 @@ def parse_system_prompt(input: str) -> SystemPromptData:  # pylint: disable=rede
         intro=_strip_prompt_part("".join(intro_parts)),
         sections=sections,
     )
+
+
+def _section_matches_difficulty(
+    section: PromptSectionLike,
+    task_difficulty: TaskDifficulty,
+) -> bool:
+    """Return whether a section should be included for the target difficulty."""
+    return (
+        section.target_difficulties is None
+        or task_difficulty in section.target_difficulties
+    )
+
+
+def _format_section_contents(
+    section: PromptSectionLike,
+    section_formatter: Optional[Callable[[str], str]],
+) -> str:
+    """Apply optional section content formatting and trim outer whitespace."""
+    contents = section.contents
+    if section_formatter is not None:
+        contents = section_formatter(contents)
+    return _strip_prompt_part(contents)
+
+
+def _format_xml_section(title: str, contents: str) -> str:
+    """Format a section as an XML box."""
+    if not re.fullmatch(r"[A-Za-z_][\w.-]*", title):
+        raise ValueError(f"Invalid XML section title: {title!r}")
+    if "\n" in contents:
+        return f"<{title}>\n{contents}\n</{title}>"
+    return f"<{title}>{contents}</{title}>"
+
+
+def _format_prompt_section(
+    section: PromptSectionLike,
+    style: PromptStyle,
+    section_formatter: Optional[Callable[[str], str]],
+) -> str:
+    """Format one prompt section using the requested delimiter style."""
+    title = section.title.strip()
+    contents = _format_section_contents(section, section_formatter)
+    if style == PromptStyle.XML:  # pylint: disable=no-member
+        return _format_xml_section(title, contents)
+    if style == PromptStyle.DASHED:  # pylint: disable=no-member
+        return f"--- {title} ---\n{contents}"
+    if style == PromptStyle.ASTERISK:  # pylint: disable=no-member
+        return f"*** {title} ***\n{contents}"
+    if style == PromptStyle.MARKDOWN:  # pylint: disable=no-member
+        return f"## {title}\n{contents}"
+    raise ValueError(f"Unsupported prompt style: {style!r}")
+
+
+def format_system_prompt(
+    prompt: SystemPromptLike,
+    task_difficulty: TaskDifficulty,
+    style: PromptStyle = PromptStyle.DASHED,  # pylint: disable=no-member
+    section_formatter: Optional[Callable[[str], str]] = None,
+) -> str:
+    """Format a system prompt for a target task difficulty.
+
+    The intro is always included. Sections with no target difficulty metadata
+    are included for every task. Sections with metadata are included only when
+    ``task_difficulty`` is one of the section's target difficulties.
+    """
+    parts = []
+    intro = _strip_prompt_part(prompt.intro)
+    if intro:
+        parts.append(intro)
+
+    parts.extend(
+        _format_prompt_section(section, style, section_formatter)
+        for section in prompt.sections
+        if _section_matches_difficulty(section, task_difficulty)
+    )
+    return "\n\n".join(parts)
 
 
 def _normalize_prompt_section(section: PromptSectionLike):
