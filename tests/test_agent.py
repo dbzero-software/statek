@@ -8,6 +8,8 @@ from unittest.mock import patch
 import pytest
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
+from statek.prompt_config import SystemPrompt
+from statek.task_difficulty import TaskDifficulty
 from tests.conftest import clock, docstr, exit_tool
 
 
@@ -204,6 +206,52 @@ class TestAgent:
         )
         result = agent.system_prompt()
         assert result == "Variables: "
+
+
+def test_system_prompt_stored_as_persistent_prompt(db0_fixture):  # pylint: disable=unused-argument
+    """Raw prompt strings are parsed into persistent SystemPrompt objects."""
+    agent = Agent(
+        role="test",
+        _system_prompt="Intro\n\n--- high: Details ---\nHigh only.",
+        _tools=[],
+    )
+
+    assert isinstance(agent._system_prompt, SystemPrompt)  # pylint: disable=protected-access
+    assert agent._system_prompt.intro == "Intro"  # pylint: disable=protected-access
+
+
+def test_update_system_prompt_uses_structural_compare(db0_fixture):  # pylint: disable=unused-argument
+    """Equivalent parsed prompts do not replace the stored SystemPrompt."""
+    agent = Agent(
+        role="test",
+        _system_prompt="--- Identity ---\nSame.",
+        _tools=[],
+    )
+    original_prompt = agent._system_prompt  # pylint: disable=protected-access
+
+    result = agent.update_system_prompt("## Identity\nSame.")
+
+    assert result is False
+    assert agent._system_prompt is original_prompt  # pylint: disable=protected-access
+
+
+def test_system_prompt_filters_sections_by_task_difficulty(db0_fixture):  # pylint: disable=unused-argument
+    """Prompt sections are formatted for the supplied task difficulty."""
+    agent = Agent(
+        role="test",
+        _system_prompt=(
+            "Intro.\n\n"
+            "--- low: Scope ---\nLow instructions.\n\n"
+            "--- high: Scope ---\nHigh instructions."
+        ),
+        _tools=[],
+    )
+
+    result = agent.system_prompt(task_difficulty=TaskDifficulty.low)
+
+    assert "Intro." in result
+    assert "Low instructions." in result
+    assert "High instructions." not in result
 
 
 class TestSupervisedAgentCustomRole:

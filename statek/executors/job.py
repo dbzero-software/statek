@@ -923,7 +923,10 @@ class Job:
         model = LLM_API.require_model(self.get_current_model())
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
-        system_prompt = self.job_def.system_prompt
+        system_prompt = self.job_def.agent.system_prompt(
+            job_params=self.job_def.job_params,
+            task_difficulty=self.get_current_difficulty(),
+        )
 
         # Append language rule when locale specifies a non-EN language
         # and AUTO_LANG_RULE is not explicitly disabled in metadata.

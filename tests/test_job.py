@@ -778,6 +778,28 @@ def test_get_current_model_uses_example_dynamic_difficulty(job_def_factory):
     assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
 
 
+def test_get_next_request_formats_system_prompt_with_current_difficulty(agent):
+    """The outgoing system prompt uses Job.get_current_difficulty for section selection."""
+    agent.update_system_prompt(
+        "Intro.\n\n"
+        "--- low: Scope ---\nLow instructions.\n\n"
+        "--- high: Scope ---\nHigh instructions."
+    )
+    job_def = JobDef(
+        agent=agent,
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "high",
+        },
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    request = job.get_next_request()
+
+    assert "High instructions." in request["system_prompt"]
+    assert "Low instructions." not in request["system_prompt"]
+
+
 def test_get_next_request_uses_last_dynamic_difficulty(
     job_def_factory,
 ):
