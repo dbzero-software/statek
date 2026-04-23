@@ -7,6 +7,7 @@ from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.pyenv import PyEnv
+from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from web_ui.pages.job_detail import (
@@ -22,6 +23,7 @@ from web_ui.pages.job_detail import (
     _get_job_temperature,
     _job_uses_reasoning,
     _get_locale_str,
+    _get_difficulty_button_specs,
     _get_latency_samples,
     _summarize_latencies,
     _format_latency_seconds,
@@ -974,8 +976,11 @@ def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, r
         agent._system_prompt = raw_prompt  # pylint: disable=protected-access
         if system_prompt_raises:
             type(job_def).system_prompt = PropertyMock(side_effect=system_prompt_raises)
+            job.system_prompt.side_effect = system_prompt_raises
         else:
             type(job_def).system_prompt = PropertyMock(return_value=system_prompt_return)
+            if system_prompt_return is not None:
+                job.system_prompt.return_value = system_prompt_return
         job_def.agent = agent
     job.job_def = job_def
     return job
@@ -983,8 +988,29 @@ def _make_job_with_agent(system_prompt_return=None, system_prompt_raises=None, r
 
 class TestGetSystemPrompt:
     def test_returns_formatted_system_prompt(self):
-        job = _make_job_with_agent(system_prompt_return='You are an assistant.')
+        job = _make_job_with_agent()
+        job.system_prompt.return_value = 'You are an assistant.'
+
         assert _get_system_prompt(job) == 'You are an assistant.'
+        job.system_prompt.assert_called_once_with()
+
+    def test_uses_explicit_difficulty_when_provided(self):
+        job = _make_job_with_agent()
+        job.system_prompt.return_value = 'Low instructions.'
+
+        assert _get_system_prompt(job, TaskDifficulty.low) == 'Low instructions.'
+        job.system_prompt.assert_called_once_with(TaskDifficulty.low)
+
+    def test_resolves_current_difficulty_through_job_system_prompt(self):
+        job = _make_job_with_agent()
+        job.system_prompt.side_effect = (
+            lambda difficulty=None: 'High instructions.'
+            if difficulty == TaskDifficulty.high else 'Current instructions.'
+        )
+        job.get_current_difficulty.return_value = TaskDifficulty.high
+
+        assert _get_system_prompt(job) == 'Current instructions.'
+        job.system_prompt.assert_called_once_with()
 
     def test_returns_empty_string_when_no_job_def(self):
         job = _make_job_with_agent(no_job_def=True)
@@ -999,6 +1025,8 @@ class TestGetSystemPrompt:
             system_prompt_raises=KeyError('missing_key'),
             raw_prompt='Raw template with {missing_key}.',
         )
+        job.system_prompt.side_effect = KeyError('missing_key')
+
         assert _get_system_prompt(job) == 'Raw template with {missing_key}.'
 
     def test_returns_empty_string_when_formatted_and_raw_both_none(self):
@@ -1012,6 +1040,31 @@ class TestGetSystemPrompt:
         job = MagicMock()
         type(job).job_def = PropertyMock(side_effect=RuntimeError('db error'))
         assert _get_system_prompt(job) == ''
+
+
+class TestDifficultyButtonSpecs:
+    def test_returns_lmh_buttons_with_tooltips(self):
+        specs = _get_difficulty_button_specs()
+
+        assert [(spec['label'], spec['tooltip']) for spec in specs] == [
+            ('L', 'Low difficulty'),
+            ('M', 'Medium difficulty'),
+            ('H', 'High difficulty'),
+        ]
+
+    def test_keys_match_task_difficulty_values(self):
+        specs = _get_difficulty_button_specs()
+
+        assert [spec['key'] for spec in specs] == [
+            str(TaskDifficulty.low),
+            str(TaskDifficulty.medium),
+            str(TaskDifficulty.high),
+        ]
+        assert [spec['difficulty'] for spec in specs] == [
+            TaskDifficulty.low,
+            TaskDifficulty.medium,
+            TaskDifficulty.high,
+        ]
 
 
 class TestBuildHistorySections:

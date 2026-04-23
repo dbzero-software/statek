@@ -12,6 +12,8 @@ import dbzero as db0
 from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.locale import LANGUAGE_HINTS
+from statek.prompt_config import format_system_prompt
+from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from web_ui.nicegui_compat import ui
@@ -1116,18 +1118,50 @@ def _render_turn_section(job, turn_idx: int, chat_item, from_pos: int, to_pos: i
             _render_console_output(console_out)
 
 
-def _get_system_prompt(job) -> str:
+def _get_system_prompt(job, difficulty: Optional[TaskDifficulty] = None) -> str:
     """Return the formatted system prompt, or the raw template on render failure."""
     try:
         if not job.job_def or not job.job_def.agent:
             return ''
         try:
-            return job.job_def.system_prompt or ''
+            if difficulty is not None:
+                return job.system_prompt(difficulty) or ''
+            return job.system_prompt() or ''
         except Exception:  # pylint: disable=broad-except
             raw = job.job_def.agent._system_prompt or ''  # pylint: disable=protected-access
-            return raw
+            if raw and difficulty is not None:
+                try:
+                    return format_system_prompt(raw, difficulty)
+                except Exception:  # pylint: disable=broad-except
+                    pass
+            return str(raw) if raw else ''
     except Exception:  # pylint: disable=broad-except
         return ''
+
+
+def _get_current_difficulty(job) -> Optional[TaskDifficulty]:
+    """Return the job's current difficulty, or None when unavailable."""
+    try:
+        return job.get_current_difficulty()
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def _get_difficulty_button_specs() -> list[dict]:
+    """Return display metadata for the system prompt difficulty buttons."""
+    return [
+        {
+            'key': str(difficulty),
+            'difficulty': difficulty,
+            'label': label,
+            'tooltip': f'{label_full} difficulty',
+        }
+        for difficulty, label, label_full in [
+            (TaskDifficulty.low, 'L', 'Low'),  # pylint: disable=no-member
+            (TaskDifficulty.medium, 'M', 'Medium'),  # pylint: disable=no-member
+            (TaskDifficulty.high, 'H', 'High'),  # pylint: disable=no-member
+        ]
+    ]
 
 
 def _render_latency_summary_card(title: str, summary: _LatencySummary, color: str) -> None:
@@ -1297,9 +1331,15 @@ def create_job_detail_dialog(job) -> None:
     except Exception:  # pylint: disable=broad-except
         pass
 
-    system_prompt = _get_system_prompt(job)
+    current_difficulty = _get_current_difficulty(job)
+    system_prompt = _get_system_prompt(job, current_difficulty)
     history_sections = _build_history_sections(job)
     exception_messages = _get_exception_messages(job)
+    difficulty_state = {'difficulty': current_difficulty}
+    try:
+        difficulty_button_specs = _get_difficulty_button_specs()
+    except Exception:  # pylint: disable=broad-except
+        difficulty_button_specs = []
 
     with ui.dialog().props('maximized') as dlg:
         with ui.card().classes('w-full h-full rounded-none overflow-auto').style('max-height: 100vh'):
@@ -1430,9 +1470,64 @@ def create_job_detail_dialog(job) -> None:
                         with ui.expansion('System Prompt', icon='description').props('dense').classes(
                             'w-full rounded border border-gray-200 mb-4'
                         ):
-                            ui.label(system_prompt).classes(
-                                'text-xs text-gray-700 whitespace-pre-wrap w-full rounded p-3'
-                            ).style('font-family: "JetBrains Mono", monospace; background: #fdf6e3')
+                            @ui.refreshable
+                            def system_prompt_view() -> None:
+                                prompt = _get_system_prompt(
+                                    job,
+                                    difficulty_state['difficulty'],
+                                )
+                                with ui.element('div').classes('w-full relative'):
+                                    if difficulty_button_specs:
+                                        with ui.row().classes(
+                                            'absolute top-2 right-2 z-10 gap-1 '
+                                            'rounded border border-amber-300/50 '
+                                            'bg-amber-50/55 p-0.5 shadow-sm backdrop-blur-sm'
+                                        ):
+                                            for spec in difficulty_button_specs:
+                                                is_selected = (
+                                                    difficulty_state['difficulty']
+                                                    == spec['difficulty']
+                                                )
+                                                button_classes = (
+                                                    'w-8 h-8 min-w-0 px-0 text-xs font-bold '
+                                                    'border transition-colors '
+                                                )
+                                                button_classes += (
+                                                    'bg-amber-200/75 text-amber-950 border-amber-400/70 '
+                                                    'shadow-sm'
+                                                    if is_selected else
+                                                    'bg-white/35 text-gray-600 border-white/30 '
+                                                    'hover:bg-white/70 hover:text-gray-800 '
+                                                    'hover:border-amber-200/70'
+                                                )
+
+                                                def _select_difficulty(
+                                                    _event=None,
+                                                    _difficulty=spec['difficulty'],
+                                                ):
+                                                    difficulty_state['difficulty'] = _difficulty
+                                                    system_prompt_view.refresh()
+
+                                                ui.button(
+                                                    spec['label'],
+                                                    on_click=_select_difficulty,
+                                                ).props(
+                                                    'flat dense no-caps'
+                                                ).classes(button_classes).tooltip(spec['tooltip'])
+
+                                    prompt_classes = (
+                                        'text-xs text-gray-700 whitespace-pre-wrap w-full '
+                                        'rounded p-3 min-h-12'
+                                    )
+                                    if difficulty_button_specs:
+                                        prompt_classes += ' pr-32'
+
+                                    ui.label(prompt).classes(prompt_classes).style(
+                                        'font-family: "JetBrains Mono", monospace; '
+                                        'background: #fdf6e3'
+                                    )
+
+                            system_prompt_view()
 
                     if history_sections:
                         with ui.column().classes('w-full gap-3'):
