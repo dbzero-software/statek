@@ -568,7 +568,10 @@ def panic(**kwargs):  # pylint: disable=unused-argument
     if job is None:
         raise RuntimeError("panic() requires a current job in _STATEK_CTX")
     job.panic()
-    print(f"# Difficulty increased to {job.get_current_difficulty()}. Continue with the harder task.")
+    print(
+        f"# Difficulty increased to {job.get_current_difficulty()}. "
+        "Continue with the harder task."
+    )
 
 
 @tool(system=True, target={ChatStyle.DIRECT})  # pylint: disable=no-member
