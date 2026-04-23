@@ -717,7 +717,7 @@ class TestFindTools:
 
         captured = capsys.readouterr()
         assert job.calls == 1
-        assert "high" in captured.out
+        assert captured.out == "# Difficulty increased to high. Continue with the harder task.\n"
 
     def test_find_tools_deduplicates_by_name(self):
         """find_tools returns no duplicate tool names."""
