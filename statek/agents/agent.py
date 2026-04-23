@@ -247,8 +247,11 @@ class Agent:
         """
         if self._system_prompt is None:
             return ""
-        result = format_system_prompt(self._system_prompt, task_difficulty)
-        result = self._expand_tool_placeholders(result)
+        result = format_system_prompt(
+            self._system_prompt,
+            task_difficulty,
+            prompt_part_formatter=self._expand_tool_placeholders,
+        )
         format_ctx = {}
         if job_params:
             format_ctx.update(job_params)

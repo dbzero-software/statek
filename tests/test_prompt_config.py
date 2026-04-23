@@ -196,6 +196,20 @@ def test_format_system_prompt_uses_section_formatter():
     ) == "Intro.\n\n--- identity ---\nCodex"
 
 
+def test_format_system_prompt_uses_prompt_part_formatter():
+    """A prompt part formatter can transform intro and section contents during render."""
+    prompt = SystemPromptData(
+        intro="Intro: {agent}",
+        sections=[PromptSectionData(title="identity", contents="Identity: {agent}")],
+    )
+
+    assert format_system_prompt(
+        prompt,
+        TaskDifficulty.low,
+        prompt_part_formatter=lambda contents: contents.replace("{agent}", "Codex"),
+    ) == "Intro: Codex\n\n--- identity ---\nIdentity: Codex"
+
+
 def test_format_system_prompt_accepts_persistent_prompt(db0_fixture):  # pylint: disable=unused-argument
     """Persistent SystemPrompt objects are formatted like volatile data prompts."""
     prompt = SystemPrompt(
