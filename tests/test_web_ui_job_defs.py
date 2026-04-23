@@ -1,7 +1,8 @@
 """Tests for the web_ui job definitions page helper functions."""
 
 from web_ui.pages.job_defs import (
-    _paginate, _job_def_has_errors, _job_def_get_errors, _format_traceback
+    _paginate, _job_def_has_errors, _job_def_get_errors, _format_traceback,
+    _get_job_def_system_prompt,
 )
 
 
@@ -16,8 +17,11 @@ class _FakeError:  # pylint: disable=too-few-public-methods
 
 
 class _FakeJobDef:  # pylint: disable=too-few-public-methods
-    def __init__(self, errors=None):
+    def __init__(self, errors=None, agent=None, metadata=None, job_params=None):
         self._errors = errors or []
+        self.agent = agent
+        self.metadata = metadata if metadata is not None else {"MODEL": "test-model"}
+        self.job_params = job_params
 
     def has_errors(self):
         return bool(self._errors)
@@ -32,6 +36,19 @@ class _FakeJobDefRaises:  # pylint: disable=too-few-public-methods
 
     def get_errors(self):
         raise RuntimeError('db error')
+
+
+class _FakeAgent:  # pylint: disable=too-few-public-methods
+    def __init__(self, prompt='formatted prompt', raises=None):
+        self.prompt = prompt
+        self.raises = raises
+        self.calls = []
+
+    def system_prompt(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.raises is not None:
+            raise self.raises
+        return self.prompt
 
 
 # ---------------------------------------------------------------------------
@@ -113,3 +130,29 @@ class TestFormatTraceback:
 
     def test_empty_list_returns_empty_string(self):
         assert _format_traceback([]) == ''
+
+
+# ---------------------------------------------------------------------------
+# _get_job_def_system_prompt
+# ---------------------------------------------------------------------------
+
+class TestGetJobDefSystemPrompt:
+    def test_formats_prompt_through_agent(self, db0_fixture):  # pylint: disable=unused-argument
+        agent = _FakeAgent(prompt='Hello Alice')
+        jd = _FakeJobDef(
+            agent=agent,
+            metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "medium"},
+            job_params={"name": "Alice"},
+        )
+
+        assert _get_job_def_system_prompt(jd) == 'Hello Alice'
+        assert agent.calls[0]["job_params"] == {"name": "Alice"}
+        assert str(agent.calls[0]["task_difficulty"]) == 'medium'
+
+    def test_returns_empty_string_without_agent(self):
+        assert _get_job_def_system_prompt(_FakeJobDef(agent=None)) == ''
+
+    def test_returns_empty_string_when_agent_formatting_fails(self, db0_fixture):  # pylint: disable=unused-argument
+        jd = _FakeJobDef(agent=_FakeAgent(raises=KeyError('name')))
+
+        assert _get_job_def_system_prompt(jd) == ''
