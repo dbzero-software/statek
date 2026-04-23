@@ -7,9 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 import pytest
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
-from statek.prompt_config import make_system_prompt
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
-from statek.prompt_config import SystemPrompt
+from statek.prompt_config import SystemPrompt, make_system_prompt, parse_system_prompt
 from statek.task_difficulty import TaskDifficulty
 from tests.conftest import clock, docstr, exit_tool
 
@@ -253,7 +252,7 @@ def test_update_system_prompt_uses_structural_compare(db0_fixture):  # pylint: d
     )
     original_prompt = agent._system_prompt  # pylint: disable=protected-access
 
-    result = agent.update_system_prompt(make_system_prompt("## Identity\nSame."))
+    result = agent.update_system_prompt(parse_system_prompt("## Identity\nSame."))
 
     assert result is False
     assert agent._system_prompt is original_prompt  # pylint: disable=protected-access

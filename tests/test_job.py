@@ -21,7 +21,7 @@ from statek.chat_history import ChatRole, ContentSource
 from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
-from statek.prompt_config import make_system_prompt
+from statek.prompt_config import make_system_prompt, parse_system_prompt
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -781,7 +781,7 @@ def test_get_current_model_uses_example_dynamic_difficulty(job_def_factory):
 
 def test_get_next_request_formats_system_prompt_with_current_difficulty(agent):
     """The outgoing system prompt uses Job.get_current_difficulty for section selection."""
-    agent.update_system_prompt(make_system_prompt(
+    agent.update_system_prompt(parse_system_prompt(
         "Intro.\n\n"
         "--- low: Scope ---\nLow instructions.\n\n"
         "--- high: Scope ---\nHigh instructions."

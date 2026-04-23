@@ -440,7 +440,7 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
 
         # Update agent's system prompt if changed
         if prompt_def.system:
-            agent.update_system_prompt(make_system_prompt(prompt_def.system))
+            agent.update_system_prompt(prompt_def.system)
 
         # Update agent's metadata if changed
         if prompt_def.metadata:

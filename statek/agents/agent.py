@@ -10,8 +10,10 @@ from statek.utils import CodeBlock
 from statek.executors.job import JobDef, parse_warmup_code
 from statek.prompt_config import (
     SystemPrompt,
+    SystemPromptData,
     compare_prompts,
     format_system_prompt,
+    make_system_prompt,
 )
 from statek.settings import get_statek_logger
 from statek.task_difficulty import TaskDifficulty, parse_task_difficulty
@@ -119,7 +121,7 @@ class Agent:
         the _system_prompt and _metadata values.
         """
         # pylint: disable=import-outside-toplevel,cyclic-import
-        from statek.prompt_config import load_prompt_files, make_system_prompt
+        from statek.prompt_config import load_prompt_files
         from statek.settings import get_statek_settings
 
         settings = get_statek_settings()
@@ -132,7 +134,7 @@ class Agent:
 
         if prompt_def is not None:
             if prompt_def.system:
-                self.update_system_prompt(make_system_prompt(prompt_def.system))
+                self.update_system_prompt(prompt_def.system)
             if prompt_def.metadata:
                 self.update_metadata(prompt_def.metadata)
         # Migrate any '_'-prefixed tools passed directly to _tools into _internal_tools
@@ -145,24 +147,18 @@ class Agent:
                 self._internal_tools.append(fn)
 
 
-    def update_system_prompt(self, new_prompt: Optional[SystemPrompt]) -> bool:
+    def update_system_prompt(self, new_prompt: SystemPromptData) -> bool:
         """Update _system_prompt only if it differs from the current value.
 
         Args:
-            new_prompt: New system prompt to apply.
+            new_prompt: New non-persistent system prompt data to apply.
 
         Returns:
             True if the prompt was updated, False if it was already up to date.
         """
-        if self._system_prompt is None and new_prompt is None:
+        if self._system_prompt is not None and compare_prompts(self._system_prompt, new_prompt):
             return False
-        if (
-            self._system_prompt is not None
-            and new_prompt is not None
-            and compare_prompts(self._system_prompt, new_prompt)
-        ):
-            return False
-        self._system_prompt = new_prompt
+        self._system_prompt = make_system_prompt(new_prompt)
         STATEK_LOGGER.debug("Agent '%s' system prompt updated", self.role)
         return True
 
