@@ -156,6 +156,15 @@ def _get_example_difficulty_for_job(
     return get_example_difficulty(agent_name, example_id)
 
 
+def _next_task_difficulty(difficulty: TaskDifficulty) -> TaskDifficulty:
+    """Return the next higher task difficulty level."""
+    values = tuple(TaskDifficulty.values())  # pylint: disable=no-member
+    index = values.index(difficulty)
+    if index >= len(values) - 1:
+        raise RuntimeError(f"Job is already at high difficulty: {difficulty}")
+    return values[index + 1]
+
+
 def _warmup_code_text(warmup) -> str:
     """Return the concatenated text of all warmup code blocks."""
     if warmup is None:
@@ -1018,6 +1027,11 @@ class Job:
             return self.__last_difficulty
         
         return _get_static_task_difficulty(self.job_def.metadata)
+
+    def panic(self):
+        """Escalate the current job difficulty to the next higher level."""
+        current_difficulty = self.get_current_difficulty()
+        self.__last_difficulty = _next_task_difficulty(current_difficulty)
 
     def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
         """
