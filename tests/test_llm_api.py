@@ -708,6 +708,56 @@ class TestClaudeToolConversion:
 class TestPreviewRequest:
     """Tests that preview_request matches the payload sent by process_request."""
 
+    def test_preview_request_materializes_chat_history_iterable(self, db0_fixture):
+        del db0_fixture
+
+        class _PreviewIteratingAPI(LLM_API):
+            def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+                self,
+                system_prompt=None,
+                model=None,
+                metadata=None,
+                tools=None,
+                chat_history=None,
+                chat_style=None,
+                temperature=None,
+                enable_reasoning=False,
+            ):
+                del system_prompt, model, metadata, tools, chat_style, temperature, enable_reasoning
+                first_pass = list(chat_history or [])
+                second_pass = list(chat_history or [])
+                return {"first_pass": first_pass, "second_pass": second_pass}
+
+            async def _process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+                self,
+                system_prompt=None,
+                model=None,
+                metadata=None,
+                tools=None,
+                chat_history=None,
+                chat_style=None,
+                temperature=None,
+                enable_reasoning=False,
+            ):
+                del (
+                    system_prompt, model, metadata, tools, chat_history, chat_style,
+                    temperature, enable_reasoning,
+                )
+                return LLM_Response(text="ok", stats=_make_stats(), call_requests=None)
+
+        api = _PreviewIteratingAPI()
+        history = iter([_user("hello"), _console("> ok")])
+
+        preview = api.preview_request(
+            model="gpt-4o",
+            metadata={},
+            chat_history=history,
+            chat_style=_MD(),
+        )
+
+        assert preview["first_pass"] == preview["second_pass"]
+        assert [item.content for item in preview["first_pass"]] == ["hello", "> ok"]
+
     @pytest.mark.asyncio
     async def test_openrouter_preview_matches_process_payload(
         self, openrouter_api, app_tool, sys_tool, db0_fixture
@@ -830,6 +880,78 @@ class TestPreviewRequest:
                 chat_style=_MD(),
                 temperature=0.7,
                 enable_reasoning=True,
+            )
+
+        assert preview == captured_payload
+
+    @pytest.mark.asyncio
+    async def test_openrouter_preview_matches_process_payload_for_multi_tool_history(
+        self, openrouter_api, db0_fixture
+    ):
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            del url, headers
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"choices":[{"message":{"content":"ok"}}]}'
+            mock_resp.json.return_value = {
+                "choices": [{"message": {"content": "ok"}}]
+            }
+            return mock_resp
+
+        warmup_call = CallSpec(
+            id="STATEK-WARMUP-000",
+            func_name="python_cli",
+            args=[],
+            kwargs={"code": "print('warmup')"},
+        )
+        list_examples = CallSpec(id="STATEK-001", func_name="list_of_examples", args=[], kwargs={})
+        show_example = CallSpec(id="STATEK-002", func_name="show_example", args=[], kwargs={})
+        render_april = CallSpec(
+            id="call_render_april",
+            func_name="python_cli",
+            args=[],
+            kwargs={"code": "render_oncall_calendar('2026-04-01')"},
+        )
+        panic_call = CallSpec(id="call_panic", func_name="panic", args=[], kwargs={})
+        final_render = CallSpec(
+            id="call_render_final",
+            func_name="python_cli",
+            args=[],
+            kwargs={"code": "answer('kwiecien')"},
+        )
+        history = [
+            _user("moj grafik na kwiecien"),
+            _asst_tools(warmup_call),
+            _tool_result("Current date and time", warmup_call),
+            _asst_tools(list_examples),
+            _tool_result("0: Empty calendar", list_examples),
+            _asst_tools(show_example),
+            _tool_result("Showing a monthly schedule calendar", show_example),
+            _asst_tools(render_april),
+            _tool_result("2026-04-01", render_april),
+            _asst_tools(panic_call),
+            _tool_result("# Difficulty increased to medium", panic_call),
+            _asst_tools(final_render),
+            _tool_result("log: answer(body='Oto twoj grafik')", final_render),
+            _user("i jeszcze na maj"),
+        ]
+
+        preview = openrouter_api.preview_request(
+            system_prompt="sys",
+            model="gpt-4o",
+            chat_history=history,
+            chat_style=_MD(),
+        )
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await openrouter_api.process_request(
+                system_prompt="sys",
+                model="gpt-4o",
+                chat_history=history,
+                chat_style=_MD(),
             )
 
         assert preview == captured_payload

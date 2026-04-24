@@ -208,6 +208,12 @@ class LLM_API(ABC):
         enable_reasoning: bool = False,
     ) -> Dict[str, Any]:
         """Resolve shared request parameters used by preview and execution."""
+        if metadata is not None:
+            metadata = dict(metadata)
+        if available_tools is not None and not isinstance(available_tools, list):
+            available_tools = list(available_tools)
+        if chat_history is not None and not isinstance(chat_history, list):
+            chat_history = list(chat_history)
         model = self.require_model(model)
         tools = select_request_tools(
             metadata=metadata,
