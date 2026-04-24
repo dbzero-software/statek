@@ -1539,11 +1539,18 @@ class TestBuildRawRepr:
 
 
 class TestGetJobModel:
-    def test_reads_current_model_from_job(self):
+    def test_reads_bare_current_model_from_job(self):
         job = _make_job()
         job.get_current_model = MagicMock(return_value='deepseek/deepseek-v3.2')
 
-        assert _get_job_model(job) == 'deepseek/deepseek-v3.2'
+        assert _get_job_model(job) == 'deepseek-v3.2'
+        job.get_current_model.assert_called_once_with()
+
+    def test_strips_provider_and_family_from_current_model(self):
+        job = _make_job()
+        job.get_current_model = MagicMock(return_value='openrouter/openai/gpt-5.4')
+
+        assert _get_job_model(job) == 'gpt-5.4'
         job.get_current_model.assert_called_once_with()
 
     def test_blank_current_model_returns_dash(self):

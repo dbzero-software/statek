@@ -17,7 +17,7 @@ from statek.locale import LANGUAGE_HINTS
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
-from statek.model_name import select_model_provider
+from statek.model_name import ensure_model_name, select_model_provider
 from web_ui.nicegui_compat import ui
 from web_ui.components.json_viewer import create_json_viewer
 from web_ui.components.status_badge import create_status_badge
@@ -166,7 +166,9 @@ def _get_job_model(job) -> str:
         if not job.job_def:
             return '—'
         model = job.get_current_model()
-        return str(model) if model else '—'
+        if not model:
+            return '—'
+        return ensure_model_name(model).model or '—'
     except Exception:  # pylint: disable=broad-except
         return '—'
 
