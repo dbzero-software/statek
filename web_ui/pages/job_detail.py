@@ -12,7 +12,7 @@ import dbzero as db0
 
 from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
-from statek.llm_api import select_request_tools
+from statek.llm_api import LLM_API, select_request_tools
 from statek.locale import LANGUAGE_HINTS
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
@@ -577,7 +577,65 @@ def _build_step_preview_data(job, turn_num: int):
     chat_history = request_data.get('chat_history')
     if chat_history is not None:
         request_data['chat_history'] = list(chat_history)
-    return _build_raw_data(request_data)
+    provider = _get_job_provider(job) or None
+    payload = LLM_API.get(provider_name=provider).preview_request(**request_data)
+    return _build_raw_data(payload)
+
+
+def _expand_json_viewer(editor) -> None:
+    """Expand all nodes in a NiceGUI JSON editor tree."""
+    editor.run_editor_method(':expand', [], '() => true')
+
+
+def _collapse_json_viewer(editor) -> None:
+    """Collapse all nodes in a NiceGUI JSON editor tree."""
+    editor.run_editor_method('collapse', [], True)
+
+
+def _json_viewer_expand_js(viewer) -> str:
+    """Return a click handler that expands all nodes on the client."""
+    return (
+        f'() => {{'
+        f' const component = getElement({viewer.id});'
+        f' const host = component?.$el;'
+        f" const prefix = '[statek-json-viewer]';"
+        f' if (!host) {{ console.warn(prefix, "expand_all: host not found", {viewer.id}); return; }}'
+        f" const selector = '.jse-json-node:not(.jse-expanded) > .jse-header-outer > .jse-header > .jse-expand';"
+        f' const clickRecursive = (button) => button.dispatchEvent(new MouseEvent("click", {{'
+        f'   bubbles: true, cancelable: true, ctrlKey: true, metaKey: true'
+        f' }}));'
+        f' let pass = 0;'
+        f' const step = () => {{'
+        f'   const buttons = Array.from(host.querySelectorAll(selector));'
+        f'   console.info(prefix, "expand_all pass", pass, "buttons", buttons.length, "viewer", {viewer.id});'
+        f'   if (!buttons.length) return;'
+        f'   if (pass > 100) {{ console.warn(prefix, "expand_all aborted after too many passes", {viewer.id}); return; }}'
+        f'   pass += 1;'
+        f'   buttons.forEach(clickRecursive);'
+        f'   requestAnimationFrame(step);'
+        f' }};'
+        f' step();'
+        f' }}'
+    )
+
+
+def _json_viewer_collapse_js(viewer) -> str:
+    """Return a click handler that collapses all nodes on the client."""
+    return (
+        f'() => {{'
+        f' const component = getElement({viewer.id});'
+        f' const host = component?.$el;'
+        f" const prefix = '[statek-json-viewer]';"
+        f' if (!host) {{ console.warn(prefix, "collapse_all: host not found", {viewer.id}); return; }}'
+        f" const selector = '.jse-json-node.jse-root.jse-expanded > .jse-header-outer > .jse-header > .jse-expand';"
+        f' const button = host.querySelector(selector);'
+        f' console.info(prefix, "collapse_all root button", !!button, "viewer", {viewer.id});'
+        f' if (!button) return;'
+        f' button.dispatchEvent(new MouseEvent("click", {{'
+        f'   bubbles: true, cancelable: true, ctrlKey: true, metaKey: true'
+        f' }}));'
+        f' }}'
+    )
 
 
 def _build_raw_repr(job) -> str:
@@ -683,21 +741,40 @@ def _open_raw_json_dialog(job) -> None:
 
     with ui.dialog().props('maximized') as dlg:
         with ui.card().classes('w-full h-full rounded-none overflow-hidden').style('max-height: 100vh'):
+            action_row = None
             with ui.row().classes('w-full items-center justify-between px-4 py-3 border-b border-gray-200'):
                 with ui.row().classes('items-center gap-2'):
                     ui.icon('data_object').classes('text-indigo-600')
                     ui.label('Raw JSON').classes('text-lg font-semibold text-gray-900')
-                with ui.row().classes('items-center gap-1'):
-                    ui.button(icon='content_copy').props(
-                        'flat dense round'
-                    ).classes('text-emerald-700').on(
-                        'click',
-                        js_handler=f'() => {{ navigator.clipboard.writeText({raw_text_js}); }}',
-                    ).tooltip('Copy raw text to clipboard')
-                    ui.button(icon='close', on_click=dlg.close).props('flat round dense')
+                action_row = ui.row().classes('items-center gap-1')
 
             with ui.column().classes('w-full flex-1 p-4'):
-                create_json_viewer(raw_data, height='calc(100vh - 110px)')
+                viewer = create_json_viewer(raw_data, height='calc(100vh - 110px)')
+            expand_js = _json_viewer_expand_js(viewer)
+            collapse_js = _json_viewer_collapse_js(viewer)
+
+            with action_row:
+                ui.button(
+                    'Expand All',
+                    icon='unfold_more',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=expand_js,
+                )
+                ui.button(icon='content_copy').props(
+                    'flat dense round'
+                ).classes('text-emerald-700').on(
+                    'click',
+                    js_handler=f'() => {{ navigator.clipboard.writeText({raw_text_js}); }}',
+                ).tooltip('Copy raw text to clipboard')
+                ui.button(
+                    'Collapse All',
+                    icon='unfold_less',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=collapse_js,
+                )
+                ui.button(icon='close', on_click=dlg.close).props('flat round dense')
 
     dlg.open()
 
@@ -708,15 +785,34 @@ def _open_step_preview_dialog(job, turn_num: int, title: str) -> None:
 
     with ui.dialog().props('maximized') as dlg:
         with ui.card().classes('w-full h-full rounded-none overflow-hidden').style('max-height: 100vh'):
+            action_row = None
             with ui.row().classes('w-full items-center justify-between px-4 py-3 border-b border-gray-200'):
                 with ui.row().classes('items-center gap-2'):
                     ui.icon('preview').classes('text-indigo-600')
                     ui.label(f'{title} Request JSON').classes('text-lg font-semibold text-gray-900')
-                with ui.row().classes('items-center gap-1'):
-                    ui.button(icon='close', on_click=dlg.close).props('flat round dense')
+                action_row = ui.row().classes('items-center gap-1')
 
             with ui.column().classes('w-full flex-1 p-4'):
-                create_json_viewer(preview_data, height='calc(100vh - 110px)')
+                viewer = create_json_viewer(preview_data, height='calc(100vh - 110px)')
+            expand_js = _json_viewer_expand_js(viewer)
+            collapse_js = _json_viewer_collapse_js(viewer)
+
+            with action_row:
+                ui.button(
+                    'Expand All',
+                    icon='unfold_more',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=expand_js,
+                )
+                ui.button(
+                    'Collapse All',
+                    icon='unfold_less',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=collapse_js,
+                )
+                ui.button(icon='close', on_click=dlg.close).props('flat round dense')
 
     dlg.open()
 
