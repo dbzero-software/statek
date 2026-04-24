@@ -32,8 +32,10 @@ from web_ui.pages.job_detail import (
     _strip_language_hint_suffix,
     _build_history_sections,
     _build_md_content,
+    _build_raw_data,
     _build_raw_repr,
     _build_raw_html,
+    _build_step_preview_data,
     _get_reported_tools,
 )
 
@@ -319,6 +321,60 @@ class TestGetReportedTools:
 
         assert _job_detail_app_tool in reported
         assert _job_detail_direct_only_tool not in reported
+
+
+class TestBuildStepPreviewData:
+    def test_uses_job_request_data_and_materializes_chat_history(self):
+        job = MagicMock()
+        history = iter([
+            {'role': 'user', 'content': 'hello'},
+            {'role': 'assistant', 'content': 'world'},
+        ])
+        job.get_request_data.return_value = {
+            'model': 'test-model',
+            'chat_history': history,
+            'metadata': {'TEMPERATURE': '0.3'},
+        }
+
+        preview = _build_step_preview_data(job, 2)
+
+        job.get_request_data.assert_called_once_with(2)
+        assert preview['model'] == 'test-model'
+        assert preview['metadata'] == {'TEMPERATURE': '0.3'}
+        assert preview['chat_history'] == [
+            {'role': 'user', 'content': 'hello'},
+            {'role': 'assistant', 'content': 'world'},
+        ]
+
+    def test_keeps_missing_chat_history_unchanged(self):
+        job = MagicMock()
+        job.get_request_data.return_value = {'model': 'test-model'}
+
+        preview = _build_step_preview_data(job, 0)
+
+        assert preview == {'model': 'test-model'}
+
+    def test_converts_db0_enum_values_to_display_safe_data(self):
+        class _FakeEnumValue:  # pylint: disable=too-few-public-methods
+            def __repr__(self):
+                return 'FakeEnumValue(USER)'
+
+        class _FakeHistoryItem:  # pylint: disable=too-few-public-methods
+            def __init__(self):
+                self.role = _FakeEnumValue()
+                self.content = 'hello'
+                self.content_src = _FakeEnumValue()
+
+        job = MagicMock()
+        job.get_request_data.return_value = {
+            'chat_history': [_FakeHistoryItem()],
+        }
+
+        preview = _build_step_preview_data(job, 0)
+
+        assert preview['chat_history'][0]['__type__'] == '_FakeHistoryItem'
+        assert preview['chat_history'][0]['role']['__type__'] == '_FakeEnumValue'
+        assert preview['chat_history'][0]['content_src']['__type__'] == '_FakeEnumValue'
 
 
 class TestJobUsesReasoning:
@@ -1308,6 +1364,12 @@ class _StubJob:  # pylint: disable=too-few-public-methods
 
 
 class TestBuildRawRepr:
+    def test_build_raw_data_returns_dict(self):
+        job = _StubJob()
+        result = _build_raw_data(job)
+        assert isinstance(result, dict)
+        assert result['__type__'] == '_StubJob'
+
     def test_returns_string(self):
         job = _StubJob()
         result = _build_raw_repr(job)

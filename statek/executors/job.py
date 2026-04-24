@@ -721,7 +721,29 @@ class Job:
             parts = [p for p in [console_part, push_part] if p]
             return "\n".join(parts)
 
-    def get_chat_history(self) -> Iterable[ChatHistoryItem]:
+    def _iter_chat_history(
+        self,
+        chat_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem]]] = None,
+        console: Optional[Sequence[str]] = None,
+        push_log: Optional[Dict[int, Union[str, List[str]]]] = None,
+    ) -> Iterable[ChatHistoryItem]:
+        """Yield LLM-facing chat history for the provided append-only state."""
+        chat_log = self.chat_log if chat_log is None else chat_log
+        push_log = self.py_env.push_log if push_log is None else push_log
+        console = self.py_env.console if console is None else console
+
+        yield from self._build_chat_history(
+            chat_log=chat_log,
+            console=console,
+            push_log=push_log,
+        )
+
+    def _build_chat_history(
+        self,
+        chat_log: Sequence[Union[str, ChatLogItem, UserLogItem]],
+        console: Optional[Sequence[str]],
+        push_log: Optional[Dict[int, Union[str, List[str]]]],
+    ) -> Iterable[ChatHistoryItem]:
         """Yield the full LLM-facing chat history as ``ChatHistoryItem`` objects.
 
         Lazy generator producing a normalised, provider-agnostic timeline:
@@ -748,8 +770,8 @@ class Job:
         Yields:
             ChatHistoryItem instances ready for ``format_chat_history_item``.
         """
-        push_log = self.py_env.push_log or {}
-        console = self.py_env.console or []
+        push_log = push_log or {}
+        console = console or []
         console_len = len(console)
         is_direct = self.job_def.chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
         warmup = self.job_def.warmup_code
@@ -760,11 +782,11 @@ class Job:
         # 1) Initial user message — chat_log[0] (str) and/or push_log[0].
         initial_parts: List[str] = []
         if (
-            self.chat_log
-            and isinstance(self.chat_log[0], str)
-            and self.chat_log[0]
+            chat_log
+            and isinstance(chat_log[0], str)
+            and chat_log[0]
         ):
-            initial_parts.append(self._with_language_hint(self.chat_log[0]))
+            initial_parts.append(self._with_language_hint(chat_log[0]))
         if 0 in push_log:
             v = push_log[0]
             if isinstance(v, list):
@@ -781,7 +803,7 @@ class Job:
             )
 
         # 2) Walk chat_log items in chronological order.
-        items = [it for it in self.chat_log if not isinstance(it, str)]
+        items = [it for it in chat_log if not isinstance(it, str)]
 
         # Pre-compute the console end position for each ChatLogItem (the
         # console_pos of the next ChatLogItem, or console_len for the last).
@@ -924,27 +946,23 @@ class Job:
             # Any push_log messages emitted while this block was running.
             yield from _yield_pushes(from_pos, to_pos)
 
-    def get_next_request(self) -> Dict[str, Any]:
-        """Build the parameter dict consumed by ``LLM_API.process_request``.
+    def get_chat_history(self) -> Iterable[ChatHistoryItem]:
+        """Yield the full LLM-facing chat history as ``ChatHistoryItem`` objects."""
+        yield from self._iter_chat_history()
 
-        ``chat_history`` is the lazy generator returned by
-        :meth:`get_chat_history` and contains only conversational turns.
-        The agent system prompt is passed separately via ``system_prompt``.
-
-        Returns:
-            Dict[str, Any]: With keys ``chat_history`` (Iterable[ChatHistoryItem]),
-            ``system_prompt`` (str), ``model`` (str), ``metadata`` (dict),
-            ``available_tools`` (list), and optionally ``chat_style``,
-            ``temperature``, and ``enable_reasoning``.
-        """
+    def _build_request_data(
+        self,
+        chat_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem]]] = None,
+        console: Optional[Sequence[str]] = None,
+        push_log: Optional[Dict[int, Union[str, List[str]]]] = None,
+    ) -> Dict[str, Any]:
+        """Build request params for the provided append-only job state."""
         metadata = dict(self.job_def.metadata or {})
         model = LLM_API.require_model(self.get_current_model())
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
         system_prompt = self.system_prompt()
 
-        # Append language rule when locale specifies a non-EN language
-        # and AUTO_LANG_RULE is not explicitly disabled in metadata.
         if (
             self.job_def.locale is not None
             and metadata.get("AUTO_LANG_RULE", "").upper() != "FALSE"
@@ -954,7 +972,11 @@ class Job:
                 system_prompt = f"{system_prompt}\n\n{lang_rule}"
 
         request_params: Dict[str, Any] = {
-            "chat_history": self.get_chat_history(),
+            "chat_history": self._iter_chat_history(
+                chat_log=chat_log,
+                console=console,
+                push_log=push_log,
+            ),
             "system_prompt": system_prompt,
             "model": model,
             "metadata": metadata,
@@ -970,6 +992,55 @@ class Job:
             request_params["chat_style"] = chat_style
 
         return request_params
+
+    def get_next_request(self) -> Dict[str, Any]:
+        """Build the parameter dict consumed by ``LLM_API.process_request``.
+
+        ``chat_history`` is the lazy generator returned by
+        :meth:`get_chat_history` and contains only conversational turns.
+        The agent system prompt is passed separately via ``system_prompt``.
+
+        Returns:
+            Dict[str, Any]: With keys ``chat_history`` (Iterable[ChatHistoryItem]),
+            ``system_prompt`` (str), ``model`` (str), ``metadata`` (dict),
+            ``available_tools`` (list), and optionally ``chat_style``,
+            ``temperature``, and ``enable_reasoning``.
+        """
+        return self._build_request_data()
+
+    def get_request_data(self, turn_num: int) -> Dict[str, Any]:
+        """Reconstruct the request params used for a historical LLM turn."""
+        if turn_num < 0:
+            raise IndexError(f"turn_num out of range: {turn_num}")
+
+        target_idx = None
+        console_limit = 0
+        llm_turn_num = 0
+        for idx, item in enumerate(self.chat_log):
+            if not isinstance(item, LLM_LogItem) or item.llm_resp is None:
+                continue
+            if llm_turn_num == turn_num:
+                target_idx = idx
+                console_limit = item.console_pos
+                break
+            llm_turn_num += 1
+
+        if target_idx is None:
+            raise IndexError(f"turn_num out of range: {turn_num}")
+
+        console = self.py_env.console or []
+        push_log = self.py_env.push_log or {}
+        history_chat_log = self.chat_log[:target_idx]
+        history_console = console[:console_limit]
+        history_push_log = {
+            key: value for key, value in push_log.items()
+            if key <= console_limit
+        }
+        return self._build_request_data(
+            chat_log=history_chat_log,
+            console=history_console,
+            push_log=history_push_log,
+        )
 
     def get_current_model(self) -> str:
         """Return the concrete model configured for the job's current difficulty."""

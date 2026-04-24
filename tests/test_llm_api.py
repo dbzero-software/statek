@@ -702,6 +702,140 @@ class TestClaudeToolConversion:
 
 
 # ---------------------------------------------------------------------------
+# preview_request
+# ---------------------------------------------------------------------------
+
+class TestPreviewRequest:
+    """Tests that preview_request matches the payload sent by process_request."""
+
+    @pytest.mark.asyncio
+    async def test_openrouter_preview_matches_process_payload(
+        self, openrouter_api, app_tool, sys_tool, db0_fixture
+    ):
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            del url, headers
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"choices":[{"message":{"content":"ok"}}]}'
+            mock_resp.json.return_value = {
+                "choices": [{"message": {"content": "ok"}}]
+            }
+            return mock_resp
+
+        preview = openrouter_api.preview_request(
+            system_prompt="sys",
+            model="gpt-4o",
+            metadata={"LLM_TOOLS_SCOPE": "APPLICATION"},
+            available_tools=[app_tool, sys_tool],
+            chat_history=[_user("hello")],
+            chat_style=_MD(),
+            temperature=0.3,
+            enable_reasoning=True,
+        )
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await openrouter_api.process_request(
+                system_prompt="sys",
+                model="gpt-4o",
+                metadata={"LLM_TOOLS_SCOPE": "APPLICATION"},
+                available_tools=[app_tool, sys_tool],
+                chat_history=[_user("hello")],
+                chat_style=_MD(),
+                temperature=0.3,
+                enable_reasoning=True,
+            )
+
+        assert preview == captured_payload
+
+    @pytest.mark.asyncio
+    async def test_vertexai_preview_matches_process_payload(
+        self, vertexai_api, app_tool, sys_tool, db0_fixture
+    ):
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            del url, headers
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
+            mock_resp.json.return_value = {
+                "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+            }
+            return mock_resp
+
+        preview = vertexai_api.preview_request(
+            system_prompt="sys",
+            model="gemini-2.5-flash",
+            metadata={"LLM_TOOLS_SCOPE": "APPLICATION"},
+            available_tools=[app_tool, sys_tool],
+            chat_history=[_user("hello")],
+            chat_style=_MD(),
+            temperature=0.2,
+            enable_reasoning=True,
+        )
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await vertexai_api.process_request(
+                system_prompt="sys",
+                model="gemini-2.5-flash",
+                metadata={"LLM_TOOLS_SCOPE": "APPLICATION"},
+                available_tools=[app_tool, sys_tool],
+                chat_history=[_user("hello")],
+                chat_style=_MD(),
+                temperature=0.2,
+                enable_reasoning=True,
+            )
+
+        assert preview == captured_payload
+
+    @pytest.mark.asyncio
+    async def test_claude_preview_matches_process_payload(
+        self, claude_api, app_tool, sys_tool, db0_fixture
+    ):
+        captured_payload = {}
+
+        async def fake_post(self_, url, json=None, headers=None):
+            del url, headers
+            captured_payload.update(json)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = b'{"content":[{"type":"text","text":"ok"}]}'
+            mock_resp.json.return_value = {
+                "content": [{"type": "text", "text": "ok"}]
+            }
+            return mock_resp
+
+        preview = claude_api.preview_request(
+            system_prompt="sys",
+            model="claude-3",
+            metadata={"LLM_TOOLS_SCOPE": "APPLICATION"},
+            available_tools=[app_tool, sys_tool],
+            chat_history=[_user("hello")],
+            chat_style=_MD(),
+            temperature=0.7,
+            enable_reasoning=True,
+        )
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            await claude_api.process_request(
+                system_prompt="sys",
+                model="claude-3",
+                metadata={"LLM_TOOLS_SCOPE": "APPLICATION"},
+                available_tools=[app_tool, sys_tool],
+                chat_history=[_user("hello")],
+                chat_style=_MD(),
+                temperature=0.7,
+                enable_reasoning=True,
+            )
+
+        assert preview == captured_payload
+
+
+# ---------------------------------------------------------------------------
 # OpenRouter_API: call_requests parsed from tool_calls in response
 # ---------------------------------------------------------------------------
 

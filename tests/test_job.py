@@ -1160,6 +1160,64 @@ class TestJobGetNextRequest:
         assert job._Job__last_difficulty is None  # pylint: disable=protected-access
         assert request["model"] == "small"
 
+
+class TestJobGetRequestData:
+    """Test cases for Job.get_request_data."""
+
+    def test_get_request_data_reconstructs_first_and_second_turn(self, job_factory):
+        """Historical request data is rebuilt from the append-only job state."""
+        job = job_factory()
+
+        job.py_env.console_append("Step 1 output")
+        request1 = job.get_next_request()
+        job.append_chat_log(request1, LLM_Response(
+            text="code_block_1",
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        ))
+
+        job.py_env.console_append("Step 2 output")
+        job.py_env.console_append("Step 2 more output")
+        request2 = job.get_next_request()
+        job.append_chat_log(request2, LLM_Response(
+            text="code_block_2",
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        ))
+
+        historical_1 = job.get_request_data(0)
+        historical_2 = job.get_request_data(1)
+
+        assert historical_1["system_prompt"] == "Test agent"
+        assert not list(historical_1["chat_history"])
+
+        history_2 = list(historical_2["chat_history"])
+        assert [item.content for item in history_2] == [
+            "code_block_1",
+            "Step 2 output\nStep 2 more output",
+        ]
+        assert history_2[1].content_src == ContentSource.CONSOLE
+        assert historical_2["model"] == "test-model"
+
+    def test_get_request_data_rejects_out_of_range_turn(self, job_factory):
+        """Missing historical turns raise IndexError."""
+        job = job_factory()
+
+        with pytest.raises(IndexError, match="turn_num"):
+            job.get_request_data(0)
+
+        request = job.get_next_request()
+        job.append_chat_log(request, LLM_Response(
+            text="resp",
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        ))
+
+        with pytest.raises(IndexError, match="turn_num"):
+            job.get_request_data(-1)
+        with pytest.raises(IndexError, match="turn_num"):
+            job.get_request_data(1)
+
     def test_get_next_request_prefers_last_dynamic_difficulty_for_example(
         self, job_def_factory
     ):
