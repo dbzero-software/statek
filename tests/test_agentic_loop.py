@@ -15,7 +15,7 @@ from statek.pyenv import PyEnv
 def _make_job_def(agent, warmup_code=None):
     return JobDef(
         agent=agent,
-        metadata={"MODEL": "test-model", "MODEL_FAMILY": "test"},
+        metadata={"MODEL": "test-model"},
         job_params=None,
         warmup_code=warmup_code,
     )
@@ -153,7 +153,7 @@ def _make_tagged_job_def(agent, warmup_code=None):
     parsed = parse_warmup_code(warmup_code)
     return JobDef(
         agent=agent,
-        metadata={"MODEL": "test-model", "MODEL_FAMILY": "test"},
+        metadata={"MODEL": "test-model"},
         job_params=None,
         warmup_code=parsed,
     )

@@ -198,7 +198,6 @@ def _get_job_provider(job) -> str:
         provider = select_model_provider(
             model,
             default_provider=metadata.get('PROVIDER'),
-            model_family=metadata.get('MODEL_FAMILY'),
         )
         return str(provider) if provider else ''
     except Exception:  # pylint: disable=broad-except

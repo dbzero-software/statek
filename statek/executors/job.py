@@ -274,11 +274,10 @@ class JobDef:
     @property
     def model_family(self) -> Optional[str]:
         """Return the frozen model family configured for this job definition."""
-        metadata = self.metadata or {}
         model = self.model
         if model is None:
-            return str(metadata.get('MODEL_FAMILY')) if metadata.get('MODEL_FAMILY') is not None else None
-        return ensure_model_name(model, model_family=metadata.get('MODEL_FAMILY')).model_family
+            return None
+        return ensure_model_name(model).model_family
 
     def set_error(self, error: Exception, collect_traceback: bool = True) -> None:
         """Create a JobDefError from the given exception and associate it with this JobDef."""
@@ -960,7 +959,6 @@ class Job:
         provider = select_model_provider(
             raw_model,
             default_provider=metadata.get("PROVIDER"),
-            model_family=metadata.get("MODEL_FAMILY"),
         )
         if provider is None:
             model = LLM_API.require_model(raw_model)
@@ -968,7 +966,6 @@ class Job:
             model = LLM_API.require_model(format_model_for_provider(
                 raw_model,
                 provider,
-                model_family=metadata.get("MODEL_FAMILY"),
             ))
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))

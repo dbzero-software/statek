@@ -953,7 +953,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             or provider
             or get_statek_settings().default_llm_api_provider
         ),
-        model_family=metadata.get("MODEL_FAMILY"),
     )
     llm_api = LLM_API.get(provider_name=provider_to_use)
 
@@ -963,7 +962,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     request["model"] = format_model_for_provider(
         job.get_current_model(),
         provider_to_use,
-        model_family=metadata.get("MODEL_FAMILY"),
     )
     # Materialize chat_history generator so it can be consumed by process_request
     if 'chat_history' in request:
@@ -1274,23 +1272,17 @@ def _resolve_job_def_model(agent, provider: Optional[str]) -> tuple[Optional[str
         raise ValueError(
             f"Agent '{agent.role}' is missing required metadata field 'MODEL'"
         )
-    model_name = ensure_model_name(model, model_family=metadata.get("MODEL_FAMILY"))
+    model_name = ensure_model_name(model)
     return model_name.model_family, model
 
 
-def _ensure_shared_job_def_metadata(agent, model_family: Optional[str], model_to_use: str) -> dict:
+def _ensure_shared_job_def_metadata(agent, model_to_use: str) -> dict:
     """Ensure loop-created JobDefs reuse the agent metadata dict."""
     metadata = agent._metadata  # pylint: disable=protected-access
     if metadata is None:
         metadata = {}
         agent._metadata = metadata  # pylint: disable=protected-access
     metadata["MODEL"] = model_to_use
-    if ensure_model_name(model_to_use).model_family is not None:
-        metadata.pop("MODEL_FAMILY", None)
-    elif model_family is not None:
-        metadata["MODEL_FAMILY"] = model_family
-    else:
-        metadata.pop("MODEL_FAMILY", None)
     return metadata
 
 
@@ -1355,7 +1347,7 @@ async def run_agentic_loop(agent: 'Agent',
         job_def.clear_errors()
     else:
         parsed_warmup_code = parse_warmup_code(warmup_code)
-        metadata = _ensure_shared_job_def_metadata(agent, model_family, model_to_use)
+        metadata = _ensure_shared_job_def_metadata(agent, model_to_use)
         job_def = JobDef(
             agent=agent,
             metadata=metadata,
@@ -1408,7 +1400,7 @@ async def run_agentic_fleet(
             job_def.clear_errors()
         else:
             parsed_warmup_code = parse_warmup_code(warmup_code)
-            metadata = _ensure_shared_job_def_metadata(agent, model_family, model_to_use)
+            metadata = _ensure_shared_job_def_metadata(agent, model_to_use)
             job_def = JobDef(
                 agent=agent,
                 metadata=metadata,

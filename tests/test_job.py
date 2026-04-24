@@ -164,14 +164,11 @@ class TestJobDef:
         )
         assert job_def.model == "L:small,M:medium,H:large"
 
-    def test_job_def_model_family_prefers_model_name_over_legacy_metadata(self, agent):
-        """Embedded model-family overrides legacy MODEL_FAMILY metadata."""
+    def test_job_def_model_family_comes_from_model_name(self, agent):
+        """Model family is derived from MODEL only."""
         job_def = JobDef(
             agent=agent,
-            metadata={
-                "MODEL": "openrouter/openai/gpt-5.4",
-                "MODEL_FAMILY": "legacy",
-            },
+            metadata={"MODEL": "openrouter/openai/gpt-5.4"},
         )
         assert job_def.model_family == "openai"
 
