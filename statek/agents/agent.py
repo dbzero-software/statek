@@ -460,9 +460,6 @@ class SupervisedAgent(Agent):
             raise ValueError(
                 f"Agent '{self.role}' is missing required metadata field 'MODEL'"
             )
-        model_family = metadata.get('MODEL_FAMILY')
-        if model_family is None and '/' in model:
-            model_family = model.split('/', 1)[0]
 
         return JobDef(
             agent=self,

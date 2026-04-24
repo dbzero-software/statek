@@ -388,6 +388,19 @@ class TestBuildStepPreviewData:
         mock_api.preview_request.assert_called_once_with(model='test-model')
         assert preview == {'model': 'test-model'}
 
+    def test_uses_provider_from_model_name_when_present(self):
+        job = _make_job(metadata={'MODEL': 'openrouter/openai/gpt-5.4', 'PROVIDER': 'OPENAI'})
+        job.get_request_data.return_value = {'model': 'openai/gpt-5.4'}
+        mock_api = MagicMock()
+        mock_api.preview_request.return_value = {'model': 'openai/gpt-5.4'}
+
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+            preview = _build_step_preview_data(job, 0)
+
+        mock_get.assert_called_once_with(provider_name='openrouter')
+        mock_api.preview_request.assert_called_once_with(model='openai/gpt-5.4')
+        assert preview == {'model': 'openai/gpt-5.4'}
+
     def test_converts_db0_enum_values_to_display_safe_data(self):
         class _FakeEnumValue:  # pylint: disable=too-few-public-methods
             def __repr__(self):
@@ -783,6 +796,15 @@ class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
 
         assert 'Provider' in md
         assert 'OPENAI' in md
+
+    def test_includes_provider_from_model_name(self, db0_fixture):
+        job = _make_job_for_md()
+        job.job_def.metadata = {'MODEL': 'openrouter/openai/gpt-5.4'}
+
+        md = _call_build_md(job)
+
+        assert 'Provider' in md
+        assert 'openrouter' in md
 
     def test_omits_provider_when_missing(self, db0_fixture):
         job = _make_job_for_md()

@@ -17,6 +17,7 @@ from statek.executors.job import (
     parse_model_metadata,
 )
 from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
+from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource
 from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle, LLM_API_Settings
@@ -103,6 +104,24 @@ class TestJobDef:
         """A model without difficulty labels is returned unchanged."""
         assert parse_model_metadata("gpt-5.4-mini") == "gpt-5.4-mini"
 
+    def test_parse_model_name_returns_bare_model(self):
+        """Bare model names populate only the model component."""
+        assert parse_model_name("gpt-5.4") == ModelName(None, None, "gpt-5.4")
+
+    def test_parse_model_name_returns_model_family_and_model(self):
+        """Two-part names are interpreted as model-family/model."""
+        assert parse_model_name("openai/gpt-5.4") == ModelName(None, "openai", "gpt-5.4")
+
+    def test_parse_model_name_returns_provider_family_and_model(self):
+        """Three-part names are interpreted as provider/family/model."""
+        assert parse_model_name("openrouter/openai/gpt-5.4") == ModelName(
+            "openrouter", "openai", "gpt-5.4"
+        )
+
+    def test_parse_model_name_converts_empty_components_to_none(self):
+        """Empty path components become None."""
+        assert parse_model_name("openai//gpt-5.4") == ModelName("openai", None, "gpt-5.4")
+
     @pytest.mark.usefixtures("db0_fixture")
     def test_parse_model_metadata_returns_complete_difficulty_mapping(self):
         """Combined labels populate every TaskDifficulty exactly once."""
@@ -144,6 +163,17 @@ class TestJobDef:
             metadata={"MODEL": "H:large,L:small,M:medium"},
         )
         assert job_def.model == "L:small,M:medium,H:large"
+
+    def test_job_def_model_family_prefers_model_name_over_legacy_metadata(self, agent):
+        """Embedded model-family overrides legacy MODEL_FAMILY metadata."""
+        job_def = JobDef(
+            agent=agent,
+            metadata={
+                "MODEL": "openrouter/openai/gpt-5.4",
+                "MODEL_FAMILY": "legacy",
+            },
+        )
+        assert job_def.model_family == "openai"
 
 def test_job_system_prompt_delegates_to_agent(agent_factory, job_def_factory):
     """system_prompt delegates to agent.system_prompt with job params and difficulty."""
@@ -922,6 +952,35 @@ def test_get_next_request_does_not_rewrite_model_metadata(job_def_factory):
     assert request["model"] == "large"
     assert request["metadata"]["MODEL"] == original_model_metadata
     assert job_def.metadata["MODEL"] == original_model_metadata
+
+
+def test_get_next_request_uses_provider_from_model_name(job_def_factory):
+    """The model string can override provider selection and preserve the family when needed."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "openrouter/openai/gpt-5.4",
+            "PROVIDER": "OPENAI",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    request = _run_with_current_job(job, job.get_next_request)
+
+    assert request["model"] == "openai/gpt-5.4"
+
+
+def test_get_next_request_discards_model_family_for_non_family_provider(job_def_factory):
+    """Providers such as OpenAI receive only the concrete model identifier."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "openai/openai/gpt-5.4",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    request = _run_with_current_job(job, job.get_next_request)
+
+    assert request["model"] == "gpt-5.4"
 
 
 class TestJobGetNextRequest:

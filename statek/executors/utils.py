@@ -21,6 +21,7 @@ from statek.executors.chat_log_item import ToolError, WarmupLogItem
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
+from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.settings import get_statek_settings, get_statek_logger, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.utils import (
@@ -945,16 +946,25 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 9: Get LLM API provider. JobDef metadata is the frozen job
     # configuration; the loop-level provider acts as a default only.
     metadata = job.job_def.metadata or {}
-    provider_to_use = (
-        metadata.get("PROVIDER")
-        or provider
-        or get_statek_settings().default_llm_api_provider
+    provider_to_use = select_model_provider(
+        job.get_current_model(),
+        default_provider=(
+            metadata.get("PROVIDER")
+            or provider
+            or get_statek_settings().default_llm_api_provider
+        ),
+        model_family=metadata.get("MODEL_FAMILY"),
     )
     llm_api = LLM_API.get(provider_name=provider_to_use)
 
     # Step 10: Get next request parameters — log pending console batch first
     _log_pending_console(job)
     request = job.get_next_request()
+    request["model"] = format_model_for_provider(
+        job.get_current_model(),
+        provider_to_use,
+        model_family=metadata.get("MODEL_FAMILY"),
+    )
     # Materialize chat_history generator so it can be consumed by process_request
     if 'chat_history' in request:
         request['chat_history'] = list(request['chat_history'])
@@ -1264,10 +1274,8 @@ def _resolve_job_def_model(agent, provider: Optional[str]) -> tuple[Optional[str
         raise ValueError(
             f"Agent '{agent.role}' is missing required metadata field 'MODEL'"
         )
-    model_family = metadata.get("MODEL_FAMILY")
-    if model_family is None and model and '/' in model:
-        model_family = model.split('/', 1)[0]
-    return model_family, model
+    model_name = ensure_model_name(model, model_family=metadata.get("MODEL_FAMILY"))
+    return model_name.model_family, model
 
 
 def _ensure_shared_job_def_metadata(agent, model_family: Optional[str], model_to_use: str) -> dict:
@@ -1277,8 +1285,12 @@ def _ensure_shared_job_def_metadata(agent, model_family: Optional[str], model_to
         metadata = {}
         agent._metadata = metadata  # pylint: disable=protected-access
     metadata["MODEL"] = model_to_use
-    if model_family is not None:
+    if ensure_model_name(model_to_use).model_family is not None:
+        metadata.pop("MODEL_FAMILY", None)
+    elif model_family is not None:
         metadata["MODEL_FAMILY"] = model_family
+    else:
+        metadata.pop("MODEL_FAMILY", None)
     return metadata
 
 
