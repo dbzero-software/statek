@@ -17,6 +17,7 @@ from statek.locale import LANGUAGE_HINTS
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
+from statek.model_name import ensure_model_name, select_model_provider
 from web_ui.nicegui_compat import ui
 from web_ui.components.json_viewer import create_json_viewer
 from web_ui.components.status_badge import create_status_badge
@@ -165,7 +166,9 @@ def _get_job_model(job) -> str:
         if not job.job_def:
             return '—'
         model = job.get_current_model()
-        return str(model) if model else '—'
+        if not model:
+            return '—'
+        return ensure_model_name(model).model or '—'
     except Exception:  # pylint: disable=broad-except
         return '—'
 
@@ -183,12 +186,21 @@ def _get_job_temperature(job) -> str:
 
 
 def _get_job_provider(job) -> str:
-    """Return explicit job provider override, or an empty string when defaulted."""
+    """Return the effective job provider override, or an empty string when defaulted."""
     try:
         if not job.job_def:
             return ''
         metadata = job.job_def.metadata or {}
-        provider = metadata.get('PROVIDER')
+        model = metadata.get('MODEL')
+        get_current_model = getattr(job, 'get_current_model', None)
+        if callable(get_current_model):
+            current_model = get_current_model()
+            if isinstance(current_model, str) and current_model.strip():
+                model = current_model
+        provider = select_model_provider(
+            model,
+            default_provider=metadata.get('PROVIDER'),
+        )
         return str(provider) if provider else ''
     except Exception:  # pylint: disable=broad-except
         return ''

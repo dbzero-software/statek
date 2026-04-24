@@ -1741,6 +1741,23 @@ class TestProviderRouting:
         assert call_kwargs.kwargs.get("provider_name") == "CLAUDEAI"
 
     @pytest.mark.asyncio
+    async def test_model_provider_overrides_metadata_provider(self, db0_fixture):
+        """A provider embedded in MODEL takes precedence over metadata PROVIDER."""
+        job = self._make_job(
+            db0_fixture,
+            {"MODEL": "openrouter/openai/gpt-5.4", "PROVIDER": "OPENAI"},
+        )
+        mock_api, mock_harness = self._make_mock_api()
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        call_kwargs = mock_llm_api_cls.get.call_args
+        assert call_kwargs.kwargs.get("provider_name") == "openrouter"
+
+    @pytest.mark.asyncio
     async def test_provider_param_used_as_default_when_metadata_provider_missing(self, db0_fixture):
         """The loop provider is used only when the frozen job metadata has no PROVIDER."""
         job = self._make_job(db0_fixture, {"MODEL": "test-model"})

@@ -180,9 +180,8 @@ def job_def_factory(agent):
         metadata=None,
         **kwargs,
     ):
+        del model_family
         metadata = dict(metadata) if metadata is not None else {"MODEL": model}
-        if model_family is not None:
-            metadata.setdefault("MODEL_FAMILY", model_family)
         return JobDef(
             agent=agent,
             metadata=metadata,

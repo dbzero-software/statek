@@ -19,8 +19,9 @@ class TestExtractExampleMetadata:
         result = extract_example(job_factory(), "my_example")
         assert result.example_metadata["name"] == "my_example"
 
-    def test_model_and_model_family(self, job_factory):
-        job = job_factory(model_family="OpenAI", model="gpt-4")
+    def test_model_and_model_family(self, job_def_factory):
+        job_def = job_def_factory(metadata={"MODEL": "OpenAI/gpt-4"})
+        job = Job(job_def=job_def, job_status=JobStatus.READY)
         result = extract_example(job, "x")
         assert result.example_metadata["model"] == "gpt-4"
         assert result.example_metadata["model_family"] == "OpenAI"

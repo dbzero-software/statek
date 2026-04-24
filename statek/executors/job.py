@@ -17,6 +17,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWr
                           perm_ctx_get)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
+from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 from statek.task_difficulty import (
     TaskDifficulty,
@@ -273,14 +274,10 @@ class JobDef:
     @property
     def model_family(self) -> Optional[str]:
         """Return the frozen model family configured for this job definition."""
-        metadata = self.metadata or {}
-        model_family = metadata.get('MODEL_FAMILY')
-        if model_family is not None:
-            return str(model_family)
         model = self.model
-        if model and '/' in model:
-            return model.split('/', 1)[0]
-        return None
+        if model is None:
+            return None
+        return ensure_model_name(model).model_family
 
     def set_error(self, error: Exception, collect_traceback: bool = True) -> None:
         """Create a JobDefError from the given exception and associate it with this JobDef."""
@@ -958,7 +955,18 @@ class Job:
     ) -> Dict[str, Any]:
         """Build request params for the provided append-only job state."""
         metadata = dict(self.job_def.metadata or {})
-        model = LLM_API.require_model(self.get_current_model())
+        raw_model = self.get_current_model()
+        provider = select_model_provider(
+            raw_model,
+            default_provider=metadata.get("PROVIDER"),
+        )
+        if provider is None:
+            model = LLM_API.require_model(raw_model)
+        else:
+            model = LLM_API.require_model(format_model_for_provider(
+                raw_model,
+                provider,
+            ))
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
         system_prompt = self.system_prompt()

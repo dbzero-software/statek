@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job
+from statek.model_name import ensure_model_name
 from statek.settings import ChatStyle
 from statek.task_difficulty import TaskDifficulty, parse_task_difficulty
 
@@ -44,10 +45,12 @@ def extract_example(job: Job, name: str) -> Example:
     Returns:
         Example: the extracted example object
     """
+    model_name = ensure_model_name(job.model, model_family=job.model_family) if job.model else None
+
     example_metadata = {
         "name": name,
-        "model": job.model,
-        "model_family": job.model_family,
+        "model": model_name.model if model_name is not None else None,
+        "model_family": model_name.model_family if model_name is not None else None,
         "num_turns": job.num_turns,
         "exception_count": job.exception_count,
         "exit_status": job.py_env.exit_status,
