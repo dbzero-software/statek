@@ -5,7 +5,7 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from functools import lru_cache
-from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple
+from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, Any
 import json
 import httpx
 
@@ -196,6 +196,64 @@ class LLM_API(ABC):
     A single LLM_API instance is intended for a single session with the LLM agent.
     """
 
+    def _prepare_request_kwargs(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        available_tools: Optional[Sequence[Callable]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
+    ) -> Dict[str, Any]:
+        """Resolve shared request parameters used by preview and execution."""
+        if metadata is not None:
+            metadata = dict(metadata)
+        if available_tools is not None and not isinstance(available_tools, list):
+            available_tools = list(available_tools)
+        if chat_history is not None and not isinstance(chat_history, list):
+            chat_history = list(chat_history)
+        model = self.require_model(model)
+        tools = select_request_tools(
+            metadata=metadata,
+            available_tools=available_tools,
+            chat_style=chat_style,
+        )
+        return {
+            "system_prompt": system_prompt,
+            "model": model,
+            "metadata": metadata,
+            "tools": tools,
+            "chat_history": chat_history,
+            "chat_style": chat_style,
+            "temperature": temperature,
+            "enable_reasoning": enable_reasoning,
+        }
+
+    def preview_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        available_tools: Optional[Sequence[Callable]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
+    ) -> Dict:
+        """Return the provider JSON payload that would be sent for a request."""
+        return self._build_request_payload(**self._prepare_request_kwargs(
+            system_prompt=system_prompt,
+            model=model,
+            metadata=metadata,
+            available_tools=available_tools,
+            chat_history=chat_history,
+            chat_style=chat_style,
+            temperature=temperature,
+            enable_reasoning=enable_reasoning,
+        ))
+
     async def process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         system_prompt: Optional[str] = None,
@@ -245,24 +303,18 @@ class LLM_API(ABC):
             [t.__name__ for t in available_tools] if available_tools else None
         )
 
-        model = self.require_model(model)
-
-        tools = select_request_tools(
-            metadata=metadata,
-            available_tools=available_tools,
-            chat_style=chat_style,
-        )
-
-        response = await self._process_request(
+        request_kwargs = self._prepare_request_kwargs(
             system_prompt=system_prompt,
             model=model,
             metadata=metadata,
-            tools=tools,
+            available_tools=available_tools,
             chat_history=chat_history,
             chat_style=chat_style,
             temperature=temperature,
             enable_reasoning=enable_reasoning,
         )
+
+        response = await self._process_request(**request_kwargs)
         STATEK_LOGGER.debug("%s response: %s", self.__class__.__name__, response.text)
         if response.call_requests:
             STATEK_LOGGER.debug(
@@ -271,6 +323,20 @@ class LLM_API(ABC):
                 [cp.name for cp in response.call_requests]
             )
         return response
+
+    @abstractmethod
+    def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
+    ) -> Dict:
+        """Provider-specific payload builder shared by preview and execution."""
 
     @abstractmethod
     async def _process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -404,6 +470,40 @@ class OpenRouter_API(LLM_API):
         )
         return messages
 
+    def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
+    ) -> Dict:
+        """Build the OpenAI-compatible JSON payload for OpenRouter/OpenAI."""
+        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
+
+        del metadata
+        payload = {
+            "model": self.require_model(model),
+            "messages": self.build_messages(
+                system_prompt=system_prompt,
+                chat_history=chat_history,
+                chat_style=chat_style,
+            ),
+        }
+        if tools:
+            payload["tools"] = [format_tool_spec(t) for t in tools]
+        if self.response_format:
+            payload["response_format"] = self.response_format
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if enable_reasoning:
+            payload["reasoning"] = {}
+        payload.update(self.kwargs)
+        return payload
+
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
@@ -433,30 +533,16 @@ class OpenRouter_API(LLM_API):
             httpx.HTTPError: If the API request fails
             KeyError: If the response format is unexpected
         """
-        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
-
-        messages = self.build_messages(
+        payload = self._build_request_payload(
             system_prompt=system_prompt,
+            model=model,
+            metadata=metadata,
+            tools=tools,
             chat_history=chat_history,
             chat_style=chat_style,
+            temperature=temperature,
+            enable_reasoning=enable_reasoning,
         )
-        model = self.require_model(model)
-
-        # Prepare the request payload
-        payload = {
-            "model": model,
-            "messages": messages
-        }
-        if tools:
-            payload["tools"] = [format_tool_spec(t) for t in tools]
-        if self.response_format:
-            payload["response_format"] = self.response_format
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if enable_reasoning:
-            payload["reasoning"] = {}
-        # set any additional parameters from kwargs
-        payload.update(self.kwargs)
         # Prepare headers
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -642,6 +728,43 @@ class VertexAI_API(LLM_API):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
+    ) -> Dict:
+        """Build the Vertex AI GenerateContent JSON payload."""
+        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
+
+        del metadata, enable_reasoning
+        payload = {"contents": self.build_contents(chat_history, chat_style=chat_style)}
+        system_instruction = self._build_system_instruction(system_prompt)
+        if system_instruction:
+            payload["systemInstruction"] = system_instruction
+        if tools:
+            payload["tools"] = [{
+                "functionDeclarations": [
+                    self._to_vertex_tool(format_tool_spec(t)) for t in tools
+                ]
+            }]
+        generation_config = dict(self.kwargs.get("generation_config", {}))
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if generation_config:
+            payload["generationConfig"] = generation_config
+
+        for key, value in self.kwargs.items():
+            if key not in ("project", "location", "publisher", "auth", "generation_config"):
+                payload[key] = value
+        self.require_model(model)
+        return payload
+
     @staticmethod
     def _parse_response(data: Dict) -> Tuple[str, Optional[List[CallParams]]]:
         candidates = data.get("candidates") or []
@@ -680,29 +803,17 @@ class VertexAI_API(LLM_API):
         enable_reasoning: bool = False,
     ) -> LLM_Response:
         """Process a request to Vertex AI Gemini GenerateContent."""
-        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
-
-        del metadata, enable_reasoning
+        payload = self._build_request_payload(
+            system_prompt=system_prompt,
+            model=model,
+            metadata=metadata,
+            tools=tools,
+            chat_history=chat_history,
+            chat_style=chat_style,
+            temperature=temperature,
+            enable_reasoning=enable_reasoning,
+        )
         model = self.require_model(model)
-        payload = {"contents": self.build_contents(chat_history, chat_style=chat_style)}
-        system_instruction = self._build_system_instruction(system_prompt)
-        if system_instruction:
-            payload["systemInstruction"] = system_instruction
-        if tools:
-            payload["tools"] = [{
-                "functionDeclarations": [
-                    self._to_vertex_tool(format_tool_spec(t)) for t in tools
-                ]
-            }]
-        generation_config = dict(self.kwargs.get("generation_config", {}))
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        if generation_config:
-            payload["generationConfig"] = generation_config
-
-        for key, value in self.kwargs.items():
-            if key not in ("project", "location", "publisher", "auth", "generation_config"):
-                payload[key] = value
 
         payload_bytes = json.dumps(payload).encode('utf-8')
         total_bytes_sent = len(payload_bytes)
@@ -944,6 +1055,41 @@ class ClaudeAI_API(LLM_API):
             "input_schema": fn["parameters"],
         }
 
+    def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Callable]] = None,
+        chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
+        chat_style=None,
+        temperature: Optional[float] = None,
+        enable_reasoning: bool = False,
+    ) -> Dict:
+        """Build the Anthropic Messages API JSON payload."""
+        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
+
+        del metadata
+        payload = {
+            "model": self.require_model(model),
+            "messages": self.build_messages(chat_history, chat_style=chat_style),
+            "max_tokens": self.kwargs.get("max_tokens", 4096),
+        }
+        if tools:
+            payload["tools"] = [
+                self._to_anthropic_tool(format_tool_spec(t)) for t in tools
+            ]
+        if system_prompt:
+            payload["system"] = self._build_system_prompt(system_prompt)
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if enable_reasoning:
+            payload["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": 1024,
+            }
+        return payload
+
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
@@ -956,35 +1102,16 @@ class ClaudeAI_API(LLM_API):
         enable_reasoning: bool = False,
     ) -> LLM_Response:
         """Process a request to the Claude API using the Messages API."""
-        from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
-
-        messages = self.build_messages(chat_history, chat_style=chat_style)
-        model = self.require_model(model)
-
-        # Prepare the request payload
-        payload = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": self.kwargs.get("max_tokens", 4096)
-        }
-
-        # Add tools in Anthropic format if provided
-        if tools:
-            payload["tools"] = [
-                self._to_anthropic_tool(format_tool_spec(t)) for t in tools
-            ]
-
-        # Add system prompt if provided (Claude uses a separate 'system' field)
-        if system_prompt:
-            payload["system"] = self._build_system_prompt(system_prompt)
-
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if enable_reasoning:
-            payload["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": 1024,
-            }
+        payload = self._build_request_payload(
+            system_prompt=system_prompt,
+            model=model,
+            metadata=metadata,
+            tools=tools,
+            chat_history=chat_history,
+            chat_style=chat_style,
+            temperature=temperature,
+            enable_reasoning=enable_reasoning,
+        )
 
         # Prepare headers for Claude API
         headers = {

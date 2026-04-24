@@ -12,13 +12,13 @@ import dbzero as db0
 
 from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
-from statek.llm_api import select_request_tools
+from statek.llm_api import LLM_API, select_request_tools
 from statek.locale import LANGUAGE_HINTS
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
-from statek.utils import CodeBlock
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from web_ui.nicegui_compat import ui
+from web_ui.components.json_viewer import create_json_viewer
 from web_ui.components.status_badge import create_status_badge
 
 
@@ -311,6 +311,7 @@ class _HistorySection:
     followups: list[_HistoryMessage] = field(default_factory=list)
     warmup_num: Optional[int] = None
     warmup_total: Optional[int] = None
+    turn_num: Optional[int] = None
 
 
 @dataclass
@@ -401,6 +402,7 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 tool_data=tool_data,
                 warmup_num=warmup_num if is_warmup else None,
                 warmup_total=expected_warmups if is_warmup else None,
+                turn_num=turn_num - 1 if not is_warmup else None,
             )
             continue
 
@@ -500,10 +502,8 @@ def _format_latency_timestamp(timestamp: Optional[datetime]) -> str:
 # Raw repr helper (pure — no NiceGUI dependency)
 # ---------------------------------------------------------------------------
 
-def _build_raw_repr(job) -> str:
-    """Return a pprint-formatted string of all Job attributes for raw inspection."""
-    import pprint  # pylint: disable=import-outside-toplevel
-
+def _build_raw_data(job):
+    """Return a JSON-like structure of all Job attributes for raw inspection."""
     def _to_display(obj, depth=0):
         if depth > 4:
             try:
@@ -531,7 +531,6 @@ def _build_raw_repr(job) -> str:
         try:
             attrs = vars(obj)
         except TypeError:
-            # Fallback for db0 persistent dicts (not isinstance of dict)
             if hasattr(obj, 'items'):
                 result = {}
                 for k, v in obj.items():
@@ -540,7 +539,6 @@ def _build_raw_repr(job) -> str:
                     except Exception as exc:  # pylint: disable=broad-except
                         result[str(k)] = f'(Error: {exc})'
                 return result
-            # Fallback for db0 persistent collections and other iterables
             if hasattr(obj, '__iter__'):
                 converted = []
                 for x in obj:
@@ -561,7 +559,6 @@ def _build_raw_repr(job) -> str:
                 converted_attrs[k] = _to_display(v, depth + 1)
             except Exception as exc:  # pylint: disable=broad-except
                 converted_attrs[k] = f'(Error: {exc})'
-        # Use db0.get_type() for memo objects to get the concrete type
         try:
             type_name = db0.get_type(obj).__name__
         except Exception:  # pylint: disable=broad-except
@@ -571,9 +568,81 @@ def _build_raw_repr(job) -> str:
             **converted_attrs,
         }
 
+    return _to_display(job)
+
+
+def _build_step_preview_data(job, turn_num: int):
+    """Return JSON-viewer-friendly data for a historical LLM request."""
+    request_data = dict(job.get_request_data(turn_num))
+    chat_history = request_data.get('chat_history')
+    if chat_history is not None:
+        request_data['chat_history'] = list(chat_history)
+    provider = _get_job_provider(job) or None
+    payload = LLM_API.get(provider_name=provider).preview_request(**request_data)
+    return _build_raw_data(payload)
+
+
+def _expand_json_viewer(editor) -> None:
+    """Expand all nodes in a NiceGUI JSON editor tree."""
+    editor.run_editor_method(':expand', [], '() => true')
+
+
+def _collapse_json_viewer(editor) -> None:
+    """Collapse all nodes in a NiceGUI JSON editor tree."""
+    editor.run_editor_method('collapse', [], True)
+
+
+def _json_viewer_expand_js(viewer) -> str:
+    """Return a click handler that expands all nodes on the client."""
+    return (
+        f'() => {{'
+        f' const component = getElement({viewer.id});'
+        f' const host = component?.$el;'
+        f" const prefix = '[statek-json-viewer]';"
+        f' if (!host) {{ console.warn(prefix, "expand_all: host not found", {viewer.id}); return; }}'
+        f" const selector = '.jse-json-node:not(.jse-expanded) > .jse-header-outer > .jse-header > .jse-expand';"
+        f' const clickRecursive = (button) => button.dispatchEvent(new MouseEvent("click", {{'
+        f'   bubbles: true, cancelable: true, ctrlKey: true, metaKey: true'
+        f' }}));'
+        f' let pass = 0;'
+        f' const step = () => {{'
+        f'   const buttons = Array.from(host.querySelectorAll(selector));'
+        f'   console.info(prefix, "expand_all pass", pass, "buttons", buttons.length, "viewer", {viewer.id});'
+        f'   if (!buttons.length) return;'
+        f'   if (pass > 100) {{ console.warn(prefix, "expand_all aborted after too many passes", {viewer.id}); return; }}'
+        f'   pass += 1;'
+        f'   buttons.forEach(clickRecursive);'
+        f'   requestAnimationFrame(step);'
+        f' }};'
+        f' step();'
+        f' }}'
+    )
+
+
+def _json_viewer_collapse_js(viewer) -> str:
+    """Return a click handler that collapses all nodes on the client."""
+    return (
+        f'() => {{'
+        f' const component = getElement({viewer.id});'
+        f' const host = component?.$el;'
+        f" const prefix = '[statek-json-viewer]';"
+        f' if (!host) {{ console.warn(prefix, "collapse_all: host not found", {viewer.id}); return; }}'
+        f" const selector = '.jse-json-node.jse-root.jse-expanded > .jse-header-outer > .jse-header > .jse-expand';"
+        f' const button = host.querySelector(selector);'
+        f' console.info(prefix, "collapse_all root button", !!button, "viewer", {viewer.id});'
+        f' if (!button) return;'
+        f' button.dispatchEvent(new MouseEvent("click", {{'
+        f'   bubbles: true, cancelable: true, ctrlKey: true, metaKey: true'
+        f' }}));'
+        f' }}'
+    )
+
+
+def _build_raw_repr(job) -> str:
+    """Return a pprint-formatted string of all Job attributes for raw inspection."""
+    import pprint  # pylint: disable=import-outside-toplevel
     try:
-        data = _to_display(job)
-        return pprint.pformat(data, width=120, depth=10, sort_dicts=False)
+        return pprint.pformat(_build_raw_data(job), width=120, depth=10, sort_dicts=False)
     except Exception as exc:  # pylint: disable=broad-except
         return f'(Error building raw repr: {exc})'
 
@@ -592,72 +661,7 @@ def _build_raw_html(job) -> str:
 
     List items are rendered with alternating background colours for readability.
     """
-    import pprint  # pylint: disable=import-outside-toplevel
     import re as _re  # pylint: disable=import-outside-toplevel
-
-    # Reuse _build_raw_repr's _to_display via calling it directly
-    # We need the same _to_display logic, so extract data the same way.
-    def _to_display(obj, depth=0):
-        if depth > 4:
-            try:
-                return repr(obj)
-            except Exception as exc:  # pylint: disable=broad-except
-                return f'(Error rendering repr: {exc})'
-        if obj is None or isinstance(obj, (bool, int, float, str)):
-            return obj
-        if isinstance(obj, (list, tuple)):
-            converted = []
-            for x in obj:
-                try:
-                    converted.append(_to_display(x, depth + 1))
-                except Exception as exc:  # pylint: disable=broad-except
-                    converted.append(f'(Error: {exc})')
-            return converted if isinstance(obj, list) else tuple(converted)
-        if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                try:
-                    result[str(k)] = _to_display(v, depth + 1)
-                except Exception as exc:  # pylint: disable=broad-except
-                    result[str(k)] = f'(Error: {exc})'
-            return result
-        try:
-            attrs = vars(obj)
-        except TypeError:
-            # Fallback for db0 persistent dicts (not isinstance of dict)
-            if hasattr(obj, 'items'):
-                result = {}
-                for k, v in obj.items():
-                    try:
-                        result[str(k)] = _to_display(v, depth + 1)
-                    except Exception as exc:  # pylint: disable=broad-except
-                        result[str(k)] = f'(Error: {exc})'
-                return result
-            if hasattr(obj, '__iter__'):
-                converted = []
-                for x in obj:
-                    try:
-                        converted.append(_to_display(x, depth + 1))
-                    except Exception as exc:  # pylint: disable=broad-except
-                        converted.append(f'(Error: {exc})')
-                return converted
-            try:
-                return repr(obj)
-            except Exception as exc:  # pylint: disable=broad-except
-                return f'(Error rendering repr: {exc})'
-        converted_attrs = {}
-        for k, v in attrs.items():
-            if k.startswith('__'):
-                continue
-            try:
-                converted_attrs[k] = _to_display(v, depth + 1)
-            except Exception as exc:  # pylint: disable=broad-except
-                converted_attrs[k] = f'(Error: {exc})'
-        try:
-            type_name = db0.get_type(obj).__name__
-        except Exception:  # pylint: disable=broad-except
-            type_name = type(obj).__name__
-        return {'__type__': type_name, **converted_attrs}
 
     def _render_value(val, indent=0):
         """Recursively render a _to_display value to HTML lines."""
@@ -724,11 +728,93 @@ def _build_raw_html(job) -> str:
         return f'{pad}{_esc(repr(val))}'
 
     try:
-        data = _to_display(job)
-        body = _render_value(data)
+        body = _render_value(_build_raw_data(job))
     except Exception as exc:  # pylint: disable=broad-except
         body = _esc(f'(Error building raw repr: {exc})')
     return body
+
+
+def _open_raw_json_dialog(job) -> None:
+    """Open a full-screen JSON viewer for the raw job structure."""
+    raw_data = _build_raw_data(job)
+    raw_text_js = json.dumps(_build_raw_repr(job))
+
+    with ui.dialog().props('maximized') as dlg:
+        with ui.card().classes('w-full h-full rounded-none overflow-hidden').style('max-height: 100vh'):
+            action_row = None
+            with ui.row().classes('w-full items-center justify-between px-4 py-3 border-b border-gray-200'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('data_object').classes('text-indigo-600')
+                    ui.label('Raw JSON').classes('text-lg font-semibold text-gray-900')
+                action_row = ui.row().classes('items-center gap-1')
+
+            with ui.column().classes('w-full flex-1 p-4'):
+                viewer = create_json_viewer(raw_data, height='calc(100vh - 110px)')
+            expand_js = _json_viewer_expand_js(viewer)
+            collapse_js = _json_viewer_collapse_js(viewer)
+
+            with action_row:
+                ui.button(
+                    'Expand All',
+                    icon='unfold_more',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=expand_js,
+                )
+                ui.button(icon='content_copy').props(
+                    'flat dense round'
+                ).classes('text-emerald-700').on(
+                    'click',
+                    js_handler=f'() => {{ navigator.clipboard.writeText({raw_text_js}); }}',
+                ).tooltip('Copy raw text to clipboard')
+                ui.button(
+                    'Collapse All',
+                    icon='unfold_less',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=collapse_js,
+                )
+                ui.button(icon='close', on_click=dlg.close).props('flat round dense')
+
+    dlg.open()
+
+
+def _open_step_preview_dialog(job, turn_num: int, title: str) -> None:
+    """Open a JSON viewer for the reconstructed request of one LLM turn."""
+    preview_data = _build_step_preview_data(job, turn_num)
+
+    with ui.dialog().props('maximized') as dlg:
+        with ui.card().classes('w-full h-full rounded-none overflow-hidden').style('max-height: 100vh'):
+            action_row = None
+            with ui.row().classes('w-full items-center justify-between px-4 py-3 border-b border-gray-200'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('preview').classes('text-indigo-600')
+                    ui.label(f'{title} Request JSON').classes('text-lg font-semibold text-gray-900')
+                action_row = ui.row().classes('items-center gap-1')
+
+            with ui.column().classes('w-full flex-1 p-4'):
+                viewer = create_json_viewer(preview_data, height='calc(100vh - 110px)')
+            expand_js = _json_viewer_expand_js(viewer)
+            collapse_js = _json_viewer_collapse_js(viewer)
+
+            with action_row:
+                ui.button(
+                    'Expand All',
+                    icon='unfold_more',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=expand_js,
+                )
+                ui.button(
+                    'Collapse All',
+                    icon='unfold_less',
+                ).props('flat dense no-caps').classes('text-gray-700').on(
+                    'click',
+                    js_handler=collapse_js,
+                )
+                ui.button(icon='close', on_click=dlg.close).props('flat round dense')
+
+    dlg.open()
 
 
 # ---------------------------------------------------------------------------
@@ -1042,7 +1128,7 @@ def _render_history_message(message: _HistoryMessage) -> None:
         )
 
 
-def _render_history_section(section: _HistorySection) -> None:
+def _render_history_section(section: _HistorySection, job=None) -> None:
     """Render one normalized job-detail section."""
     if section.kind != 'assistant':
         _render_history_message(
@@ -1075,6 +1161,16 @@ def _render_history_section(section: _HistorySection) -> None:
                     ui.label(
                         f'{len(section.tool_data)} tool call{"s" if len(section.tool_data) != 1 else ""}'
                     ).classes('text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700')
+                if job is not None and section.turn_num is not None:
+                    ui.button(
+                        'Request JSON',
+                        icon='data_object',
+                        on_click=lambda _job=job, _turn=section.turn_num, _title=section.title: (
+                            _open_step_preview_dialog(_job, _turn, _title)
+                        ),
+                    ).props('flat dense no-caps').classes(
+                        'text-xs text-indigo-700'
+                    ).tooltip('Inspect the reconstructed JSON request for this LLM turn')
 
         if section.render_as_code:
             _render_code_block(section.content, code_bg, code_label)
@@ -1473,6 +1569,15 @@ def create_job_detail_dialog(job) -> None:
                     ui.button('PDF', icon='picture_as_pdf', on_click=_download_pdf).props(
                         'flat dense no-caps'
                     ).classes('text-xs text-red-600 mx-1').tooltip('Download as PDF')
+                    ui.button(
+                        'JSON',
+                        icon='data_object',
+                        on_click=lambda j=job: _open_raw_json_dialog(j),
+                    ).props(
+                        'flat dense no-caps'
+                    ).classes('text-xs text-indigo-700 mx-1').tooltip(
+                        'Inspect the raw job structure as expandable JSON'
+                    )
                     raw_text_js = json.dumps(_build_raw_repr(job))
                     ui.button(icon='content_copy').props(
                         'flat dense round'
@@ -1571,7 +1676,7 @@ def create_job_detail_dialog(job) -> None:
                     if history_sections:
                         with ui.column().classes('w-full gap-3'):
                             for section in history_sections:
-                                _render_history_section(section)
+                                _render_history_section(section, job=job)
 
                     if exception_messages:
                         with ui.expansion('Errors', icon='error_outline').props('dense').classes(

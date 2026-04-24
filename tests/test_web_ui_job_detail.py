@@ -2,7 +2,7 @@
 # pylint: disable=unused-argument,no-member
 
 from datetime import datetime
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
@@ -32,8 +32,14 @@ from web_ui.pages.job_detail import (
     _strip_language_hint_suffix,
     _build_history_sections,
     _build_md_content,
+    _build_raw_data,
     _build_raw_repr,
     _build_raw_html,
+    _build_step_preview_data,
+    _expand_json_viewer,
+    _collapse_json_viewer,
+    _json_viewer_expand_js,
+    _json_viewer_collapse_js,
     _get_reported_tools,
 )
 
@@ -319,6 +325,131 @@ class TestGetReportedTools:
 
         assert _job_detail_app_tool in reported
         assert _job_detail_direct_only_tool not in reported
+
+
+class TestBuildStepPreviewData:
+    def test_builds_preview_payload_from_historical_request(self):
+        job = _make_job(metadata={'PROVIDER': 'OPENROUTER'})
+        history = iter([
+            {'role': 'user', 'content': 'hello'},
+            {'role': 'assistant', 'content': 'world'},
+        ])
+        job.get_request_data.return_value = {
+            'system_prompt': 'sys',
+            'model': 'test-model',
+            'chat_history': history,
+            'metadata': {'TEMPERATURE': '0.3'},
+            'available_tools': ['tool-a'],
+            'chat_style': ChatStyle.MARKDOWN,  # pylint: disable=no-member
+            'temperature': 0.3,
+            'enable_reasoning': True,
+        }
+        mock_api = MagicMock()
+        mock_api.preview_request.return_value = {
+            'provider_payload': {
+                'messages': [{'role': 'user', 'content': 'hello'}],
+            },
+        }
+
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+            preview = _build_step_preview_data(job, 2)
+
+        job.get_request_data.assert_called_once_with(2)
+        mock_get.assert_called_once_with(provider_name='OPENROUTER')
+        mock_api.preview_request.assert_called_once_with(
+            system_prompt='sys',
+            model='test-model',
+            chat_history=[
+                {'role': 'user', 'content': 'hello'},
+                {'role': 'assistant', 'content': 'world'},
+            ],
+            metadata={'TEMPERATURE': '0.3'},
+            available_tools=['tool-a'],
+            chat_style=ChatStyle.MARKDOWN,  # pylint: disable=no-member
+            temperature=0.3,
+            enable_reasoning=True,
+        )
+        assert preview == {
+            'provider_payload': {
+                'messages': [{'role': 'user', 'content': 'hello'}],
+            },
+        }
+
+    def test_uses_default_provider_when_job_provider_missing(self):
+        job = _make_job()
+        job.get_request_data.return_value = {'model': 'test-model'}
+        mock_api = MagicMock()
+        mock_api.preview_request.return_value = {'model': 'test-model'}
+
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+            preview = _build_step_preview_data(job, 0)
+
+        mock_get.assert_called_once_with(provider_name=None)
+        mock_api.preview_request.assert_called_once_with(model='test-model')
+        assert preview == {'model': 'test-model'}
+
+    def test_converts_db0_enum_values_to_display_safe_data(self):
+        class _FakeEnumValue:  # pylint: disable=too-few-public-methods
+            def __repr__(self):
+                return 'FakeEnumValue(USER)'
+
+        class _FakeHistoryItem:  # pylint: disable=too-few-public-methods
+            def __init__(self):
+                self.role = _FakeEnumValue()
+                self.content = 'hello'
+                self.content_src = _FakeEnumValue()
+
+        job = MagicMock()
+        job.get_request_data.return_value = {'model': 'test-model'}
+        mock_api = MagicMock()
+        mock_api.preview_request.return_value = {
+            'messages': [_FakeHistoryItem()],
+        }
+
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api):
+            preview = _build_step_preview_data(job, 0)
+
+        assert preview['messages'][0]['__type__'] == '_FakeHistoryItem'
+        assert preview['messages'][0]['role']['__type__'] == '_FakeEnumValue'
+        assert preview['messages'][0]['content_src']['__type__'] == '_FakeEnumValue'
+
+
+class TestJsonViewerControls:
+    def test_expand_json_viewer_runs_expand_all(self):
+        editor = MagicMock()
+
+        _expand_json_viewer(editor)
+
+        editor.run_editor_method.assert_called_once_with(':expand', [], '() => true')
+
+    def test_collapse_json_viewer_runs_recursive_collapse(self):
+        editor = MagicMock()
+
+        _collapse_json_viewer(editor)
+
+        editor.run_editor_method.assert_called_once_with('collapse', [], True)
+
+    def test_builds_client_side_expand_handler(self):
+        viewer = MagicMock()
+        viewer.id = 123
+
+        handler = _json_viewer_expand_js(viewer)
+
+        assert 'getElement(123)' in handler
+        assert '.jse-json-node:not(.jse-expanded)' in handler
+        assert 'requestAnimationFrame(step)' in handler
+        assert 'ctrlKey: true' in handler
+
+    def test_builds_client_side_collapse_handler(self):
+        viewer = MagicMock()
+        viewer.id = 123
+
+        handler = _json_viewer_collapse_js(viewer)
+
+        assert 'getElement(123)' in handler
+        assert '.jse-json-node.jse-root.jse-expanded' in handler
+        assert 'dispatchEvent(new MouseEvent("click"' in handler
+        assert 'ctrlKey: true' in handler
 
 
 class TestJobUsesReasoning:
@@ -1308,6 +1439,12 @@ class _StubJob:  # pylint: disable=too-few-public-methods
 
 
 class TestBuildRawRepr:
+    def test_build_raw_data_returns_dict(self):
+        job = _StubJob()
+        result = _build_raw_data(job)
+        assert isinstance(result, dict)
+        assert result['__type__'] == '_StubJob'
+
     def test_returns_string(self):
         job = _StubJob()
         result = _build_raw_repr(job)

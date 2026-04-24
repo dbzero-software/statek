@@ -16,10 +16,10 @@ from statek.executors.job import (
     TaskDifficulty,
     parse_model_metadata,
 )
-from statek.llm_api import LLM_Response, LLM_Stats
+from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.chat_history import ChatRole, ContentSource
 from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
-from statek.settings import ChatStyle
+from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
 from statek.utils import CodeBlock, CallSpec
@@ -1159,6 +1159,169 @@ class TestJobGetNextRequest:
 
         assert job._Job__last_difficulty is None  # pylint: disable=protected-access
         assert request["model"] == "small"
+
+
+class TestJobGetRequestData:
+    """Test cases for Job.get_request_data."""
+
+    def test_get_request_data_reconstructs_first_and_second_turn(self, job_factory):
+        """Historical request data is rebuilt from the append-only job state."""
+        job = job_factory()
+
+        job.py_env.console_append("Step 1 output")
+        request1 = job.get_next_request()
+        job.append_chat_log(request1, LLM_Response(
+            text="code_block_1",
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        ))
+
+        job.py_env.console_append("Step 2 output")
+        job.py_env.console_append("Step 2 more output")
+        request2 = job.get_next_request()
+        job.append_chat_log(request2, LLM_Response(
+            text="code_block_2",
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        ))
+
+        historical_1 = job.get_request_data(0)
+        historical_2 = job.get_request_data(1)
+
+        assert historical_1["system_prompt"] == "Test agent"
+        assert not list(historical_1["chat_history"])
+
+        history_2 = list(historical_2["chat_history"])
+        assert [item.content for item in history_2] == [
+            "code_block_1",
+            "Step 2 output\nStep 2 more output",
+        ]
+        assert history_2[1].content_src == ContentSource.CONSOLE
+        assert historical_2["model"] == "test-model"
+
+    def test_get_request_data_rejects_out_of_range_turn(self, job_factory):
+        """Missing historical turns raise IndexError."""
+        job = job_factory()
+
+        with pytest.raises(IndexError, match="turn_num"):
+            job.get_request_data(0)
+
+        request = job.get_next_request()
+        job.append_chat_log(request, LLM_Response(
+            text="resp",
+            stats=LLM_Stats(0, 0, None),
+            call_requests=None,
+        ))
+
+        with pytest.raises(IndexError, match="turn_num"):
+            job.get_request_data(-1)
+        with pytest.raises(IndexError, match="turn_num"):
+            job.get_request_data(1)
+
+    def test_get_request_data_reconstructs_multi_tool_turn_for_preview(
+        self, job_factory, db0_fixture
+    ):
+        del db0_fixture
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+
+        job.push_user_message("moj grafik na kwiecien")
+        turns = [
+            (
+                0,
+                CallSpec(
+                    id="STATEK-WARMUP-000",
+                    func_name="python_cli",
+                    kwargs={"code": "warmup()"},
+                ),
+                "Current date and time",
+            ),
+            (
+                1,
+                CallSpec(id="STATEK-001", func_name="list_of_examples", kwargs={}),
+                "# Example ID: Example name",
+            ),
+            (
+                2,
+                CallSpec(id="STATEK-002", func_name="show_example", kwargs={}),
+                "# --- EXAMPLE: Showing a monthly schedule calendar ---",
+            ),
+            (
+                3,
+                CallSpec(
+                    id="call_render_april",
+                    func_name="python_cli",
+                    kwargs={"code": "render_april()"},
+                ),
+                "2026-04-01",
+            ),
+            (
+                4,
+                CallSpec(id="call_panic", func_name="panic", kwargs={}),
+                "# Difficulty increased to medium. Continue with the harder task.",
+            ),
+            (
+                5,
+                CallSpec(
+                    id="call_render_final",
+                    func_name="python_cli",
+                    kwargs={"code": "answer('kwiecien')"},
+                ),
+                (
+                    "log: answer(body='Oto twoj grafik dyzurow na kwiecien 2026.', "
+                    "media='private/calendar.svg')"
+                ),
+            ),
+        ]
+        for console_pos, call_spec, result in turns:
+            item = create_chat_log_item(
+                console_pos=console_pos,
+                llm_resp=CodeBlock(code=None, tool_calls=[call_spec]),
+            )
+            item.tool_log = [result]
+            job.chat_log.append(item)
+        job.chat_log.append(UserLogItem(message="i jeszcze na maj"))
+        job.chat_log.append(create_chat_log_item(console_pos=6, llm_resp="dummy second turn"))
+        job.py_env.console = [result for _, _, result in turns]
+
+        historical = job.get_request_data(6)
+        history = list(historical["chat_history"])
+        payload = OpenRouter_API(LLM_API_Settings(
+            api_url="https://openrouter.ai/api/v1/chat/completions",
+            api_key="test-key",
+        )).preview_request(**{**historical, "chat_history": history})
+
+        messages = payload["messages"]
+        assert [m["role"] for m in messages] == [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool",
+            "user",
+        ]
+        assert messages[2]["tool_calls"][0]["id"] == "STATEK-WARMUP-000"
+        assert messages[3]["tool_call_id"] == "STATEK-WARMUP-000"
+        assert messages[4]["tool_calls"][0]["id"] == "STATEK-001"
+        assert messages[5]["tool_call_id"] == "STATEK-001"
+        assert messages[6]["tool_calls"][0]["id"] == "STATEK-002"
+        assert messages[7]["tool_call_id"] == "STATEK-002"
+        assert messages[8]["tool_calls"][0]["id"] == "call_render_april"
+        assert messages[9]["tool_call_id"] == "call_render_april"
+        assert messages[10]["tool_calls"][0]["id"] == "call_panic"
+        assert messages[11]["tool_call_id"] == "call_panic"
+        assert messages[12]["tool_calls"][0]["id"] == "call_render_final"
+        assert messages[13]["tool_call_id"] == "call_render_final"
+        assert messages[14]["content"] == "i jeszcze na maj"
 
     def test_get_next_request_prefers_last_dynamic_difficulty_for_example(
         self, job_def_factory
