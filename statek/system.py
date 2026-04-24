@@ -554,6 +554,26 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
         print(f"{type(e).__name__}: {e}")
 
 
+@tool(system=True)
+def panic(**kwargs):  # pylint: disable=unused-argument
+    """Escalate the current job to a higher-capability model.
+
+    Use this when the current task is too difficult for the current model.
+    This raises the job difficulty by one level and prints the new difficulty.
+
+    Returns:
+        None. Updates the current job and prints the current difficulty.
+    """
+    job = get_current_job()
+    if job is None:
+        raise RuntimeError("panic() requires a current job in _STATEK_CTX")
+    job.panic()
+    print(
+        f"# Difficulty increased to {job.get_current_difficulty()}. "
+        "Continue with the harder task."
+    )
+
+
 @tool(system=True, target={ChatStyle.DIRECT})  # pylint: disable=no-member
 def python_cli(code: str, **kwargs):  # pylint: disable=unused-argument
     """Execute Python code within the current job context.

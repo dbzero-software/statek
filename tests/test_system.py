@@ -5,7 +5,7 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import (docstr, brief, tool, create_tool, inject_context, find_tools,
+from statek.system import (docstr, brief, panic, tool, create_tool, inject_context, find_tools,
                            select_tools, error_handler)
 from statek.chat_style import ChatStyle
 from statek.future import get_unpack_size, temporal, FutureResult
@@ -696,6 +696,28 @@ class TestFindTools:
         names = [t.__name__ for t in system_tools]
         assert "list_of_examples" in names
         assert "show_example" in names
+        assert "panic" in names
+
+    def test_panic_tool_calls_job_and_prints_current_difficulty(self, capsys):
+        """panic escalates the current job and prints the resulting difficulty."""
+        class _FakeJob:
+            def __init__(self):
+                self.calls = 0
+
+            def panic(self):
+                self.calls += 1
+
+            def get_current_difficulty(self):
+                return "high"
+
+        job = _FakeJob()
+        _STATEK_CTX = {"job": job}  # noqa: F841
+
+        panic()
+
+        captured = capsys.readouterr()
+        assert job.calls == 1
+        assert captured.out == "# Difficulty increased to high. Continue with the harder task.\n"
 
     def test_find_tools_deduplicates_by_name(self):
         """find_tools returns no duplicate tool names."""

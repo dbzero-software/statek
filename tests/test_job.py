@@ -765,6 +765,52 @@ def test_get_current_difficulty_ignores_non_job_task_difficulty_attribute(
     assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.low
 
 
+def test_panic_increases_low_difficulty_to_medium(job_def_factory):
+    """panic raises the current difficulty by one level."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    _run_with_current_job(job, job.panic)
+
+    assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
+    assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.medium
+
+
+def test_panic_increases_medium_difficulty_to_high(job_def_factory):
+    """panic raises medium difficulty to high."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "medium",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    _run_with_current_job(job, job.panic)
+
+    assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
+    assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.high
+
+
+def test_panic_raises_when_already_high(job_def_factory):
+    """panic fails once difficulty is already at the maximum."""
+    job_def = job_def_factory(
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "high",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    with pytest.raises(RuntimeError, match="already at high difficulty"):
+        _run_with_current_job(job, job.panic)
+
+
 def test_get_current_model_returns_plain_model(job_def_factory):
     """MODEL without difficulty labels is returned unchanged."""
     job_def = job_def_factory(metadata={"MODEL": "test-model"})
