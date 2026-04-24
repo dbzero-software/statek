@@ -166,6 +166,28 @@ def extract_call_params(tool_call_req: Dict) -> CallParams:
         ) from exc
 
 
+def select_request_tools(
+    metadata: Optional[Dict[str, str]] = None,
+    available_tools: Optional[Sequence[Callable]] = None,
+    chat_style=None,
+) -> Optional[List[Callable]]:
+    """Return the tool callables that would be forwarded in an LLM request."""
+    from .system import select_tools, find_tools  # pylint: disable=import-outside-toplevel
+
+    tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
+    if not tools_scope or available_tools is None:
+        return None
+
+    tools = list(select_tools(available_tools, tools_scope, chat_style=chat_style))
+    if tools_scope in ("SYSTEM", "ALL", None):
+        existing = {t.__name__ for t in tools}
+        for rt in find_tools("SYSTEM", chat_style=chat_style):
+            if rt.__name__ not in existing:
+                existing.add(rt.__name__)
+                tools.append(rt)
+    return tools
+
+
 class LLM_API(ABC):
     """Abstract base class for LLM API wrappers.
 
@@ -216,8 +238,6 @@ class LLM_API(ABC):
         Returns:
             LLM_Response containing the response text, stats, and call requests.
         """
-        from .system import select_tools, find_tools  # pylint: disable=import-outside-toplevel
-
         STATEK_LOGGER.debug("%s metadata: %s", self.__class__.__name__, metadata)
         STATEK_LOGGER.debug(
             "%s available_tools: %s",
@@ -227,17 +247,11 @@ class LLM_API(ABC):
 
         model = self.require_model(model)
 
-        tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
-        if tools_scope and available_tools is not None:
-            tools = select_tools(available_tools, tools_scope, chat_style=chat_style)
-            if tools_scope in ("SYSTEM", "ALL", None):
-                existing = {t.__name__ for t in tools}
-                for rt in find_tools("SYSTEM", chat_style=chat_style):
-                    if rt.__name__ not in existing:
-                        existing.add(rt.__name__)
-                        tools.append(rt)
-        else:
-            tools = None
+        tools = select_request_tools(
+            metadata=metadata,
+            available_tools=available_tools,
+            chat_style=chat_style,
+        )
 
         response = await self._process_request(
             system_prompt=system_prompt,

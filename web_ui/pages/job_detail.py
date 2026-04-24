@@ -1,6 +1,7 @@
 """Job detail view for the Statek web UI."""
 
 import io
+import inspect
 import json
 import traceback
 from datetime import datetime
@@ -11,6 +12,7 @@ import dbzero as db0
 
 from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
+from statek.llm_api import select_request_tools
 from statek.locale import LANGUAGE_HINTS
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
@@ -237,6 +239,41 @@ def _get_tool_data_for_block(code_block, chat_log_item) -> list:
         else:
             result.append((cs, entry, None))
     return result
+
+
+def _get_reported_tools(job) -> list:
+    """Return the tool callables that would be sent in this job's LLM request."""
+    try:
+        if not job.job_def:
+            return []
+        metadata = dict(job.job_def.metadata or {})
+        agent = getattr(job.job_def, 'agent', None)
+        available_tools = getattr(agent, 'all_tools', None)
+        chat_style = getattr(job.job_def, 'chat_style', None)
+        return list(select_request_tools(
+            metadata=metadata,
+            available_tools=available_tools,
+            chat_style=chat_style,
+        ) or [])
+    except Exception:  # pylint: disable=broad-except
+        return []
+
+
+def _format_reported_tool_label(fn) -> str:
+    """Return a compact signature label for a reported tool."""
+    name = getattr(fn, '__name__', str(fn))
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return name
+
+    params = [
+        param.name
+        for param in sig.parameters.values()
+        if param.name not in ('self', 'cls')
+        and param.kind != inspect.Parameter.VAR_KEYWORD
+    ]
+    return f'{name}({", ".join(params)})'
 
 
 def _strip_language_hint_suffix(content: str) -> str:
@@ -1335,6 +1372,7 @@ def create_job_detail_dialog(job) -> None:
     system_prompt = _get_system_prompt(job, current_difficulty)
     history_sections = _build_history_sections(job)
     exception_messages = _get_exception_messages(job)
+    reported_tools = _get_reported_tools(job)
     difficulty_state = {'difficulty': current_difficulty}
     try:
         difficulty_button_specs = _get_difficulty_button_specs()
@@ -1458,6 +1496,7 @@ def create_job_detail_dialog(job) -> None:
             # ── Tab bar ─────────────────────────────────────────────────────
             with ui.tabs().classes('mb-3') as tabs:
                 tab_log = ui.tab('Execution Log', icon='timeline')
+                tab_tools = ui.tab(f'Tools ({len(reported_tools)})', icon='build')
                 tab_raw = ui.tab('Raw', icon='data_object')
 
             with ui.tab_panels(tabs, value=tab_log).classes('w-full'):
@@ -1547,6 +1586,25 @@ def create_job_detail_dialog(job) -> None:
                         with ui.column().classes('items-center justify-center gap-3 mt-8'):
                             ui.icon('hourglass_empty').classes('text-4xl text-gray-300')
                             ui.label('No chat history yet.').classes('text-gray-400 italic')
+
+                # ── Tools tab ────────────────────────────────────────────────
+                with ui.tab_panel(tab_tools).classes('px-0'):
+                    if reported_tools:
+                        with ui.column().classes('w-full gap-2'):
+                            for fn in reported_tools:
+                                with ui.card().classes('w-full shadow-sm border border-gray-200'):
+                                    ui.label(_format_reported_tool_label(fn)).classes(
+                                        'text-sm font-mono text-gray-800'
+                                    )
+                                    doc = (getattr(fn, '__doc__', '') or '').strip()
+                                    if doc:
+                                        ui.label(doc.splitlines()[0]).classes('text-xs text-gray-600')
+                    else:
+                        with ui.column().classes('items-center justify-center gap-3 mt-8'):
+                            ui.icon('build_circle').classes('text-4xl text-gray-300')
+                            ui.label('No tools were reported in the LLM request.').classes(
+                                'text-gray-400 italic'
+                            )
 
                 # ── Raw tab ──────────────────────────────────────────────────
                 with ui.tab_panel(tab_raw).classes('px-0'):

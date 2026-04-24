@@ -7,6 +7,7 @@ from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.pyenv import PyEnv
+from statek.system import tool, docstr
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
@@ -33,6 +34,7 @@ from web_ui.pages.job_detail import (
     _build_md_content,
     _build_raw_repr,
     _build_raw_html,
+    _get_reported_tools,
 )
 
 # aliases used in _call_build_md helper
@@ -258,6 +260,65 @@ class TestGetJobProvider:
         job = _make_job()
 
         assert _get_job_provider(job) == ''
+
+
+@tool
+def _job_detail_app_tool(city: str, **kwargs) -> str:
+    """Return a canned forecast."""
+    del kwargs
+    return city
+
+
+@tool(target={ChatStyle.DIRECT})  # pylint: disable=no-member
+def _job_detail_direct_only_tool(value: str, **kwargs) -> str:
+    """Return a direct-only value."""
+    del kwargs
+    return value
+
+
+class TestGetReportedTools:
+    def test_returns_empty_list_when_scope_not_set(self):
+        job = _make_job()
+        job.job_def.agent.all_tools = [_job_detail_app_tool]
+
+        assert not _get_reported_tools(job)
+
+    def test_returns_selected_application_tools(self):
+        job = _make_job(
+            metadata={'LLM_TOOLS_SCOPE': 'APPLICATION'},
+            chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
+        )
+        job.job_def.agent.all_tools = [_job_detail_app_tool, _job_detail_direct_only_tool, docstr]
+
+        reported = _get_reported_tools(job)
+
+        assert _job_detail_app_tool in reported
+        assert _job_detail_direct_only_tool in reported
+        assert docstr not in reported
+
+    def test_includes_system_tools_when_scope_is_all(self):
+        job = _make_job(
+            metadata={'LLM_TOOLS_SCOPE': 'ALL'},
+            chat_style=ChatStyle.DIRECT,  # pylint: disable=no-member
+        )
+        job.job_def.agent.all_tools = [_job_detail_app_tool]
+
+        reported = _get_reported_tools(job)
+
+        assert _job_detail_app_tool in reported
+        assert docstr in reported
+
+    def test_filters_tools_by_chat_style(self):
+        job = _make_job(
+            metadata={'LLM_TOOLS_SCOPE': 'APPLICATION'},
+            chat_style=ChatStyle.MARKDOWN,  # pylint: disable=no-member
+        )
+        job.job_def.agent.all_tools = [_job_detail_app_tool, _job_detail_direct_only_tool]
+
+        reported = _get_reported_tools(job)
+
+        assert _job_detail_app_tool in reported
+        assert _job_detail_direct_only_tool not in reported
 
 
 class TestJobUsesReasoning:
