@@ -274,6 +274,24 @@ class TestDelegateTask:
         assert len(child_result.job.error_handlers) == 1
         assert child_result.job.error_handlers[0].error_handler is _noop_error_handler
 
+    def test_delegate_task_with_parent_job_stores_parent_job(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Child task jobs retain the actual parent Job object."""
+        parent_result = delegate_task(supervised_agent)
+
+        child_result = delegate_task(supervised_agent, parent_job=parent_result.job)
+
+        assert child_result.job.parent_job is parent_result.job
+
+    def test_delegate_task_without_parent_job_has_no_parent_job(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """Jobs created without a parent expose parent_job as None."""
+        result = delegate_task(supervised_agent)
+
+        assert result.job.parent_job is None
+
     def test_delegate_task_without_parent_job_has_no_handlers(
         self, db0_fixture, supervised_agent, mock_settings
     ):
@@ -456,6 +474,7 @@ class TestDelegateMuteTask:
         )
 
         assert child_result.job.job_def.locale is parent_locale
+        assert child_result.job.parent_job is parent_result.job
 
 
 class TestDelegateMuteDialog:
@@ -520,6 +539,7 @@ class TestDelegateMuteDialog:
         )
 
         assert result.job.error_handlers[0].error_handler is _noop_error_handler
+        assert result.job.parent_job is parent
         assert result.job.py_env.local_state["alpha"] == 42
         assert result.job.job_def.locale is locale
         assert result.job.job_def.job_params["topic"] == "weather"
@@ -626,6 +646,7 @@ class TestStartDialog:
         child_job = start_dialog(agent, message="child", parent_job=parent_job)
         assert len(child_job.error_handlers) == 1
         assert child_job.error_handlers[0].error_handler is _noop_error_handler
+        assert child_job.parent_job is parent_job
 
     def test_start_dialog_dict_shared_vars_populates_local_state(
         self, db0_fixture, mock_settings
