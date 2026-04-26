@@ -764,7 +764,7 @@ def _get_statek_ctx() -> Optional[dict]:
     Returns:
         The _STATEK_CTX dict, or None if not found.
     """
-    ctx = next(iter(find_locals(var_name='_STATEK_CTX')), None)
+    ctx = next(iter(find_locals(var_name='_STATEK_CTX', ext_scan=False)), None)
     if not isinstance(ctx, dict):
         return None
     return ctx
@@ -830,6 +830,51 @@ def perm_ctx_set(**kwargs) -> None:
         py_env.local_state = {}
     ctx = py_env.local_state.setdefault("_PERM_CTX", {})
     ctx.update(kwargs)
+
+
+def _unique_perm_ctx_key(key: str, local_names: Iterable[str], perm_ctx: Dict[str, Any]) -> str:
+    """Return key or the first suffixed key absent from locals and perm_ctx."""
+    taken = set(local_names)
+    taken.update(perm_ctx.keys())
+    if key not in taken:
+        return key
+
+    suffix = 1
+    while True:
+        candidate = f"{key}_{suffix}"
+        if candidate not in taken:
+            return candidate
+        suffix += 1
+
+
+def perm_ctx_set_unique(key: str, value: Any) -> str:
+    """Set a value in the persistent context under a unique variable name.
+
+    The requested key is used when it is not already present in the caller's
+    local context or in _PERM_CTX. If it is taken, a numeric suffix is appended
+    until a free name is found.
+
+    Args:
+        key: Preferred variable name.
+        value: Value to store in _PERM_CTX.
+
+    Returns:
+        The variable name assigned in _PERM_CTX.
+
+    Raises:
+        RuntimeError: if _STATEK_CTX with a job is not found in the call stack.
+    """
+    frame = inspect.currentframe()
+    caller_frame = frame.f_back if frame is not None else None
+    local_names = _collect_aggregated_locals(caller_frame).keys()
+
+    py_env = _get_statek_ctx()['job'].py_env
+    if py_env.local_state is None:
+        py_env.local_state = {}
+    ctx = py_env.local_state.setdefault("_PERM_CTX", {})
+    assigned_key = _unique_perm_ctx_key(key, local_names, ctx)
+    ctx[assigned_key] = value
+    return assigned_key
 
 
 def perm_ctx_get(*key_and_default) -> Any:
@@ -916,6 +961,27 @@ def _collect_aggregated_locals(start_frame, max_frames: int = 40) -> dict:
     return aggregated
 
 
+def _get_perm_ctx() -> Optional[Dict[str, Any]]:
+    """Return the current job's perm_ctx, if available."""
+    job = get_current_job()
+    py_env = getattr(job, 'py_env', None)
+    if py_env is None:
+        return None
+
+    perm_ctx = getattr(py_env, 'perm_ctx', None)
+    return _coerce_context_dict(perm_ctx)
+
+
+def _coerce_context_dict(value) -> Optional[Dict[str, Any]]:
+    """Return a plain dict for dict-like local contexts, including db0 collections."""
+    if value is None:
+        return None
+    try:
+        return dict(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _yield_future_by_name(value, var_type):  # pylint: disable=import-outside-toplevel
     """Resolve a FutureResult by name; propagate FutureError if not ready."""
     actual = value.value  # raises FutureError when not ready
@@ -934,8 +1000,78 @@ def _yield_future_by_type(value, var_type):
         pass
 
 
+def _yield_matching_local(value, var_type, var_name, future_type):
+    """Yield a value if it matches the find_locals filters."""
+    is_future = isinstance(value, future_type)
+    if is_future and var_name is not None:
+        yield from _yield_future_by_name(value, var_type)
+    elif is_future:
+        yield from _yield_future_by_type(value, var_type)
+    elif var_type is None or isinstance(value, var_type):
+        yield value
+
+
+def _log_find_locals_miss(var_name: str, local_context: Dict[str, Any]) -> None:
+    """Log available local names when debug logging is enabled."""
+    available = list(local_context.keys())
+    close = difflib.get_close_matches(var_name, available, n=3, cutoff=0.5)
+    logger.debug(
+        "find_locals: variable %r not found. "
+        "Available: %s. Closest matches: %s",
+        var_name,
+        available,
+        close if close else "(none)",
+    )
+
+
+def _find_locals_in_context(
+    local_context: Optional[Dict[str, Any]],
+    var_type: Optional[Type] = None,
+    var_name: Optional[str] = None,
+    ext_scan: bool = True,
+    perm_ctx_getter: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+) -> Iterable[Any]:
+    """Search a locals mapping and optional persistent context."""
+    from statek.future import FutureResult  # pylint: disable=import-outside-toplevel
+
+    aggregated_locals = _coerce_context_dict(local_context) or {}
+    if ext_scan and var_name is None and perm_ctx_getter is not None:
+        perm_ctx = _coerce_context_dict(perm_ctx_getter())
+        if perm_ctx:
+            aggregated_locals = {**perm_ctx, **aggregated_locals}
+
+    found = False
+    name_found = False
+    for name, value in aggregated_locals.items():
+        if var_type is None and var_name is None:
+            yield value
+            continue
+
+        if var_name is not None and name != var_name:
+            continue
+
+        name_found = True
+        yielded = list(_yield_matching_local(value, var_type, var_name, FutureResult))
+        if yielded:
+            found = True
+            yield from yielded
+
+    if ext_scan and var_name is not None and not name_found and perm_ctx_getter is not None:
+        perm_ctx_dict = _coerce_context_dict(perm_ctx_getter()) or {}
+        if var_name in perm_ctx_dict:
+            value = perm_ctx_dict[var_name]
+            yielded = list(_yield_matching_local(value, var_type, var_name, FutureResult))
+            if yielded:
+                found = True
+                yield from yielded
+
+    if var_name is not None and not found and logger.isEnabledFor(logging.DEBUG):
+        _log_find_locals_miss(var_name, aggregated_locals)
+
+
 def find_locals(var_type: Optional[Type] = None,
-                var_name: Optional[str] = None) -> Iterable[Any]:
+                var_name: Optional[str] = None,
+                ext_scan: bool = True) -> Iterable[Any]:
     """
     Search through the caller's local context - retrieving variables matching
     a specific type or name. This function is helpful when implementing temporal
@@ -951,47 +1087,20 @@ def find_locals(var_type: Optional[Type] = None,
     Args:
         var_type: Optional type to identify local variables by (e.g. SMS_Message or User)
         var_name: Optional variable name to match
+        ext_scan: Whether to include the current job's persistent context
 
     Yields:
         Matching variables from the caller's context. If neither var_type nor var_name
         is specified, all variables from the local context will be yielded.
     """
-    from statek.future import FutureResult  # pylint: disable=import-outside-toplevel
-
     aggregated_locals = _collect_aggregated_locals(inspect.currentframe().f_back)
-
-    found = False
-    for name, value in aggregated_locals.items():
-        if var_type is None and var_name is None:
-            yield value
-            continue
-
-        if var_name is not None and name != var_name:
-            continue
-
-        is_future = isinstance(value, FutureResult)
-
-        if is_future and var_name is not None:
-            yielded = list(_yield_future_by_name(value, var_type))
-            if yielded:
-                found = True
-                yield from yielded
-        elif is_future:
-            yield from _yield_future_by_type(value, var_type)
-        elif var_type is None or isinstance(value, var_type):
-            found = True
-            yield value
-
-    if var_name is not None and not found and logger.isEnabledFor(logging.DEBUG):
-        available = list(aggregated_locals.keys())
-        close = difflib.get_close_matches(var_name, available, n=3, cutoff=0.5)
-        logger.debug(
-            "find_locals: variable %r not found. "
-            "Available: %s. Closest matches: %s",
-            var_name,
-            available,
-            close if close else "(none)",
-        )
+    yield from _find_locals_in_context(
+        aggregated_locals,
+        var_type=var_type,
+        var_name=var_name,
+        ext_scan=ext_scan,
+        perm_ctx_getter=_get_perm_ctx,
+    )
 
 
 def format_value_repr(value: Any, is_nested: bool = True) -> str:

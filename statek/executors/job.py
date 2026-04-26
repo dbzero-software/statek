@@ -3,7 +3,7 @@ from datetime import datetime
 import json
 import re
 import traceback as _traceback_module
-from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Union
+from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Type, Union
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
@@ -14,7 +14,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWr
                           strip_markup, extract_dialog,
                           parse_warmup_block, build_warmup_code,
                           parse_tool_log, _STATEK_TOOL_MARKER, get_current_job,
-                          perm_ctx_get)
+                          perm_ctx_get, _find_locals_in_context)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
@@ -368,9 +368,11 @@ class Job:
         warmup_block_num: Optional[int] = None,
         error: Optional[JobDefError] = None,
         created_at: Optional[datetime] = None,
+        parent_job: Optional["Job"] = None,
     ):
         del model_family, model  # backward-compatible init args; source of truth is JobDef
         self.job_def = job_def
+        self.parent_job = parent_job
         if self.job_def.agent is not None:
             db0.tags(self).add(self.job_def.agent)
         # Private job status attribute
@@ -418,6 +420,21 @@ class Job:
     def model(self) -> Optional[str]:
         """Return the frozen model stored on the job definition."""
         return self.job_def.model if self.job_def is not None else None
+
+    def find_locals(self, var_type: Optional[Type] = None,
+                    var_name: Optional[str] = None,
+                    ext_scan: bool = True) -> Iterable[Any]:
+        """Search this job's Python locals and optional persistent context."""
+        def get_perm_ctx():
+            return getattr(self.py_env, 'perm_ctx', None)
+
+        yield from _find_locals_in_context(
+            self.py_env.local_state,
+            var_type=var_type,
+            var_name=var_name,
+            ext_scan=ext_scan,
+            perm_ctx_getter=get_perm_ctx,
+        )
 
     def system_prompt(self, difficulty: Optional[TaskDifficulty] = None) -> str:
         """Return the agent system prompt formatted for this job's current difficulty."""

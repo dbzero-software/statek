@@ -72,6 +72,39 @@ class _FakeAgentClass:
     pass
 
 
+class _FakeJob:
+    """Minimal job stub exposing py_env.perm_ctx for find_locals tests."""
+
+    class _FakePyEnv:
+        def __init__(self, perm_ctx=None):
+            self.local_state = {} if perm_ctx is None else {"_PERM_CTX": perm_ctx}
+
+        @property
+        def perm_ctx(self):
+            return self.local_state.get("_PERM_CTX")
+
+    def __init__(self, perm_ctx=None):
+        self.py_env = self._FakePyEnv(perm_ctx)
+
+
+class _PermCtxRaisesJob:
+    """Job stub whose perm_ctx should not be touched for local name hits."""
+
+    class _FakePyEnv:
+        @property
+        def perm_ctx(self):
+            raise AssertionError("perm_ctx should not be accessed")
+
+    def __init__(self):
+        self.py_env = self._FakePyEnv()
+
+
+def _run_with_job(job, func):
+    """Run func while _STATEK_CTX exposes a fake current job."""
+    _STATEK_CTX = {"job": job}  # noqa: F841
+    return func()
+
+
 class TestFindLocals:
     """Tests for find_locals function."""
 
@@ -217,6 +250,106 @@ class TestFindLocals:
 
         assert 10 in results  # x from local scope
         assert 42 in results  # context_var from __local_context
+
+    def test_find_by_name_scans_perm_ctx_by_default(self):
+        """find_locals finds named values in the current job's perm_ctx by default."""
+        job = _FakeJob({"message": "from perm"})
+
+        def exercise():
+            return list(find_locals(var_name="message"))
+
+        assert _run_with_job(job, exercise) == ["from perm"]
+
+    def test_find_by_name_can_disable_perm_ctx_scan(self):
+        """ext_scan=False limits find_locals to stack/local context."""
+        job = _FakeJob({"message": "from perm"})
+
+        def exercise():
+            return list(find_locals(var_name="message", ext_scan=False))
+
+        assert not _run_with_job(job, exercise)
+
+    def test_find_by_type_scans_perm_ctx_by_default(self):
+        """find_locals includes perm_ctx values when matching by type."""
+        job = _FakeJob({"answer": 42, "message": "from perm"})
+
+        def exercise():
+            return list(find_locals(var_type=int))
+
+        results = _run_with_job(job, exercise)
+        assert 42 in results
+        assert "from perm" not in results
+
+    def test_local_value_shadows_perm_ctx_value(self):
+        """A stack local with the same name takes precedence over perm_ctx."""
+        job = _FakeJob({"message": "from perm"})
+
+        def exercise():
+            message = "from local"
+            return list(find_locals(var_name="message"))
+
+        assert _run_with_job(job, exercise) == ["from local"]
+
+    def test_named_local_hit_does_not_access_perm_ctx(self):
+        """find_locals does not fetch perm_ctx when the named local exists."""
+        job = _PermCtxRaisesJob()
+
+        def exercise():
+            message = "from local"
+            return list(find_locals(var_name="message"))
+
+        assert _run_with_job(job, exercise) == ["from local"]
+
+
+class TestJobFindLocals:
+    """Tests for Job.find_locals."""
+
+    def test_finds_values_from_job_local_state(self, job_factory):
+        """Job.find_locals scans the job's py_env.local_state."""
+        job = job_factory()
+        job.py_env.local_state = {"answer": 42, "message": "hello"}
+
+        assert list(job.find_locals(var_name="answer")) == [42]
+        assert list(job.find_locals(var_type=str)) == ["hello"]
+
+    def test_scans_perm_ctx_by_default(self, job_factory):
+        """Job.find_locals includes perm_ctx when ext_scan is enabled."""
+        job = job_factory()
+        job.py_env.local_state = {"_PERM_CTX": {"answer": 42}}
+
+        assert list(job.find_locals(var_name="answer")) == [42]
+        assert 42 in list(job.find_locals(var_type=int))
+
+    def test_ext_scan_false_ignores_perm_ctx(self, job_factory):
+        """Job.find_locals can be limited to py_env.local_state."""
+        job = job_factory()
+        job.py_env.local_state = {"_PERM_CTX": {"answer": 42}}
+
+        assert not list(job.find_locals(var_name="answer", ext_scan=False))
+
+    def test_local_value_shadows_perm_ctx(self, job_factory):
+        """A py_env local with the same name takes precedence over perm_ctx."""
+        job = job_factory()
+        job.py_env.local_state = {
+            "message": "from local",
+            "_PERM_CTX": {"message": "from perm"},
+        }
+
+        assert list(job.find_locals(var_name="message")) == ["from local"]
+
+    def test_resolves_futures_like_find_locals(self, job_factory, db0_fixture):
+        """Job.find_locals uses the same FutureResult matching behavior."""
+        job = job_factory()
+        job.py_env.local_state = {
+            "ready": _make_future("Alice", ready=True),
+            "blocked": _make_future("Bob", ready=False),
+        }
+
+        assert list(job.find_locals(var_name="ready")) == ["Alice"]
+        assert "Alice" in list(job.find_locals(var_type=str))
+        assert "Bob" not in list(job.find_locals(var_type=str))
+        with pytest.raises(FutureError):
+            list(job.find_locals(var_name="blocked"))
 
 
 class TestGetCurrentAgent:

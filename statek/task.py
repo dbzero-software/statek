@@ -113,7 +113,12 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
     if shared_vars:
         env.local_state.update(shared_vars)
 
-    job = Job(job_def=job_def, job_status=JobStatus.READY, py_env=env)
+    job = Job(
+        job_def=job_def,
+        job_status=JobStatus.READY,
+        py_env=env,
+        parent_job=parent_job,
+    )
 
     if parent_job is not None:
         job.add_error_handlers_from(parent_job)
@@ -292,7 +297,8 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
     job = Job(
         job_def=job_def,
         job_status=JobStatus.READY,
-        py_env=env
+        py_env=env,
+        parent_job=parent_job,
     )
 
     if parent_job is not None:

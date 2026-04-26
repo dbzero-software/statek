@@ -2,7 +2,7 @@
 
 import pytest
 
-from statek.utils import perm_ctx_set, perm_ctx_get
+from statek.utils import perm_ctx_set, perm_ctx_set_unique, perm_ctx_get
 
 
 def _run_with_registered_job(job, func):
@@ -97,6 +97,58 @@ def test_set_creates_perm_ctx_in_pyenv_local_state():
     assert job.py_env.local_state is None
     perm_ctx_set(key="value")
     assert job.py_env.local_state["_PERM_CTX"] == {"key": "value"}
+
+
+def test_set_unique_uses_key_when_available():
+    job = _FakeJob()
+
+    def exercise():
+        assigned = perm_ctx_set_unique("result", 123)
+        return assigned, perm_ctx_get("result")
+
+    assert _run_with_registered_job(job, exercise) == ("result", 123)
+    assert job.py_env.local_state["_PERM_CTX"] == {"result": 123}
+
+
+def test_set_unique_suffixes_when_perm_ctx_key_exists():
+    job = _FakeJob()
+    job.py_env.local_state = {"_PERM_CTX": {"result": "old", "result_1": "older"}}
+
+    def exercise():
+        assigned = perm_ctx_set_unique("result", "new")
+        return assigned, perm_ctx_get(assigned)
+
+    assert _run_with_registered_job(job, exercise) == ("result_2", "new")
+    assert job.py_env.local_state["_PERM_CTX"] == {
+        "result": "old",
+        "result_1": "older",
+        "result_2": "new",
+    }
+
+
+def test_set_unique_suffixes_when_local_name_exists():
+    job = _FakeJob()
+
+    def exercise():
+        result = "local value"
+        assigned = perm_ctx_set_unique("result", "persistent value")
+        assert result == "local value"
+        return assigned, perm_ctx_get(assigned)
+
+    assert _run_with_registered_job(job, exercise) == ("result_1", "persistent value")
+
+
+def test_set_unique_checks_local_context_names():
+    job = _FakeJob()
+
+    def exercise():
+        return _call_with_local_context({"result": "context value"})
+
+    def _call_with_local_context(_local_context):
+        assigned = perm_ctx_set_unique("result", "persistent value")
+        return assigned, perm_ctx_get(assigned)
+
+    assert _run_with_registered_job(job, exercise) == ("result_1", "persistent value")
 
 
 def test_get_wrong_arg_count():
