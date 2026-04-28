@@ -19,7 +19,8 @@ from statek.executors.job import (
 from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource
-from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
+from statek.agents.dialog_agent import RecursiveReminder
+from statek.executors.chat_log_item import ReminderLogItem, UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
@@ -2248,6 +2249,19 @@ class TestGetNextRequestUserMessages:
         assert history[-1].role == ChatRole.USER
         assert history[-1].content == "user follow-up"
         assert history[-1].content_src == ContentSource.USER
+
+    def test_reminder_log_item_in_chat_log_yields_system_user_item(self, job_factory):
+        """A ReminderLogItem is yielded as an injected USER ChatHistoryItem."""
+        job = job_factory()
+        reminder = RecursiveReminder(text="Use report_outcome before finishing.")
+        job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
+
+        history = list(job.get_next_request()["chat_history"])
+
+        assert len(history) == 1
+        assert history[0].role == ChatRole.USER
+        assert history[0].content == "Use report_outcome before finishing."
+        assert history[0].content_src == ContentSource.SYSTEM
 
     def test_user_log_item_in_chat_log_yields_user_item_with_hint(self, job_def_factory):
         """UserLogItem follow-ups get the language hint in chat history."""

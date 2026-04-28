@@ -7,7 +7,14 @@ from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Type
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
-from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, ToolError, WarmupLogItem, UserLogItem
+from statek.executors.chat_log_item import (
+    ChatLogItem,
+    LLM_LogItem,
+    ReminderLogItem,
+    ToolError,
+    WarmupLogItem,
+    UserLogItem,
+)
 from statek.llm_api import LLM_API, LLM_Response
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
@@ -827,7 +834,7 @@ class Job:
                 continue
             next_pos = console_len
             for j in range(i + 1, len(items)):
-                if isinstance(items[j], (WarmupLogItem, LLM_LogItem)):
+                if isinstance(items[j], (WarmupLogItem, LLM_LogItem, ReminderLogItem)):
                     next_pos = items[j].console_pos
                     break
             end_positions[i] = next_pos
@@ -855,6 +862,15 @@ class Job:
                         role=ChatRole.USER,
                         content=self._with_language_hint(item.message),
                         content_src=ContentSource.USER,
+                    )
+                continue
+
+            if isinstance(item, ReminderLogItem):
+                if item.reminder.text:
+                    yield ChatHistoryItem(
+                        role=ChatRole.USER,
+                        content=item.reminder.text,
+                        content_src=ContentSource.SYSTEM,
                     )
                 continue
 
