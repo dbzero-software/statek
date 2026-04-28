@@ -37,6 +37,20 @@ def _validate_send_message(send_message: Callable) -> None:
 
 @db0.memo
 @dataclass
+class Reminder:
+    """Message injected when a dialog job reaches a reminder condition."""
+
+    text: str
+
+
+@db0.memo
+@dataclass
+class RecursiveReminder(Reminder):
+    """Reminder that should be re-applied whenever the condition is reached."""
+
+
+@db0.memo
+@dataclass
 class DialogAgent(SupervisedAgent):
     """Base class for 1-to-1 dialog agents.
 
@@ -55,6 +69,7 @@ class DialogAgent(SupervisedAgent):
     send_message: Callable = None
     additional_tools: Iterable[Callable] = None
     add_answer_tool: bool = True
+    __reminder: Optional[Reminder] = None
 
     def __init__(
         self,
@@ -69,6 +84,7 @@ class DialogAgent(SupervisedAgent):
         self.send_message = send_message
         self.additional_tools = tools if tools is not None else []
         self.add_answer_tool = add_answer_tool
+        self.__reminder = None
 
         basic_tools = list(self.additional_tools)
 
@@ -84,6 +100,33 @@ class DialogAgent(SupervisedAgent):
         self.append_tool('_send_message')
         if add_answer_tool:
             self.append_tool('answer')
+
+    @property
+    def reminder(self) -> Optional[Reminder]:
+        """Return the configured looping reminder, if any."""
+        return getattr(self, "_DialogAgent__reminder", None)
+
+    def set_reminder(  # pylint: disable=redefined-builtin
+        self, text: str, type: str = "RECURSIVE"
+    ) -> Reminder:
+        """Configure a reminder for dialog job looping.
+
+        Args:
+            text: Reminder text to feed back to the dialog.
+            type: Reminder kind. Supported values are ``RECURSIVE`` and
+                ``REMINDER``.
+
+        Returns:
+            The stored reminder instance.
+        """
+        reminder_type = type.upper()
+        if reminder_type == "RECURSIVE":
+            self.__reminder = RecursiveReminder(text=text)
+        elif reminder_type == "REMINDER":
+            self.__reminder = Reminder(text=text)
+        else:
+            raise ValueError(f"Unsupported reminder type: {type}")
+        return self.__reminder
 
     def init_context(self):
         if self._X__context is None:
