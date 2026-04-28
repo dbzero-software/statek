@@ -6,7 +6,7 @@ import dbzero as db0
 from .exceptions import FutureError
 from .future import FutureResult, temporal
 from .system import tool
-from .agents.agent import SupervisedAgent
+from .agents.agent import Agent, SupervisedAgent
 from .agents.dialog_agent import DialogAgent
 from .executors.job import Job, JobStatus
 from .locale import StatekLocale
@@ -84,6 +84,36 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
     return task_future.job.status == JobStatus.DONE
 
 
+def create_future_task(
+    agent: Agent,
+    shared_vars: dict,
+    parent_job: Optional[Job],
+) -> TaskFutureResult:
+    """Create a child job future for temporal utilities.
+
+    This helper intentionally covers only the common future-task construction
+    contract: shared variables, optional parent linkage, inherited locale, and
+    inherited error handlers. Callers that need warmup code, explicit locale
+    overrides, or job parameters should use their specialized construction path.
+    """
+    locale = parent_job.job_def.locale if parent_job is not None else None
+    job_def = agent.create_job_def(shared_vars=shared_vars, locale=locale)
+
+    env = PyEnv()
+    env.local_state.update(shared_vars)
+
+    job = Job(
+        job_def=job_def,
+        job_status=JobStatus.READY,
+        py_env=env,
+        parent_job=parent_job,
+    )
+    if parent_job is not None:
+        job.add_error_handlers_from(parent_job)
+
+    return TaskFutureResult(job, deps=None, state_num=0)
+
+
 def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     agent: SupervisedAgent,
     warmup_code: Optional[Union[str, Sequence[str]]],
@@ -93,6 +123,9 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
     caller_frame,
     **kwargs,
 ) -> TaskFutureResult:
+    if warmup_code is None and locale is None and not kwargs:
+        return create_future_task(agent, shared_vars or {}, parent_job)
+
     effective_locale = _resolve_child_locale(parent_job, locale)
     job_def = agent.create_job_def(
         warmup_code=warmup_code,
@@ -273,6 +306,11 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
     Returns:
         The newly created Job instance.
     """
+    if warmup_code is None and locale is None and not kwargs:
+        job = create_future_task(agent, shared_vars or {}, parent_job).job
+        job.push_user_message(message)
+        return job
+
     effective_locale = _resolve_child_locale(parent_job, locale)
     job_def = agent.create_job_def(
         warmup_code=warmup_code,
