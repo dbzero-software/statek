@@ -465,6 +465,53 @@ class TestCreateFutureTask:
         assert len(result.job.error_handlers) == 1
         assert result.job.error_handlers[0].error_handler is _noop_error_handler
 
+    def test_explicit_locale_overrides_parent_locale(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task can override the inherited parent locale."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        child_locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.GB,
+        )
+        parent = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=None,
+            locale=parent_locale,
+        ).job
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=parent,
+            locale=child_locale,
+        )
+
+        assert result.job.job_def.locale is child_locale
+
+    def test_warmup_code_copies_referenced_locals(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task supports warmup code with caller locals."""
+        x = 10
+        unused_var = 999
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            parent_job=None,
+            warmup_code="result = x + alpha",
+        )
+
+        assert result.job.job_def.warmup_code == "result = x + alpha"
+        assert result.job.py_env.local_state["x"] == 10
+        assert result.job.py_env.local_state["alpha"] == 42
+        assert "unused_var" not in result.job.py_env.local_state
+
 
 class TestDelegateMuteTask:
     """Tests for delegate_mute_task and get_mute_job_result."""

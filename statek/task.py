@@ -84,22 +84,37 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
     return task_future.job.status == JobStatus.DONE
 
 
-def create_future_task(
+def create_future_task(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     agent: Agent,
     shared_vars: dict,
     parent_job: Optional[Job],
+    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    locale=None,
+    caller_frame=None,
 ) -> TaskFutureResult:
     """Create a child job future for temporal utilities.
 
-    This helper intentionally covers only the common future-task construction
-    contract: shared variables, optional parent linkage, inherited locale, and
-    inherited error handlers. Callers that need warmup code, explicit locale
-    overrides, or job parameters should use their specialized construction path.
+    Callers may pass ``caller_frame`` when warmup code should copy referenced
+    locals from a specific stack frame, as delegate helpers do.
     """
-    locale = parent_job.job_def.locale if parent_job is not None else None
-    job_def = agent.create_job_def(shared_vars=shared_vars, locale=locale)
+    effective_locale = _resolve_child_locale(parent_job, locale)
+    job_def = agent.create_job_def(
+        warmup_code=warmup_code,
+        shared_vars=shared_vars,
+        locale=effective_locale,
+    )
 
     env = PyEnv()
+    if warmup_code and caller_frame is None:
+        caller_frame = inspect.currentframe().f_back
+    if warmup_code and caller_frame is not None:
+        caller_locals = caller_frame.f_locals
+        if isinstance(warmup_code, str):
+            copy_locals(warmup_code, env.local_state, caller_locals)
+        else:
+            for block in warmup_code:
+                copy_locals(block, env.local_state, caller_locals)
+
     env.local_state.update(shared_vars)
 
     job = Job(
@@ -125,6 +140,16 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
 ) -> TaskFutureResult:
     if warmup_code is None and locale is None and not kwargs:
         return create_future_task(agent, shared_vars or {}, parent_job)
+
+    if not kwargs:
+        return create_future_task(
+            agent,
+            shared_vars or {},
+            parent_job,
+            warmup_code=warmup_code,
+            locale=locale,
+            caller_frame=caller_frame,
+        )
 
     effective_locale = _resolve_child_locale(parent_job, locale)
     job_def = agent.create_job_def(
@@ -308,6 +333,19 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
     """
     if warmup_code is None and locale is None and not kwargs:
         job = create_future_task(agent, shared_vars or {}, parent_job).job
+        job.push_user_message(message)
+        return job
+
+    if not kwargs:
+        caller_frame = inspect.currentframe().f_back if warmup_code else None
+        job = create_future_task(
+            agent,
+            shared_vars or {},
+            parent_job,
+            warmup_code=warmup_code,
+            locale=locale,
+            caller_frame=caller_frame,
+        ).job
         job.push_user_message(message)
         return job
 
