@@ -131,26 +131,6 @@ def create_future_task(  # pylint: disable=too-many-arguments,too-many-positiona
     return TaskFutureResult(job, deps=None, state_num=0)
 
 
-def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-    agent: SupervisedAgent,
-    warmup_code: Optional[Union[str, Sequence[str]]],
-    parent_job: Optional[Job],
-    shared_vars: Optional[Dict[str, Any]],
-    locale,
-    caller_frame,
-    **kwargs,
-) -> TaskFutureResult:
-    return create_future_task(
-        agent,
-        shared_vars or {},
-        parent_job,
-        warmup_code=warmup_code,
-        locale=locale,
-        caller_frame=caller_frame,
-        **kwargs,
-    )
-
-
 def _resolve_child_locale(parent_job: Optional[Job], locale):
     """Return the locale, inheriting parent_job.locale when locale is empty."""
     if locale is not None or parent_job is None:
@@ -182,8 +162,15 @@ def delegate_task(agent: SupervisedAgent,
     """
     # Skip @tool and @temporal decorator frames to reach the actual caller
     caller_frame = inspect.currentframe().f_back.f_back.f_back if warmup_code else None
-    return _create_task_job(
-        agent, warmup_code, parent_job, shared_vars, locale, caller_frame, **kwargs)
+    return create_future_task(
+        agent,
+        shared_vars or {},
+        parent_job,
+        warmup_code=warmup_code,
+        locale=locale,
+        caller_frame=caller_frame,
+        **kwargs,
+    )
 
 
 def get_mute_job_result(future: TaskFutureResult) -> str:
@@ -226,8 +213,15 @@ def delegate_mute_task(agent: SupervisedAgent,
     """
     # Skip @tool and @temporal decorator frames to reach the actual caller
     caller_frame = inspect.currentframe().f_back.f_back.f_back if warmup_code else None
-    return _create_task_job(
-        agent, warmup_code, parent_job, shared_vars, locale, caller_frame, **kwargs)
+    return create_future_task(
+        agent,
+        shared_vars or {},
+        parent_job,
+        warmup_code=warmup_code,
+        locale=locale,
+        caller_frame=caller_frame,
+        **kwargs,
+    )
 
 
 @temporal(complement=get_mute_job_result, condition=is_job_completed)
