@@ -283,8 +283,8 @@ class TestRunJobStepHarnessIsolation:
 
         assert result1 is False
         assert result2 is False
-        assert job1.total_bytes_sent + job1.total_bytes_received == 1000
-        assert job2.total_bytes_sent + job2.total_bytes_received == 1200
+        assert job1.usage.total_bytes_sent + job1.usage.total_bytes_received == 1000
+        assert job2.usage.total_bytes_sent + job2.usage.total_bytes_received == 1200
         assert job1.approx_token_usage == 250
         assert job2.approx_token_usage == 300
 

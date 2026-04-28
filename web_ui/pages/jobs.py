@@ -68,7 +68,7 @@ def _render_job_row(job) -> None:
     status_str = _job_status_str(job)
     model = _job_model(job)
     num_turns = getattr(job, 'num_turns', 0)
-    total_cost = getattr(job, 'total_cost', 0.0)
+    total_cost = job.usage.total_cost or 0.0
     cost_label = f'${total_cost:.4f}' if total_cost else '—'
     tps_label = _job_tps_label(job)
 

@@ -1441,16 +1441,25 @@ class _StubPyEnv:  # pylint: disable=too-few-public-methods
         self.local_state = {}
 
 
+class _StubUsage:  # pylint: disable=too-few-public-methods
+    def __init__(self):
+        self.total_reported_cost = 0.0042
+        self.context_bytes = 1024
+        self.total_bytes_sent = 512
+        self.total_bytes_received = 512
+
+    @property
+    def total_cost(self):
+        return self.total_reported_cost
+
+
 class _StubJob:  # pylint: disable=too-few-public-methods
     def __init__(self):
         self.job_def = MagicMock()
         self.job_def.model = 'claude-3-opus'
         self.job_def.model_family = 'claude'
         self.session_id = 'sess-abc'
-        self.total_cost = 0.0042
-        self.context_bytes = 1024
-        self.total_bytes_sent = 512
-        self.total_bytes_received = 512
+        self.usage = _StubUsage()
         self.next_instr_num = None
         self.warmup_block_num = None
         self.chat_log = []
@@ -1488,7 +1497,7 @@ class TestBuildRawRepr:
     def test_includes_total_cost(self):
         job = _StubJob()
         result = _build_raw_repr(job)
-        assert 'total_cost' in result
+        assert 'total_reported_cost' in result
 
     def test_includes_nested_py_env_fields(self):
         job = _StubJob()

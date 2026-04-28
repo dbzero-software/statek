@@ -1463,7 +1463,7 @@ def create_job_detail_dialog(job) -> None:
             chat_style_str = str(job.job_def.chat_style)
     except Exception:  # pylint: disable=broad-except
         pass
-    total_cost = getattr(job, 'total_cost', 0.0) or 0.0
+    total_cost = job.usage.total_cost or 0.0
     num_turns = getattr(job, 'num_turns', 0) or 0
     exception_count = getattr(job, 'exception_count', 0) or 0
     try:

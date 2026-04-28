@@ -970,12 +970,15 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 11: Run the request with LLM API - await response
     response = await llm_api.process_request(**request)
 
-    # add byte stats from LLM API response
-    job.total_bytes_sent += response.stats.total_bytes_sent
-    job.total_bytes_received += response.stats.total_bytes_received
-    job.context_bytes = job.total_bytes_sent + job.total_bytes_received
+    # accumulate usage stats from LLM API response
+    job.usage.total_bytes_sent += response.stats.total_bytes_sent
+    job.usage.total_bytes_received += response.stats.total_bytes_received
+    job.usage.context_bytes = job.usage.total_bytes_sent + job.usage.total_bytes_received
+    job.usage.total_input_tokens += response.stats.input_tokens
+    job.usage.total_output_tokens += response.stats.output_tokens
+    job.usage.total_cached_tokens += response.stats.cached_tokens
     if response.stats.cost is not None:
-        job.total_cost += response.stats.cost
+        job.usage.total_reported_cost = (job.usage.total_reported_cost or 0.0) + response.stats.cost
 
     # Step 12: Add new log item using append_chat_log
     job.append_chat_log(request, response)
@@ -1102,7 +1105,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             await run_job_step(job, provider)
             # Log cost after each LLM request
             statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
-                       f"cost: ${job.total_cost:.4f}")
+                       f"cost: ${job.usage.total_cost or 0.0:.4f}")
         except LLM_HarnessError as e:
             error_msg = f"LLM_HarnessError: {e}"
             statek_log(error_msg, level='debug')

@@ -8,6 +8,7 @@ import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
 from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, ToolError, WarmupLogItem, UserLogItem
+from statek.executors.llm_usage import LLM_Usage
 from statek.llm_api import LLM_API, LLM_Response
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
@@ -279,6 +280,18 @@ class JobDef:
             return None
         return ensure_model_name(model).model_family
 
+    @property
+    def provider(self) -> Optional[str]:
+        """Return the effective LLM provider for this job definition."""
+        metadata = self.metadata or {}
+        return select_model_provider(
+            self.model or None,
+            default_provider=(
+                metadata.get("PROVIDER")
+                or get_statek_settings().default_llm_api_provider
+            ),
+        )
+
     def set_error(self, error: Exception, collect_traceback: bool = True) -> None:
         """Create a JobDefError from the given exception and associate it with this JobDef."""
         jde = JobDefError(error, collect_traceback=collect_traceback)
@@ -394,12 +407,12 @@ class Job:
         self.created_at = created_at or datetime.now()
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
-        # Total context bytes used by this job so far
-        self.context_bytes = 0
-        self.total_bytes_sent = 0
-        self.total_bytes_received = 0
-        # Total cost as reported by the LLM API provider
-        self.total_cost = 0.0
+        self.usage = LLM_Usage.for_model(
+            job_def.provider or "UNKNOWN",
+            job_def.model or "",
+            job_def.model_family,
+        )
+        self.error = None
         # The last dynamically-resolved difficulty level in this task.
         self.__last_difficulty: Optional[TaskDifficulty] = None
         # Number of completed DONE transitions (None until first completion)
@@ -1601,7 +1614,7 @@ class Job:
     @property
     def approx_token_usage(self) -> int:
         """Calculates approximate token usage based on total bytes sent and received."""
-        return (self.total_bytes_sent + self.total_bytes_received) // 4
+        return (self.usage.total_bytes_sent + self.usage.total_bytes_received) // 4
 
     def push_user_message(self, message: str) -> bool:
         """Append a user message and re-activate the job if DONE.
