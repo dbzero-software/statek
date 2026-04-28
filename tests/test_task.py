@@ -11,7 +11,7 @@ from statek.task import (
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import UserLogItem
-from statek.agents.dialog_agent import DialogAgent, RecursiveReminder, Reminder
+from statek.agents.dialog_agent import DialogAgent, RecursiveReminder
 from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
@@ -925,14 +925,12 @@ class TestDialogAgentReminder:
         assert reminder.text == "Use report_outcome."
         assert agent.reminder is reminder
 
-    def test_set_reminder_accepts_base_reminder_type(self, db0_fixture):
-        """set_reminder can store a non-recursive reminder."""
+    def test_set_reminder_rejects_base_reminder_type(self, db0_fixture):
+        """set_reminder does not instantiate the base reminder type."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
 
-        reminder = agent.set_reminder("Follow up.", type="REMINDER")
-
-        assert isinstance(reminder, Reminder)
-        assert not isinstance(reminder, RecursiveReminder)
+        with pytest.raises(ValueError, match="Unsupported reminder type"):
+            agent.set_reminder("Follow up.", type="REMINDER")
 
     def test_set_reminder_rejects_unknown_type(self, db0_fixture):
         """Unknown reminder types fail explicitly."""

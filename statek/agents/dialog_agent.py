@@ -113,8 +113,7 @@ class DialogAgent(SupervisedAgent):
 
         Args:
             text: Reminder text to feed back to the dialog.
-            type: Reminder kind. Supported values are ``RECURSIVE`` and
-                ``REMINDER``.
+            type: Reminder kind. Supported value: ``RECURSIVE``.
 
         Returns:
             The stored reminder instance.
@@ -122,8 +121,6 @@ class DialogAgent(SupervisedAgent):
         reminder_type = type.upper()
         if reminder_type == "RECURSIVE":
             self.__reminder = RecursiveReminder(text=text)
-        elif reminder_type == "REMINDER":
-            self.__reminder = Reminder(text=text)
         else:
             raise ValueError(f"Unsupported reminder type: {type}")
         return self.__reminder
