@@ -512,6 +512,22 @@ class TestCreateFutureTask:
         assert result.job.py_env.local_state["alpha"] == 42
         assert "unused_var" not in result.job.py_env.local_state
 
+    def test_kwargs_forwarded_as_job_params(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task forwards extra kwargs to create_job_def."""
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            parent_job=None,
+            data_type="orders",
+            user="Alice",
+        )
+
+        assert result.job.job_def.job_params["data_type"] == "orders"
+        assert result.job.job_def.job_params["user"] == "Alice"
+        assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
+
 
 class TestDelegateMuteTask:
     """Tests for delegate_mute_task and get_mute_job_result."""

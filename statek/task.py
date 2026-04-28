@@ -91,6 +91,7 @@ def create_future_task(  # pylint: disable=too-many-arguments,too-many-positiona
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
     locale=None,
     caller_frame=None,
+    **kwargs,
 ) -> TaskFutureResult:
     """Create a child job future for temporal utilities.
 
@@ -102,6 +103,7 @@ def create_future_task(  # pylint: disable=too-many-arguments,too-many-positiona
         warmup_code=warmup_code,
         shared_vars=shared_vars,
         locale=effective_locale,
+        **kwargs,
     )
 
     env = PyEnv()
@@ -138,50 +140,15 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
     caller_frame,
     **kwargs,
 ) -> TaskFutureResult:
-    if warmup_code is None and locale is None and not kwargs:
-        return create_future_task(agent, shared_vars or {}, parent_job)
-
-    if not kwargs:
-        return create_future_task(
-            agent,
-            shared_vars or {},
-            parent_job,
-            warmup_code=warmup_code,
-            locale=locale,
-            caller_frame=caller_frame,
-        )
-
-    effective_locale = _resolve_child_locale(parent_job, locale)
-    job_def = agent.create_job_def(
+    return create_future_task(
+        agent,
+        shared_vars or {},
+        parent_job,
         warmup_code=warmup_code,
-        shared_vars=shared_vars,
-        locale=effective_locale,
+        locale=locale,
+        caller_frame=caller_frame,
         **kwargs,
     )
-
-    env = PyEnv()
-    if warmup_code and caller_frame is not None:
-        caller_locals = caller_frame.f_locals
-        if isinstance(warmup_code, str):
-            copy_locals(warmup_code, env.local_state, caller_locals)
-        else:
-            for block in warmup_code:
-                copy_locals(block, env.local_state, caller_locals)
-
-    if shared_vars:
-        env.local_state.update(shared_vars)
-
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,
-        py_env=env,
-        parent_job=parent_job,
-    )
-
-    if parent_job is not None:
-        job.add_error_handlers_from(parent_job)
-
-    return TaskFutureResult(job, deps=None, state_num=0)
 
 
 def _resolve_child_locale(parent_job: Optional[Job], locale):
@@ -331,55 +298,16 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
     Returns:
         The newly created Job instance.
     """
-    if warmup_code is None and locale is None and not kwargs:
-        job = create_future_task(agent, shared_vars or {}, parent_job).job
-        job.push_user_message(message)
-        return job
-
-    if not kwargs:
-        caller_frame = inspect.currentframe().f_back if warmup_code else None
-        job = create_future_task(
-            agent,
-            shared_vars or {},
-            parent_job,
-            warmup_code=warmup_code,
-            locale=locale,
-            caller_frame=caller_frame,
-        ).job
-        job.push_user_message(message)
-        return job
-
-    effective_locale = _resolve_child_locale(parent_job, locale)
-    job_def = agent.create_job_def(
+    caller_frame = inspect.currentframe().f_back if warmup_code else None
+    job = create_future_task(
+        agent,
+        shared_vars or {},
+        parent_job,
         warmup_code=warmup_code,
-        shared_vars=shared_vars,
-        locale=effective_locale,
+        locale=locale,
+        caller_frame=caller_frame,
         **kwargs,
-    )
-
-    env = PyEnv()
-    if warmup_code:
-        caller_frame = inspect.currentframe().f_back
-        caller_locals = caller_frame.f_locals
-        if isinstance(warmup_code, str):
-            copy_locals(warmup_code, env.local_state, caller_locals)
-        else:
-            for block in warmup_code:
-                copy_locals(block, env.local_state, caller_locals)
-
-    if shared_vars:
-        env.local_state.update(shared_vars)
-
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,
-        py_env=env,
-        parent_job=parent_job,
-    )
-
-    if parent_job is not None:
-        job.add_error_handlers_from(parent_job)
-
+    ).job
     job.push_user_message(message)
 
     return job
