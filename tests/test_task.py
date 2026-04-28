@@ -4,8 +4,9 @@ from unittest.mock import Mock, patch
 import pytest
 
 from statek.task import (
-    copy_locals, delegate_task, delegate_mute_dialog, delegate_mute_task,
-    start_dialog, submit_new_job, submit_new_jobs_batch,
+    TaskFutureResult, copy_locals, create_future_task, delegate_task,
+    delegate_mute_dialog, delegate_mute_task, start_dialog, submit_new_job,
+    submit_new_jobs_batch,
 )
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
@@ -414,6 +415,118 @@ class TestDelegateTask:
         )
 
         assert child_result.job.job_def.locale is parent_locale
+
+
+class TestCreateFutureTask:
+    """Tests for create_future_task utility."""
+
+    def test_creates_raw_future_with_shared_vars(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task creates a ready child job and returns its future."""
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42, "label": "test"},
+            parent_job=None,
+        )
+
+        assert isinstance(result, TaskFutureResult)
+        assert result.job.status == JobStatus.READY
+        assert result.job.job_def.agent is supervised_agent
+        assert result.job.job_def.job_params["shared_vars"] == ["alpha", "label"]
+        assert result.job.py_env.local_state["alpha"] == 42
+        assert result.job.py_env.local_state["label"] == "test"
+        assert result.job.parent_job is None
+
+    def test_inherits_parent_locale_and_error_handlers(
+        self, db0_fixture, supervised_agent
+    ):
+        """Parent locale and error handlers are propagated to the child job."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        parent = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=None,
+        ).job
+        parent.job_def.locale = locale
+        parent.add_error_handler(_noop_error_handler, "ctx")
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=parent,
+        )
+
+        assert result.job.job_def.locale is locale
+        assert result.job.parent_job is parent
+        assert len(result.job.error_handlers) == 1
+        assert result.job.error_handlers[0].error_handler is _noop_error_handler
+
+    def test_explicit_locale_overrides_parent_locale(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task can override the inherited parent locale."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        child_locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.GB,
+        )
+        parent = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=None,
+            locale=parent_locale,
+        ).job
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=parent,
+            locale=child_locale,
+        )
+
+        assert result.job.job_def.locale is child_locale
+
+    def test_warmup_code_copies_referenced_locals(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task supports warmup code with caller locals."""
+        x = 10
+        unused_var = 999
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            parent_job=None,
+            warmup_code="result = x + alpha",
+        )
+
+        assert result.job.job_def.warmup_code == "result = x + alpha"
+        assert result.job.py_env.local_state["x"] == 10
+        assert result.job.py_env.local_state["alpha"] == 42
+        assert "unused_var" not in result.job.py_env.local_state
+
+    def test_kwargs_forwarded_as_job_params(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task forwards extra kwargs to create_job_def."""
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            parent_job=None,
+            data_type="orders",
+            user="Alice",
+        )
+
+        assert result.job.job_def.job_params["data_type"] == "orders"
+        assert result.job.job_def.job_params["user"] == "Alice"
+        assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
 
 
 class TestDelegateMuteTask:
