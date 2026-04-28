@@ -997,9 +997,15 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
             has_code = bool(response.call_requests)
         else:
-            has_code = (response.call_requests
-                        or not _is_empty_code(strip_markup(response.text, strict=True)))
+            has_code = (
+                response.call_requests
+                or not _is_empty_code(strip_markup(response.text, strict=True))
+            )
         if not has_code:
+            reminder = getattr(job.job_def.agent, "reminder", None)
+            if reminder is not None and job.handle_reminder(reminder):
+                harness.check_after_step(job)
+                return False
             custom_exit(job)
             job.set_status(JobStatus.DONE)
             _log_pending_console(job)

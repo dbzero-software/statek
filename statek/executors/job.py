@@ -3,7 +3,18 @@ from datetime import datetime
 import json
 import re
 import traceback as _traceback_module
-from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    List,
+    Optional,
+    Iterable,
+    Dict,
+    Any,
+    Sequence,
+    Type,
+    Union,
+)
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
@@ -31,6 +42,9 @@ from statek.task_difficulty import (
     max_task_difficulty,
     parse_task_difficulty,
 )
+
+if TYPE_CHECKING:
+    from statek.agents.dialog_agent import Reminder
 
 """
 READY: a fresh job instance ready for execution
@@ -1207,6 +1221,27 @@ class Job:
             resp_code = ""
         log_resp = f"```python\n{resp_code}\n```" if is_md_style else resp_code
         self._log(log_resp)
+
+    def handle_reminder(self, reminder: "Reminder") -> bool:
+        """Process a reminder if its conditions are currently met.
+
+        Recursive reminders are always eligible for now. Other reminder
+        types are intentionally skipped until they define their own conditions.
+        """
+        from statek.agents.dialog_agent import (  # pylint: disable=import-outside-toplevel
+            RecursiveReminder,
+        )
+
+        if not isinstance(reminder, RecursiveReminder):
+            return False
+
+        console_pos = len(self.py_env.console) if self.py_env.console else 0
+        self.chat_log.append(ReminderLogItem(
+            console_pos=console_pos,
+            reminder=reminder,
+        ))
+        self.py_env.console_append(reminder.text)
+        return True
 
     @property
     def last_response(self) -> Union[str, CodeBlock, None]:

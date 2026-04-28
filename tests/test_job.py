@@ -19,7 +19,7 @@ from statek.executors.job import (
 from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource
-from statek.agents.dialog_agent import RecursiveReminder
+from statek.agents.dialog_agent import RecursiveReminder, Reminder
 from statek.executors.chat_log_item import ReminderLogItem, UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
@@ -2191,6 +2191,36 @@ class TestUserLogItem:
         """UserLogItem allows empty string for message."""
         item = UserLogItem(message="")
         assert item.message == ""
+
+
+class TestJobHandleReminder:
+    """Tests for Job.handle_reminder."""
+
+    def test_recursive_reminder_is_processed(self, job_factory):
+        """RecursiveReminder appends console text and records a ReminderLogItem."""
+        job = job_factory()
+        job.py_env.console = ["existing"]
+        reminder = RecursiveReminder(text="Use report_outcome.")
+
+        processed = job.handle_reminder(reminder)
+
+        assert processed is True
+        assert job.py_env.console == ["existing", "Use report_outcome."]
+        assert len(job.chat_log) == 1
+        assert isinstance(job.chat_log[0], ReminderLogItem)
+        assert job.chat_log[0].console_pos == 1
+        assert job.chat_log[0].reminder is reminder
+
+    def test_base_reminder_is_skipped(self, job_factory):
+        """Unsupported reminder types are skipped without side effects."""
+        job = job_factory()
+        reminder = Reminder(text="Not yet supported.")
+
+        processed = job.handle_reminder(reminder)
+
+        assert processed is False
+        assert job.py_env.console is None
+        assert job.chat_log == []
 
 
 # ---------------------------------------------------------------------------

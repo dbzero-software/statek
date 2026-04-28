@@ -11,6 +11,7 @@ import dbzero as db0
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.agents.dialog_agent import DialogAgent
+from statek.executors.chat_log_item import ReminderLogItem
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.utils import handle_dialog, run_job_step
 from statek.future import FutureResult
@@ -1307,6 +1308,51 @@ class TestRunJobStepMdDialog:
         mock_handle.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_md_dialog_text_only_response_with_reminder_continues(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A handled reminder prevents MD_DIALOG text-only auto-exit."""
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        agent = DialogAgent(
+            send_message=_record_dialog_message,
+            _metadata={"MODEL": "test-model"},
+        )
+        reminder = agent.set_reminder("Use report_outcome.")
+        job = Job(
+            job_def=agent.create_job_def(chat_style=ChatStyle.MD_DIALOG),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+
+        mock_response = LLM_Response(
+            text="Hello, how can I help?",
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog",
+                   new_callable=AsyncMock) as mock_handle:
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        mock_handle.assert_called_once()
+        assert isinstance(job.chat_log[-1], ReminderLogItem)
+        assert job.chat_log[-1].reminder is reminder
+        assert job.py_env.console[-1] == "Use report_outcome."
+
+    @pytest.mark.asyncio
     async def test_md_dialog_code_response_executes_and_continues(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
@@ -1528,6 +1574,50 @@ class TestRunJobStepDirect:
         mock_handle.assert_called_once()
         console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
         assert "Error: no code submitted." not in console_text
+
+    @pytest.mark.asyncio
+    async def test_direct_text_only_response_with_reminder_continues(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A handled reminder prevents DIRECT text-only auto-exit."""
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        agent = DialogAgent(
+            send_message=_record_dialog_message,
+            _metadata={"MODEL": "test-model"},
+        )
+        reminder = agent.set_reminder("Use report_outcome.")
+        job = Job(
+            job_def=agent.create_job_def(chat_style=ChatStyle.DIRECT),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+
+        mock_response = LLM_Response(
+            text="Dzisiejsza data to 3 kwietnia 2026 roku.",
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog",
+                   new_callable=AsyncMock):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        assert isinstance(job.chat_log[-1], ReminderLogItem)
+        assert job.chat_log[-1].reminder is reminder
+        assert job.py_env.console[-1] == "Use report_outcome."
 
 
 class TestHandleDialogMarkdownMedia:
