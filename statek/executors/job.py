@@ -1711,9 +1711,7 @@ class Job:
         if isinstance(message, str):
             return message
         agent = self.job_def.agent if self.job_def is not None else None
-        adapter = None
-        if agent is not None and hasattr(agent, "get_adapter"):
-            adapter = agent.get_adapter("message_adapter")
+        adapter = agent.get_adapter("message_adapter") if agent is not None else None
         if adapter is not None:
             return str(adapter(message))
         return str(message)
