@@ -248,6 +248,34 @@ def test_system_prompt_stored_as_persistent_prompt(db0_fixture):  # pylint: disa
     assert agent._system_prompt.intro == "Intro"  # pylint: disable=protected-access
 
 
+@pytest.mark.parametrize(
+    ("context_key", "expected_found"),
+    [
+        ("message_adapter", True),
+        ("_message_adapter", True),
+        ("__message_adapter", True),
+        ("other_adapter", False),
+    ],
+)
+def test_get_adapter_resolves_context_key_variants(
+        db0_fixture, context_key, expected_found):  # pylint: disable=unused-argument
+    """get_adapter resolves exact, single-underscore, and double-underscore context keys."""
+    adapter = object()
+    agent = Agent(
+        role="test",
+        _system_prompt=make_system_prompt("test"),
+        _tools=[],
+        _X__context={context_key: adapter},
+    )
+
+    result = agent.get_adapter("message_adapter")
+
+    if expected_found:
+        assert result is adapter
+    else:
+        assert result is None
+
+
 def test_update_system_prompt_uses_structural_compare(db0_fixture):  # pylint: disable=unused-argument
     """Equivalent parsed prompts do not replace the stored SystemPrompt."""
     agent = Agent(

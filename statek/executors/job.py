@@ -1706,7 +1706,19 @@ class Job:
         """Calculates approximate token usage based on total bytes sent and received."""
         return (self.total_bytes_sent + self.total_bytes_received) // 4
 
-    def push_user_message(self, message: str) -> bool:
+    def _resolve_user_message(self, message: Any) -> str:
+        """Resolve a pushed message object to the string stored in job logs."""
+        if isinstance(message, str):
+            return message
+        agent = self.job_def.agent if self.job_def is not None else None
+        adapter = None
+        if agent is not None and hasattr(agent, "get_adapter"):
+            adapter = agent.get_adapter("message_adapter")
+        if adapter is not None:
+            return str(adapter(message))
+        return str(message)
+
+    def push_user_message(self, message: Any) -> bool:
         """Append a user message and re-activate the job if DONE.
 
         Intended for processing push notifications (e.g. a user writing a
@@ -1724,11 +1736,15 @@ class Job:
         LLM response is now awaited.
 
         Args:
-            message: The message to push.
+            message: The message to push. Non-string values are converted with
+                the agent's ``message_adapter`` when registered, otherwise with
+                ``str(message)``.
 
         Returns:
             True if the job was transitioned DONE → STARTED, False otherwise.
         """
+        message = self._resolve_user_message(message)
+
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             if not self.chat_log:
                 self.chat_log.append(message)

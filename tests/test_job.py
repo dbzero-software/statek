@@ -21,7 +21,12 @@ from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.dialog_agent import RecursiveReminder
-from statek.executors.chat_log_item import ReminderLogItem, UserLogItem, WarmupLogItem
+from statek.executors.chat_log_item import (
+    LLM_LogItem,
+    ReminderLogItem,
+    UserLogItem,
+    WarmupLogItem,
+)
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
@@ -40,6 +45,16 @@ class JobExtRefThing:
 
     def __init__(self, value):
         self.value = value
+
+
+class MessageForAdapter:
+    """Message object used by push_user_message adapter tests."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return f"fallback-{self.value}"
 
 
 class TestJobDefError:
@@ -1900,6 +1915,31 @@ class TestPushUserMessageDirect:
         assert isinstance(job.chat_log[1], UserLogItem)
         assert job.chat_log[1].message == "second"
 
+    def test_uses_agent_message_adapter_for_non_string_message(
+        self, job_factory
+    ):
+        """Non-string messages are resolved through the agent message_adapter."""
+        job = job_factory()
+        job.job_def.set_chat_style(
+            ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.job_def.agent.context["message_adapter"] = (
+            lambda msg: f"adapted-{msg.value}"
+        )
+
+        job.push_user_message(MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "adapted-object"
+
+    def test_falls_back_to_str_when_message_adapter_missing(self, job_factory):
+        """Non-string messages fall back to str(message)."""
+        job = job_factory()
+        job.job_def.set_chat_style(
+            ChatStyle.DIRECT)  # pylint: disable=no-member
+
+        job.push_user_message(MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "fallback-object"
+
 
 class TestPushUserMessageNumCompletions:
     """Tests for num_completions tracking in push_user_message."""
@@ -1943,6 +1983,21 @@ class TestPushUserMessageNumCompletions:
         """push_user_message returns False when no transition occurs."""
         job = job_factory()
         assert job.push_user_message("hi") is False
+
+    def test_done_to_started_clears_exit_status_and_appends_pending_llm(
+        self, job_factory
+    ):
+        """DONE->STARTED clears exit_status and records an awaited LLM turn."""
+        job = job_factory()
+        job.py_env.exit_status = "done"
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+
+        assert job.push_user_message("hi") is True
+
+        assert job.status == JobStatus.STARTED  # pylint: disable=no-member
+        assert job.py_env.exit_status is None
+        assert isinstance(job.chat_log[-1], LLM_LogItem)
+        assert job.chat_log[-1].llm_resp is None
 
 
 class TestJobDefErrors:
