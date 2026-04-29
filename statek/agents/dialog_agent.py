@@ -125,10 +125,10 @@ class DialogAgent(SupervisedAgent):
         """Return the configured looping reminder, if any."""
         return getattr(self, "_DialogAgent__reminder", None)
 
-    def set_reminder(  # pylint: disable=redefined-builtin
+    def set_new_reminder(  # pylint: disable=redefined-builtin
         self, text: str, type: str = "RECURSIVE", **kwargs
     ) -> Reminder:
-        """Configure a reminder for dialog job looping.
+        """Create and configure a reminder for dialog job looping.
 
         Args:
             text: Reminder text to feed back to the dialog.
@@ -143,6 +143,23 @@ class DialogAgent(SupervisedAgent):
             self.__reminder = RecursiveReminder(text=text, **kwargs)
         else:
             raise ValueError(f"Unsupported reminder type: {type}")
+        return self.__reminder
+
+    def set_reminder(self, reminder: Reminder) -> Reminder:
+        """Configure a pre-built reminder for dialog job looping.
+
+        The reminder must be a ``Reminder`` instance stored on the same db0
+        prefix as this agent.
+        """
+        if not isinstance(reminder, Reminder):
+            raise TypeError("reminder must be a Reminder instance")
+
+        agent_prefix = db0.get_prefix_of(self)
+        reminder_prefix = db0.get_prefix_of(reminder)
+        if agent_prefix.uuid != reminder_prefix.uuid:
+            raise ValueError("reminder must be stored on the same db0 prefix as the agent")
+
+        self.__reminder = reminder
         return self.__reminder
 
     def init_context(self):

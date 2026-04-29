@@ -1318,7 +1318,7 @@ class TestRunJobStepMdDialog:
             send_message=_record_dialog_message,
             _metadata={"MODEL": "test-model"},
         )
-        reminder = agent.set_reminder("Use report_outcome.")
+        reminder = agent.set_new_reminder("Use report_outcome.")
         job = Job(
             job_def=agent.create_job_def(chat_style=ChatStyle.MD_DIALOG),
             model_family="test",
@@ -1586,7 +1586,7 @@ class TestRunJobStepDirect:
             send_message=_record_dialog_message,
             _metadata={"MODEL": "test-model"},
         )
-        reminder = agent.set_reminder("Use report_outcome.")
+        reminder = agent.set_new_reminder("Use report_outcome.")
         job = Job(
             job_def=agent.create_job_def(chat_style=ChatStyle.DIRECT),
             model_family="test",
