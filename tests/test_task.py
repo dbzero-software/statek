@@ -11,7 +11,7 @@ from statek.task import (
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import UserLogItem
-from statek.agents.dialog_agent import DialogAgent
+from statek.agents.dialog_agent import DialogAgent, RecursiveReminder
 from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
@@ -904,6 +904,50 @@ class TestDialogAgentAddAnswerTool:
 
         assert _recorded_send_calls == [("final", "img.png")]
         assert exit_calls == ["Success"]
+
+
+class TestDialogAgentReminder:
+    """Tests for DialogAgent reminder configuration."""
+
+    def test_reminder_defaults_to_none(self, db0_fixture):
+        """DialogAgent has no reminder until one is configured."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        assert agent.reminder is None
+
+    def test_set_reminder_creates_recursive_reminder_by_default(self, db0_fixture):
+        """set_reminder stores a recursive reminder by default."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        reminder = agent.set_reminder("Use report_outcome.")
+
+        assert isinstance(reminder, RecursiveReminder)
+        assert reminder.text == "Use report_outcome."
+        assert agent.reminder is reminder
+
+    def test_set_reminder_passes_recursive_reminder_kwargs(self, db0_fixture):
+        """set_reminder forwards implementation-specific reminder properties."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        reminder = agent.set_reminder("Use report_outcome.", min_dialog_len=3)
+
+        assert isinstance(reminder, RecursiveReminder)
+        assert reminder.min_dialog_len == 3
+        assert agent.reminder is reminder
+
+    def test_set_reminder_rejects_base_reminder_type(self, db0_fixture):
+        """set_reminder does not instantiate the base reminder type."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        with pytest.raises(ValueError, match="Unsupported reminder type"):
+            agent.set_reminder("Follow up.", type="REMINDER")
+
+    def test_set_reminder_rejects_unknown_type(self, db0_fixture):
+        """Unknown reminder types fail explicitly."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        with pytest.raises(ValueError, match="Unsupported reminder type"):
+            agent.set_reminder("Follow up.", type="UNKNOWN")
 
 
 class TestDialogAgentCreateJobDefChatStyle:

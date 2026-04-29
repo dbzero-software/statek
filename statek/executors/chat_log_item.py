@@ -1,9 +1,12 @@
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 import dbzero as db0
 
 from statek.utils import CodeBlock
+
+if TYPE_CHECKING:
+    from statek.agents.dialog_agent import Reminder
 
 
 @db0.memo(no_default_tags=True)
@@ -76,6 +79,13 @@ class LLM_LogItem(ChatLogItem):
 class WarmupLogItem(ChatLogItem):
     # 0-based index into JobDef.warmup_code
     warmup_block_num: int = 0
+
+
+@db0.memo(no_default_tags=True)
+@dataclass(kw_only=True)
+class ReminderLogItem(ChatLogItem):
+    """The triggering reminder."""
+    reminder: "Reminder"
 
 
 @db0.memo(no_default_tags=True)

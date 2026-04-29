@@ -1,11 +1,15 @@
 """DialogAgent — base class for 1-to-1 dialog agents."""
 
 import inspect
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, Optional
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.chat_style import ChatStyle
+
+if TYPE_CHECKING:
+    from statek.executors.job import Job
 
 
 def _validate_send_message(send_message: Callable) -> None:
@@ -37,6 +41,35 @@ def _validate_send_message(send_message: Callable) -> None:
 
 @db0.memo
 @dataclass
+class Reminder(ABC):
+    """Message injected when a dialog job reaches a reminder condition."""
+
+    text: str
+
+    @abstractmethod
+    def fire_ready(self, job: "Job") -> bool:
+        """Return whether this reminder should fire for the current job."""
+
+
+@db0.memo
+@dataclass
+class RecursiveReminder(Reminder):
+    """Reminder that should be re-applied whenever the condition is reached."""
+
+    min_dialog_len: Optional[int] = None
+
+    def fire_ready(self, job: "Job") -> bool:
+        """Return whether the dialog has reached the configured length."""
+        if self.min_dialog_len is None:
+            return True
+        for idx, _ in enumerate(job.get_dialog(), start=1):
+            if idx >= self.min_dialog_len:
+                return True
+        return False
+
+
+@db0.memo
+@dataclass
 class DialogAgent(SupervisedAgent):
     """Base class for 1-to-1 dialog agents.
 
@@ -55,6 +88,7 @@ class DialogAgent(SupervisedAgent):
     send_message: Callable = None
     additional_tools: Iterable[Callable] = None
     add_answer_tool: bool = True
+    __reminder: Optional[Reminder] = None
 
     def __init__(
         self,
@@ -69,6 +103,7 @@ class DialogAgent(SupervisedAgent):
         self.send_message = send_message
         self.additional_tools = tools if tools is not None else []
         self.add_answer_tool = add_answer_tool
+        self.__reminder = None
 
         basic_tools = list(self.additional_tools)
 
@@ -84,6 +119,31 @@ class DialogAgent(SupervisedAgent):
         self.append_tool('_send_message')
         if add_answer_tool:
             self.append_tool('answer')
+
+    @property
+    def reminder(self) -> Optional[Reminder]:
+        """Return the configured looping reminder, if any."""
+        return getattr(self, "_DialogAgent__reminder", None)
+
+    def set_reminder(  # pylint: disable=redefined-builtin
+        self, text: str, type: str = "RECURSIVE", **kwargs
+    ) -> Reminder:
+        """Configure a reminder for dialog job looping.
+
+        Args:
+            text: Reminder text to feed back to the dialog.
+            type: Reminder kind. Supported value: ``RECURSIVE``.
+            **kwargs: Reminder implementation-specific properties.
+
+        Returns:
+            The stored reminder instance.
+        """
+        reminder_type = type.upper()
+        if reminder_type == "RECURSIVE":
+            self.__reminder = RecursiveReminder(text=text, **kwargs)
+        else:
+            raise ValueError(f"Unsupported reminder type: {type}")
+        return self.__reminder
 
     def init_context(self):
         if self._X__context is None:
