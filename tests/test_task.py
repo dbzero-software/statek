@@ -925,6 +925,16 @@ class TestDialogAgentReminder:
         assert reminder.text == "Use report_outcome."
         assert agent.reminder is reminder
 
+    def test_set_reminder_passes_recursive_reminder_kwargs(self, db0_fixture):
+        """set_reminder forwards implementation-specific reminder properties."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        reminder = agent.set_reminder("Use report_outcome.", min_dialog_len=3)
+
+        assert isinstance(reminder, RecursiveReminder)
+        assert reminder.min_dialog_len == 3
+        assert agent.reminder is reminder
+
     def test_set_reminder_rejects_base_reminder_type(self, db0_fixture):
         """set_reminder does not instantiate the base reminder type."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})

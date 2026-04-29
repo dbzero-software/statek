@@ -1228,14 +1228,9 @@ class Job:
     def handle_reminder(self, reminder: "Reminder") -> bool:
         """Process a reminder if its conditions are currently met.
 
-        Recursive reminders are always eligible for now. Other reminder
-        types are intentionally skipped until they define their own conditions.
+        Reminder implementations own their activation conditions.
         """
-        from statek.agents.dialog_agent import (  # pylint: disable=import-outside-toplevel
-            RecursiveReminder,
-        )
-
-        if not isinstance(reminder, RecursiveReminder):
+        if not reminder.fire_ready(self):
             return False
 
         console_pos = len(self.py_env.console) if self.py_env.console else 0

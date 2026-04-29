@@ -20,7 +20,7 @@ from statek.executors.job import (
 from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
-from statek.agents.dialog_agent import RecursiveReminder, Reminder
+from statek.agents.dialog_agent import RecursiveReminder
 from statek.executors.chat_log_item import ReminderLogItem, UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
@@ -2197,6 +2197,32 @@ class TestUserLogItem:
 class TestJobHandleReminder:
     """Tests for Job.handle_reminder."""
 
+    def test_recursive_reminder_without_min_dialog_len_is_ready(self, job_factory):
+        """RecursiveReminder is ready by default."""
+        job = job_factory()
+        reminder = RecursiveReminder(text="Use report_outcome.")
+
+        assert reminder.fire_ready(job) is True
+
+    def test_recursive_reminder_waits_for_min_dialog_len(self, job_factory):
+        """min_dialog_len gates reminders on the dialog length."""
+        job = job_factory()
+        job.chat_log.append("initial user message")
+        reminder = RecursiveReminder(text="Use report_outcome.", min_dialog_len=2)
+
+        assert reminder.fire_ready(job) is False
+
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="print('internal')"),
+        ))
+
+        assert reminder.fire_ready(job) is False
+
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="response"))
+
+        assert reminder.fire_ready(job) is True
+
     def test_recursive_reminder_is_processed(self, job_factory):
         """RecursiveReminder appends console text and records a ReminderLogItem."""
         job = job_factory()
@@ -2212,10 +2238,10 @@ class TestJobHandleReminder:
         assert job.chat_log[0].console_pos == 1
         assert job.chat_log[0].reminder is reminder
 
-    def test_base_reminder_is_skipped(self, job_factory):
-        """Unsupported reminder types are skipped without side effects."""
+    def test_unready_reminder_is_skipped(self, job_factory):
+        """Unready reminders are skipped without side effects."""
         job = job_factory()
-        reminder = Reminder(text="Not yet supported.")
+        reminder = RecursiveReminder(text="Not yet supported.", min_dialog_len=1)
 
         processed = job.handle_reminder(reminder)
 
