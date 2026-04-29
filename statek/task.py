@@ -228,7 +228,7 @@ def delegate_mute_task(agent: SupervisedAgent,
 @tool
 def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     agent: DialogAgent,
-    message: str,
+    message: Any,
     parent_job: Optional[Job] = None,
     shared_vars: Optional[Dict[str, Any]] = None,
     locale: Optional[StatekLocale] = None,
@@ -243,7 +243,9 @@ def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positio
 
     Args:
         agent: The dialog agent to delegate the dialog to.
-        message: The initial user message.
+        message: The initial user message. Non-string values are converted by
+            the dialog agent's ``message_adapter`` when registered, otherwise
+            by ``str(message)``.
         parent_job: Optional parent job — when provided, the child job
                     inherits the parent's error handlers.
         shared_vars: Optional ``{var_name: value}`` mapping of variables to
@@ -265,7 +267,7 @@ def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positio
 
 def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     agent: DialogAgent,
-    message: str,
+    message: Any,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
     parent_job: Optional[Job] = None,
     shared_vars: Optional[Dict[str, Any]] = None,
@@ -276,7 +278,9 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
 
     Args:
         agent: The DialogAgent to delegate the dialog to.
-        message: The initial user message.
+        message: The initial user message. Non-string values are converted by
+            the dialog agent's ``message_adapter`` when registered, otherwise
+            by ``str(message)``.
         warmup_code: Optional Python code (single or multiple blocks) to be
                      executed prior to task start.  When provided, all
                      referenced locals of the caller are copied into the

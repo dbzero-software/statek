@@ -620,6 +620,17 @@ class TestDelegateMuteDialog:
         assert result.job.chat_log[0] == "hello"
         assert result.job.status == JobStatus.READY
 
+    def test_non_string_initial_message_uses_message_adapter(
+        self, db0_fixture, mock_settings
+    ):
+        """delegate_mute_dialog forwards non-string messages to start_dialog."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        agent.context["message_adapter"] = lambda msg: f"adapted-{msg.value}"
+
+        result = delegate_mute_dialog(agent, message=MessageForAdapter("object"))
+
+        assert result.job.chat_log[0] == "adapted-object"
+
     def test_result_returns_chat_responses_on_success(self, db0_fixture, mock_settings):
         """On completion, delegate_mute_dialog resolves to user-facing chat responses."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
@@ -694,6 +705,16 @@ def _make_send_message(body: str, media=None):
     return f"sent: {body}"
 
 
+class MessageForAdapter:
+    """Message object used by dialog startup adapter tests."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return f"fallback-{self.value}"
+
+
 class TestStartDialog:
     """Tests for start_dialog function."""
 
@@ -741,6 +762,27 @@ class TestStartDialog:
             and "hello world" in str(job.py_env.push_log)
         )
         assert has_msg
+
+    def test_non_string_initial_message_uses_message_adapter(
+        self, db0_fixture, mock_settings
+    ):
+        """Non-string initial messages are adapted through push_user_message."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        agent.context["message_adapter"] = lambda msg: f"adapted-{msg.value}"
+
+        job = start_dialog(agent, message=MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "adapted-object"
+
+    def test_non_string_initial_message_falls_back_to_str(
+        self, db0_fixture, mock_settings
+    ):
+        """Non-string initial messages fall back to str(message)."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        job = start_dialog(agent, message=MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "fallback-object"
 
     def test_kwargs_passed_as_job_params(self, db0_fixture, mock_settings):
         """Extra kwargs become job_params on the JobDef."""

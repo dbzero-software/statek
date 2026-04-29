@@ -1046,7 +1046,7 @@ def process_push_notifications(step_size=100, max_count=500, prefix: Optional[Un
                     job = db0.fetch(job_uuid)
                     if not isinstance(message, str):
                         job.add_ext_ref(message)
-                    job.push_user_message(str(message))
+                    job.push_user_message(message)
                 except Exception:  # pylint: disable=broad-except
                     pass
                 processed += 1
