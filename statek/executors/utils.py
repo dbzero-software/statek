@@ -899,11 +899,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Non-warmup exception: already printed to console by exec_step
             pass
         finally:
-            # Push CLI output to job console (batched at end of step) and
-            # write each CLI call's joined output into its pre-allocated
-            # tool_log slot.  Must run even on exception so the console
-            # position advances between LLM turns, preventing console_pos
-            # collisions.
+            # Write each CLI call's joined output into its pre-allocated
+            # tool_log slot.  python_cli output is intentionally not copied
+            # into job.py_env.console; tool_log is its single persisted home.
             cli_calls = code_block.get_cli_tool_calls()
             if cli_calls:
                 cli_tool_log_positions = [
@@ -912,8 +910,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 ]
                 for cli_idx in range(len(cli_calls)):
                     joined = "\n".join(cli_outputs.get(cli_idx, []))
-                    if joined:
-                        job.py_env.console_append(joined)
                     if (last_chat_log_item is not None
                             and last_chat_log_item.tool_log is not None
                             and cli_idx < len(cli_tool_log_positions)):
