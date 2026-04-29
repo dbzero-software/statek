@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from collections import namedtuple
 import json
 import re
 import traceback as _traceback_module
@@ -45,6 +46,8 @@ from statek.task_difficulty import (
 
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
+
+DialogItem = namedtuple("DialogItem", ["role", "message"])
 
 """
 READY: a fresh job instance ready for execution
@@ -884,7 +887,7 @@ class Job:
                     yield ChatHistoryItem(
                         role=ChatRole.USER,
                         content=item.reminder.text,
-                        content_src=ContentSource.SYSTEM,
+                        content_src=ContentSource.CONSOLE,
                     )
                 continue
 
@@ -1305,6 +1308,11 @@ class Job:
                 if body is not None:
                     yield body
 
+    @staticmethod
+    def _dialog_from_code_block(resp: CodeBlock) -> Optional[str]:
+        """Extract dialog from a raw MD_DIALOG response stored as a CodeBlock."""
+        return extract_dialog(resp.code or "")
+
     def get_chat_responses(self) -> Iterable[str]:
         """Yield user-facing chat responses from the chat log, oldest first."""
         console_len = len(self.py_env.console) if self.py_env.console else 0
@@ -1328,6 +1336,54 @@ class Job:
                 item.console_pos,
                 end_positions[idx],
             )
+
+    def get_dialog(self) -> Iterable[DialogItem]:
+        """Yield user/assistant dialog messages in chronological order."""
+        console_len = len(self.py_env.console) if self.py_env.console else 0
+        turn_items = [
+            item for item in self.chat_log
+            if isinstance(item, (WarmupLogItem, LLM_LogItem))
+        ]
+        end_positions = {
+            id(item): (
+                turn_items[idx + 1].console_pos
+                if idx + 1 < len(turn_items) else console_len
+            )
+            for idx, item in enumerate(turn_items)
+        }
+
+        for item in self.chat_log:
+            if isinstance(item, str):
+                if item:
+                    yield DialogItem("user", item)
+                continue
+
+            if isinstance(item, UserLogItem):
+                if item.message:
+                    yield DialogItem("user", item.message)
+                continue
+
+            if not isinstance(item, (WarmupLogItem, LLM_LogItem)):
+                continue
+
+            if isinstance(item, LLM_LogItem) and self._is_user_facing_llm_response(item):
+                resp = item.llm_resp
+                if isinstance(resp, str):
+                    yield DialogItem("assistant", resp)
+            elif (
+                isinstance(item, LLM_LogItem)
+                and self.job_def.chat_style == ChatStyle.MD_DIALOG  # pylint: disable=no-member
+                and isinstance(item.llm_resp, CodeBlock)
+            ):
+                dialog = self._dialog_from_code_block(item.llm_resp)
+                if dialog:
+                    yield DialogItem("assistant", dialog)
+
+            for body in self._iter_chat_response_tool_logs(
+                item.console_pos,
+                end_positions[id(item)],
+            ):
+                yield DialogItem("assistant", body)
 
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
         """Return user-message timestamps paired with time-to-first user reply.

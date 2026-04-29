@@ -9,6 +9,7 @@ import dbzero as db0
 import pytest
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import (
+    DialogItem,
     Job,
     JobDef,
     JobDefError,
@@ -18,7 +19,7 @@ from statek.executors.job import (
 )
 from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.model_name import ModelName, parse_model_name
-from statek.chat_history import ChatRole, ContentSource
+from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.dialog_agent import RecursiveReminder, Reminder
 from statek.executors.chat_log_item import ReminderLogItem, UserLogItem, WarmupLogItem
 from statek.settings import ChatStyle, LLM_API_Settings
@@ -2280,8 +2281,8 @@ class TestGetNextRequestUserMessages:
         assert history[-1].content == "user follow-up"
         assert history[-1].content_src == ContentSource.USER
 
-    def test_reminder_log_item_in_chat_log_yields_system_user_item(self, job_factory):
-        """A ReminderLogItem is yielded as an injected USER ChatHistoryItem."""
+    def test_reminder_log_item_in_chat_log_yields_console_user_item(self, job_factory):
+        """A ReminderLogItem is yielded as an injected console USER ChatHistoryItem."""
         job = job_factory()
         reminder = RecursiveReminder(text="Use report_outcome before finishing.")
         job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
@@ -2291,7 +2292,22 @@ class TestGetNextRequestUserMessages:
         assert len(history) == 1
         assert history[0].role == ChatRole.USER
         assert history[0].content == "Use report_outcome before finishing."
-        assert history[0].content_src == ContentSource.SYSTEM
+        assert history[0].content_src == ContentSource.CONSOLE
+
+    def test_reminder_log_item_is_xml_boxed_as_console_content(self, job_factory):
+        """Configured console XML boxing applies to reminder content."""
+        job = job_factory()
+        reminder = RecursiveReminder(text="Use report_outcome before finishing.")
+        job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
+        history = list(job.get_next_request()["chat_history"])
+        settings = types.SimpleNamespace(get_xml_box_tags=lambda: {"console": "out"})
+
+        formatted = format_chat_history_item(history[0], ChatStyle.MARKDOWN, settings)
+
+        assert formatted == {
+            "role": "user",
+            "content": "<out>\nUse report_outcome before finishing.\n</out>",
+        }
 
     def test_user_log_item_in_chat_log_yields_user_item_with_hint(self, job_def_factory):
         """UserLogItem follow-ups get the language hint in chat history."""
@@ -2579,6 +2595,82 @@ class TestGetChatResponses:
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="internal"))
 
         assert list(job.get_chat_responses()) == ["internal", "done"]
+
+
+class TestGetDialog:
+    """Tests for Job.get_dialog."""
+
+    def test_yields_user_and_assistant_messages_in_order(self, job_factory):
+        """User messages and visible LLM responses are yielded chronologically."""
+        job = job_factory()
+        job.chat_log.append("hello")
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="# Hi"))
+        job.chat_log.append(UserLogItem(message="follow-up"))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="# Done"))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("user", "hello"),
+            DialogItem("assistant", "# Hi"),
+            DialogItem("user", "follow-up"),
+            DialogItem("assistant", "# Done"),
+        ]
+
+    def test_filters_internal_turns_and_includes_answer_tool_output(self, job_factory):
+        """Only exchanged dialog is yielded, including assistant answer tool bodies."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.chat_log.append("question")
+        job.py_env.console = [
+            "log: search('alice')",
+            "log: answer(body='tool answer', media=None)",
+        ]
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
+        ))
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="plain reply"))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("user", "question"),
+            DialogItem("assistant", "tool answer"),
+            DialogItem("assistant", "plain reply"),
+        ]
+
+    def test_plain_code_block_code_is_not_dialog(self, job_factory):
+        """Executable CodeBlock code is not yielded as assistant dialog."""
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="print('internal')"),
+        ))
+
+        assert not list(job.get_dialog())
+
+    def test_md_dialog_code_block_extracts_only_dialog_text(self, job_factory):
+        """Raw MD_DIALOG CodeBlock content yields only text outside fences."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="# Visible\n```python\nprint('internal')\n```"),
+        ))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("assistant", "# Visible"),
+        ]
+
+    def test_md_dialog_unfenced_code_block_text_is_dialog(self, job_factory):
+        """Unfenced MD_DIALOG CodeBlock text is treated as assistant dialog."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="# Visible"),
+        ))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("assistant", "# Visible"),
+        ]
 
 
 class TestGetLlmResponseTimes:
