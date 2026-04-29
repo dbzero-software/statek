@@ -16,7 +16,12 @@ from statek.llm_api import LLM_API, select_request_tools
 from statek.locale import LANGUAGE_HINTS
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
-from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
+from statek.executors.chat_log_item import (
+    LLM_LogItem,
+    ReminderLogItem,
+    ToolError,
+    WarmupLogItem,
+)
 from statek.model_name import ensure_model_name, select_model_provider
 from web_ui.nicegui_compat import ui
 from web_ui.components.json_viewer import create_json_viewer
@@ -99,6 +104,20 @@ def _get_llm_items(job) -> list:
     if not job.chat_log:
         return []
     return [item for item in job.chat_log if isinstance(item, LLM_LogItem)]
+
+
+def _get_reminder_texts(job) -> set[str]:
+    """Return reminder texts recorded in the job log."""
+    if not getattr(job, 'chat_log', None):
+        return set()
+    texts = set()
+    for item in job.chat_log:
+        if not isinstance(item, ReminderLogItem):
+            continue
+        text = getattr(getattr(item, 'reminder', None), 'text', None)
+        if text:
+            texts.add(str(text))
+    return texts
 
 
 def _get_turn_console_ranges(job) -> list[tuple[int, int]]:
@@ -352,6 +371,8 @@ def _get_history_items(job) -> list:
 
 def _message_title(item) -> str:
     """Return a display label for a non-assistant chat history item."""
+    if item.role == ChatRole.SYSTEM:
+        return 'Reminder'
     if item.role == ChatRole.TOOL:
         return 'Tool Result'
     if item.content_src == ContentSource.CONSOLE:
@@ -368,6 +389,7 @@ def _build_history_sections(job) -> list[_HistorySection]:
     turn_num = 0
     chat_style = getattr(getattr(job, 'job_def', None), 'chat_style', None)
     is_direct = chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
+    reminder_texts = _get_reminder_texts(job)
 
     def _flush_current() -> None:
         nonlocal current
@@ -377,6 +399,17 @@ def _build_history_sections(job) -> list[_HistorySection]:
 
     for item in _get_history_items(job):
         if item.role == ChatRole.SYSTEM:
+            content = item.content or ''
+            if content in reminder_texts:
+                _flush_current()
+                sections.append(
+                    _HistorySection(
+                        kind='message',
+                        title='Reminder',
+                        content=content,
+                        content_src=item.content_src,
+                    )
+                )
             continue
 
         if item.role == ChatRole.ASSISTANT:
@@ -1120,10 +1153,21 @@ def _render_history_message(message: _HistoryMessage) -> None:
             _render_console_output(message.content)
         return
 
-    icon = 'chat' if message.content_src == ContentSource.USER else 'description'
-    bg = '#f1f8e9' if message.content_src == ContentSource.USER else '#f5f5f5'
-    border = '#c5e1a5' if message.content_src == ContentSource.USER else '#e0e0e0'
-    text = '#33691e' if message.content_src == ContentSource.USER else '#455a64'
+    if message.title == 'Reminder':
+        icon = 'tips_and_updates'
+        bg = '#fffde7'
+        border = '#fdd835'
+        text = '#795548'
+    elif message.content_src == ContentSource.USER:
+        icon = 'chat'
+        bg = '#f1f8e9'
+        border = '#c5e1a5'
+        text = '#33691e'
+    else:
+        icon = 'description'
+        bg = '#f5f5f5'
+        border = '#e0e0e0'
+        text = '#455a64'
     with ui.column().classes('w-full gap-0'):
         with ui.row().classes('items-center gap-2 px-3 py-1 rounded-t').style(
             f'background: {bg}; border: 1px solid {border}; border-bottom: none'

@@ -6,6 +6,8 @@ from typing import Callable, Optional
 import dbzero as db0
 
 from statek.agents.agent import SupervisedAgent
+from statek.prompt_config import format_system_prompt
+from statek.task_difficulty import TaskDifficulty
 from web_ui.nicegui_compat import ui
 from web_ui.model_bindings import get_all_agents
 
@@ -80,6 +82,29 @@ def _get_tool_signature(fn: Callable) -> str:
         return name
 
 
+def _get_agent_system_prompt(agent) -> str:
+    """Return agent system prompt text safe to pass into NiceGUI components."""
+    try:
+        raw_prompt = agent._system_prompt  # pylint: disable=protected-access
+        if not raw_prompt:
+            return ''
+
+        try:
+            return agent.system_prompt(TaskDifficulty.medium) or ''
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+        if isinstance(raw_prompt, str):
+            return raw_prompt
+
+        try:
+            return format_system_prompt(raw_prompt, TaskDifficulty.medium)
+        except Exception:  # pylint: disable=broad-except
+            return str(raw_prompt)
+    except Exception:  # pylint: disable=broad-except
+        return ''
+
+
 def _render_tool_row(fn: Callable) -> None:
     """Render a single tool function with expandable Brief / Docs tabs."""
     brief, full_docs, error = _get_tool_info(fn)
@@ -132,7 +157,7 @@ def _render_agent_card_content(agent) -> None:
     total_tools = len(tools) + len(tools_by_name)
 
     metadata = agent._metadata or {}  # pylint: disable=protected-access
-    system_prompt = agent._system_prompt or ''  # pylint: disable=protected-access
+    system_prompt = _get_agent_system_prompt(agent)
 
     try:
         uuid_str = str(db0.uuid(agent))

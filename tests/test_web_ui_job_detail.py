@@ -10,7 +10,12 @@ from statek.pyenv import PyEnv
 from statek.system import tool, docstr
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec
-from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
+from statek.executors.chat_log_item import (
+    LLM_LogItem,
+    ReminderLogItem,
+    ToolError,
+    WarmupLogItem,
+)
 from web_ui.pages.job_detail import (
     _get_console_slice,
     _get_warmup_blocks,
@@ -99,6 +104,16 @@ def _make_warmup_log_item(block_num, tool_log=None):
         def _get_tool_result_empty(tool_call_id):
             raise KeyError(tool_call_id)
         item.get_tool_result = _get_tool_result_empty
+    return item
+
+
+def _make_reminder_log_item(text, console_pos=0):
+    """Create a mock ReminderLogItem."""
+    item = MagicMock()
+    item.console_pos = console_pos
+    item.reminder = MagicMock()
+    item.reminder.text = text
+    item.__class__ = ReminderLogItem
     return item
 
 
@@ -967,6 +982,22 @@ class TestBuildMdContentSummary:  # pylint: disable=too-many-public-methods
         assert 'search' in md
         assert 'result text' in md
 
+    def test_includes_reminders(self, db0_fixture):
+        reminder_text = 'Use report_outcome before finishing.'
+        job = _make_job_for_md(chat_log=[_make_reminder_log_item(reminder_text)])
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.SYSTEM,
+                content=reminder_text,
+                content_src=ContentSource.SYSTEM,
+            ),
+        ]
+
+        md = _call_build_md(job)
+
+        assert 'Reminder' in md
+        assert reminder_text in md
+
     def test_direct_llm_text_not_wrapped_as_python_code_block(self, db0_fixture):
         job = _make_job_for_md(chat_style=ChatStyle.DIRECT)  # pylint: disable=no-member
         job.get_chat_history.return_value = [
@@ -1349,6 +1380,25 @@ class TestBuildHistorySections:
         sections = _build_history_sections(job)
 
         assert not sections
+
+    def test_includes_reminder_history_items(self, db0_fixture):
+        reminder_text = 'Use report_outcome before finishing.'
+        job = _make_job(chat_log=[_make_reminder_log_item(reminder_text)])
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.SYSTEM,
+                content=reminder_text,
+                content_src=ContentSource.SYSTEM,
+            ),
+        ]
+
+        sections = _build_history_sections(job)
+
+        assert len(sections) == 1
+        assert sections[0].kind == 'message'
+        assert sections[0].title == 'Reminder'
+        assert sections[0].content == reminder_text
+        assert sections[0].content_src == ContentSource.SYSTEM
 
     def test_strips_language_hint_from_user_followup_display(self, db0_fixture):
         job = _make_job()

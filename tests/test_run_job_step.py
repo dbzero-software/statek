@@ -1101,8 +1101,8 @@ class TestRunJobStepCliToolCalls:
     """Tests for CLI (python_cli) tool call execution via exec_all_steps."""
 
     @pytest.mark.asyncio
-    async def test_cli_tool_output_stored_in_console(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli output lands in console AND in tool_log aligned with tool_calls."""
+    async def test_cli_tool_output_stored_only_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli output lands in tool_log, not in job console."""
         cs = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-hello")'})
         warmup_blocks = [CodeBlock(code='x = 1', tool_calls=[cs]), 'exit("ok")']
         agent = Agent(
@@ -1117,7 +1117,7 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        assert any("cli-hello" in line for line in job.py_env.console)
+        assert not any("cli-hello" in line for line in job.py_env.console or [])
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) == 1
@@ -1155,7 +1155,7 @@ class TestRunJobStepCliToolCalls:
         assert job.py_env.local_state.get('x') == 1
 
     @pytest.mark.asyncio
-    async def test_mixed_tool_results_regular_in_tool_log_cli_in_console(self, db0_fixture):  # pylint: disable=unused-argument
+    async def test_mixed_tool_results_regular_and_cli_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
         """tool_log entries align with the full tool_calls order — regular + CLI."""
         cs_regular = CallSpec(id="R-001", func_name="my_tool", args=[], kwargs={})
         cs_cli = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-out")'})
@@ -1181,12 +1181,11 @@ class TestRunJobStepCliToolCalls:
         assert len(tool_log) == 2
         assert 'regular_out' in tool_log[0]
         assert tool_log[1] == "cli-out"
-        # CLI output still lands in console (advances console_pos between turns).
-        assert any("cli-out" in line for line in job.py_env.console)
+        assert not any("cli-out" in line for line in job.py_env.console or [])
 
     @pytest.mark.asyncio
-    async def test_cli_error_output_stored_in_console(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli error output lands in both console and tool_log."""
+    async def test_cli_error_output_stored_only_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli error output lands in tool_log, not in job console."""
         cs = CallSpec(id="C-001", func_name="python_cli",
                       kwargs={"code": '1 / 0'})
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
@@ -1202,7 +1201,7 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        assert any("ZeroDivisionError" in line for line in job.py_env.console)
+        assert not any("ZeroDivisionError" in line for line in job.py_env.console or [])
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) >= 1
@@ -1318,7 +1317,7 @@ class TestRunJobStepMdDialog:
             send_message=_record_dialog_message,
             _metadata={"MODEL": "test-model"},
         )
-        reminder = agent.set_reminder("Use report_outcome.")
+        reminder = agent.set_new_reminder("Use report_outcome.")
         job = Job(
             job_def=agent.create_job_def(chat_style=ChatStyle.MD_DIALOG),
             model_family="test",
@@ -1586,7 +1585,7 @@ class TestRunJobStepDirect:
             send_message=_record_dialog_message,
             _metadata={"MODEL": "test-model"},
         )
-        reminder = agent.set_reminder("Use report_outcome.")
+        reminder = agent.set_new_reminder("Use report_outcome.")
         job = Job(
             job_def=agent.create_job_def(chat_style=ChatStyle.DIRECT),
             model_family="test",

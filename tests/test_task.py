@@ -1,6 +1,7 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable
 import builtins
 from unittest.mock import Mock, patch
+import dbzero as db0
 import pytest
 
 from statek.task import (
@@ -915,39 +916,65 @@ class TestDialogAgentReminder:
 
         assert agent.reminder is None
 
-    def test_set_reminder_creates_recursive_reminder_by_default(self, db0_fixture):
-        """set_reminder stores a recursive reminder by default."""
+    def test_set_new_reminder_creates_recursive_reminder_by_default(self, db0_fixture):
+        """set_new_reminder stores a recursive reminder by default."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
 
-        reminder = agent.set_reminder("Use report_outcome.")
+        reminder = agent.set_new_reminder("Use report_outcome.")
 
         assert isinstance(reminder, RecursiveReminder)
         assert reminder.text == "Use report_outcome."
         assert agent.reminder is reminder
 
-    def test_set_reminder_passes_recursive_reminder_kwargs(self, db0_fixture):
-        """set_reminder forwards implementation-specific reminder properties."""
+    def test_set_new_reminder_passes_recursive_reminder_kwargs(self, db0_fixture):
+        """set_new_reminder forwards implementation-specific reminder properties."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
 
-        reminder = agent.set_reminder("Use report_outcome.", min_dialog_len=3)
+        reminder = agent.set_new_reminder("Use report_outcome.", min_dialog_len=3)
 
         assert isinstance(reminder, RecursiveReminder)
         assert reminder.min_dialog_len == 3
         assert agent.reminder is reminder
 
-    def test_set_reminder_rejects_base_reminder_type(self, db0_fixture):
-        """set_reminder does not instantiate the base reminder type."""
+    def test_set_new_reminder_rejects_base_reminder_type(self, db0_fixture):
+        """set_new_reminder does not instantiate the base reminder type."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
 
         with pytest.raises(ValueError, match="Unsupported reminder type"):
-            agent.set_reminder("Follow up.", type="REMINDER")
+            agent.set_new_reminder("Follow up.", type="REMINDER")
 
-    def test_set_reminder_rejects_unknown_type(self, db0_fixture):
+    def test_set_new_reminder_rejects_unknown_type(self, db0_fixture):
         """Unknown reminder types fail explicitly."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
 
         with pytest.raises(ValueError, match="Unsupported reminder type"):
-            agent.set_reminder("Follow up.", type="UNKNOWN")
+            agent.set_new_reminder("Follow up.", type="UNKNOWN")
+
+    def test_set_reminder_accepts_same_prefix_reminder(self, db0_fixture):
+        """set_reminder stores a preconfigured reminder on the same prefix."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        reminder = RecursiveReminder(text="Use report_outcome.", min_dialog_len=3)
+
+        stored = agent.set_reminder(reminder)
+
+        assert stored is reminder
+        assert agent.reminder is reminder
+
+    def test_set_reminder_rejects_non_reminder(self, db0_fixture):
+        """set_reminder only accepts Reminder-derived instances."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        with pytest.raises(TypeError, match="reminder must be a Reminder"):
+            agent.set_reminder("Use report_outcome.")
+
+    def test_set_reminder_rejects_different_prefix_reminder(self, db0_fixture):
+        """set_reminder rejects reminders stored outside the agent prefix."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        db0.open("other_prefix", "rw")
+        reminder = RecursiveReminder(text="Use report_outcome.")
+
+        with pytest.raises(ValueError, match="same db0 prefix"):
+            agent.set_reminder(reminder)
 
 
 class TestDialogAgentCreateJobDefChatStyle:

@@ -532,6 +532,49 @@ def test_tuple_same_type_uses_repeated():
     assert result == '(Item(val=1,meta=<Object>),Item(val=2,...))'
 
 
+def test_repeated_expanded_collection_repeats_nested_object_elements():
+    """repeated=True propagates through nested collections to object elements."""
+    class Meta:
+        pass
+
+    class Item:
+        def __init__(self, value, meta):
+            self.value = value
+            self.meta = meta
+
+    class Container:
+        def __init__(self, items):
+            self.items = items
+
+    result = format_llm_repr(
+        Container([Item(1, Meta()), Item(2, Meta())]),
+        expand=["items"],
+        repeated=True,
+    )
+    assert result == 'Container(items=[Item(value=1,...),Item(value=2,...)])'
+
+
+def test_repeated_nested_sequence_repeats_deep_object_elements():
+    """Repeated sequence elements propagate repeated=True to contained objects."""
+    class Meta:
+        pass
+
+    class Slot:
+        def __init__(self, day, meta):
+            self.day = day
+            self.meta = meta
+
+    rows = [
+        (Slot("mon", Meta()), -0.5),
+        (Slot("tue", Meta()), -0.5),
+    ]
+    result = format_llm_repr(rows)
+    assert result == (
+        '[(Slot(day="mon",meta=<Object>),-0.5),'
+        '(Slot(day="tue",...),-0.5)]'
+    )
+
+
 def test_list_scalars_repeated_is_no_op():
     """For scalars, repeated-type tracking doesn't change the output."""
     result = format_llm_repr([1, 2, 3])

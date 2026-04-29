@@ -1,6 +1,16 @@
 """Tests for the web_ui agents page helper functions."""
 
-from web_ui.pages.agents import _format_warmup_code, _get_tool_info, _get_tool_signature
+import json
+from typing import List
+
+from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
+from web_ui.pages.agents import (
+    _format_warmup_code,
+    _get_agent_system_prompt,
+    _get_tool_info,
+    _get_tool_signature,
+)
 
 
 class _FakeCodeBlock:  # pylint: disable=too-few-public-methods
@@ -22,6 +32,19 @@ class _FakeCallSpec:  # pylint: disable=too-few-public-methods
         parts = [repr(a) for a in self.args]
         parts += [f"{k}={v!r}" for k, v in self.kwargs.items()]
         return f"{self.func_name}({', '.join(parts)})"
+
+
+class _FakeAgentWithBadFormatter:  # pylint: disable=too-few-public-methods
+    def __init__(self, raw_prompt):
+        self._system_prompt = raw_prompt
+
+    def system_prompt(self, *_args, **_kwargs):
+        raise KeyError('missing template value')
+
+
+class _FakePromptWithTypingList:  # pylint: disable=too-few-public-methods
+    intro = 'Intro'
+    sections = List
 
 
 def _tool_with_full_docs(value: str) -> str:
@@ -104,6 +127,26 @@ class TestGetToolSignature:
     def test_non_callable_returns_str(self):
         result = _get_tool_signature("mytool")  # type: ignore[arg-type]
         assert result == 'mytool'
+
+
+class TestGetAgentSystemPrompt:
+    def test_formats_persistent_prompt_to_json_safe_text(self, db0_fixture):  # pylint: disable=unused-argument
+        agent = Agent(
+            role='test',
+            _system_prompt=make_system_prompt('Intro\n\n--- Details ---\nUse tools.'),
+            _tools=[],
+        )
+
+        result = _get_agent_system_prompt(agent)
+
+        assert result == 'Intro\n\n--- Details ---\nUse tools.'
+        json.dumps({'system_prompt': result})
+
+    def test_does_not_return_persistent_prompt_with_typing_list(self, db0_fixture):  # pylint: disable=unused-argument
+        result = _get_agent_system_prompt(_FakeAgentWithBadFormatter(_FakePromptWithTypingList()))
+
+        assert isinstance(result, str)
+        json.dumps({'system_prompt': result})
 
 
 class TestFormatWarmupCode:
