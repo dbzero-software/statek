@@ -2307,8 +2307,8 @@ class TestGetNextRequestUserMessages:
         assert history[-1].content == "user follow-up"
         assert history[-1].content_src == ContentSource.USER
 
-    def test_reminder_log_item_in_chat_log_yields_console_user_item(self, job_factory):
-        """A ReminderLogItem is yielded as an injected console USER ChatHistoryItem."""
+    def test_reminder_log_item_in_chat_log_yields_system_item(self, job_factory):
+        """A ReminderLogItem is yielded as an injected SYSTEM ChatHistoryItem."""
         job = job_factory()
         reminder = RecursiveReminder(text="Use report_outcome before finishing.")
         job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
@@ -2316,12 +2316,12 @@ class TestGetNextRequestUserMessages:
         history = list(job.get_next_request()["chat_history"])
 
         assert len(history) == 1
-        assert history[0].role == ChatRole.USER
+        assert history[0].role == ChatRole.SYSTEM
         assert history[0].content == "Use report_outcome before finishing."
-        assert history[0].content_src == ContentSource.CONSOLE
+        assert history[0].content_src == ContentSource.SYSTEM
 
-    def test_reminder_log_item_is_xml_boxed_as_console_content(self, job_factory):
-        """Configured console XML boxing applies to reminder content."""
+    def test_reminder_log_item_formats_as_system_message(self, job_factory):
+        """Reminder content is sent to OpenAI-compatible LLMs as role=system."""
         job = job_factory()
         reminder = RecursiveReminder(text="Use report_outcome before finishing.")
         job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
@@ -2331,8 +2331,8 @@ class TestGetNextRequestUserMessages:
         formatted = format_chat_history_item(history[0], ChatStyle.MARKDOWN, settings)
 
         assert formatted == {
-            "role": "user",
-            "content": "<out>\nUse report_outcome before finishing.\n</out>",
+            "role": "system",
+            "content": "Use report_outcome before finishing.",
         }
 
     def test_user_log_item_in_chat_log_yields_user_item_with_hint(self, job_def_factory):

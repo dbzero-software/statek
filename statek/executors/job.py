@@ -795,8 +795,9 @@ class Job:
              ``warmup_block_num`` order.
           3. The same alternating pattern for LLM turns: ASSISTANT (LLM
              response) + USER/TOOL (console / tool result), woven together
-             with any USER messages from ``UserLogItem`` entries and from
-             ``py_env.push_log`` keyed by console position.
+             with any USER messages from ``UserLogItem`` entries, SYSTEM
+             reminder messages, and USER messages from ``py_env.push_log``
+             keyed by console position.
 
         ``CodeBlock`` responses with ``tool_calls`` produce an ASSISTANT item
         with ``tool_calls`` set, followed by one TOOL item per call carrying
@@ -885,9 +886,9 @@ class Job:
             if isinstance(item, ReminderLogItem):
                 if item.reminder.text:
                     yield ChatHistoryItem(
-                        role=ChatRole.USER,
+                        role=ChatRole.SYSTEM,
                         content=item.reminder.text,
-                        content_src=ContentSource.CONSOLE,
+                        content_src=ContentSource.SYSTEM,
                     )
                 continue
 
