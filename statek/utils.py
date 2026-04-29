@@ -1158,11 +1158,14 @@ def format_llm_repr(value: Any, hide: List[str] = None,
             brackets = ('[', ']')
         else:
             brackets = ('(', ')')
-        return _format_sequence(list(value), *brackets, max_len)
+        return _format_sequence(
+            list(value), *brackets, max_len, repeated=kwargs.get('repeated', False))
     if isinstance(value, (set, frozenset)) or _is_dbzero_collection_type(value, "Set", "FrozenSet"):
-        return _format_sequence(sorted(value, key=repr), '{', '}', max_len)
+        return _format_sequence(
+            sorted(value, key=repr), '{', '}', max_len,
+            repeated=kwargs.get('repeated', False))
     if isinstance(value, dict) or _is_dbzero_collection_type(value, "Dict"):
-        return _format_dict_llm(value, max_len)
+        return _format_dict_llm(value, max_len, repeated=kwargs.get('repeated', False))
 
     members = _get_object_members(value)
     if members is not None:
@@ -1179,7 +1182,8 @@ def _format_element(item: Any, max_len: int, repeated: bool) -> str:
     repeated through to the fallback format_llm_repr call for plain objects.
     """
     if _uses_default_llm_format(item):
-        return format_llm_repr(item, max_len=max_len, is_nested=True)
+        return format_llm_repr(
+            item, max_len=max_len, repeated=repeated, is_nested=True)
     if hasattr(item, '__llm_repr__'):
         method = item.__llm_repr__
         sig = inspect.signature(method)
@@ -1193,7 +1197,9 @@ def _format_element(item: Any, max_len: int, repeated: bool) -> str:
     return format_llm_repr(item, max_len=max_len, repeated=repeated, is_nested=True)
 
 
-def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
+def _format_sequence(
+        items, open_br: str, close_br: str, max_len: int,
+        repeated: bool = False) -> str:
     """Format a sequence with optional truncation."""
     all_items = list(items)
     total = len(all_items)
@@ -1202,7 +1208,7 @@ def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
     parts = []
     for item in shown:
         item_type = type(item)
-        is_repeated = item_type in seen_types
+        is_repeated = repeated or item_type in seen_types
         seen_types.add(item_type)
         parts.append(_format_element(item, max_len=max_len, repeated=is_repeated))
     formatted = ",".join(parts)
@@ -1211,7 +1217,7 @@ def _format_sequence(items, open_br: str, close_br: str, max_len: int) -> str:
     return f"{open_br}{formatted}{close_br}"
 
 
-def _format_dict_llm(value: dict, max_len: int) -> str:
+def _format_dict_llm(value: dict, max_len: int, repeated: bool = False) -> str:
     """Format a dict with optional truncation."""
     items = list(value.items())
     total = len(items)
@@ -1220,7 +1226,7 @@ def _format_dict_llm(value: dict, max_len: int) -> str:
     parts = []
     for k, v in shown:
         v_type = type(v)
-        is_repeated = v_type in seen_types
+        is_repeated = repeated or v_type in seen_types
         seen_types.add(v_type)
         key_repr = format_value_repr(k, is_nested=True)
         val_repr = _format_element(v, max_len=max_len, repeated=is_repeated)
