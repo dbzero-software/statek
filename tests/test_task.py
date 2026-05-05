@@ -621,6 +621,32 @@ class TestSubTaskHandler:
         with pytest.raises(RuntimeError, match="failed"):
             str(handler)
 
+    def test_get_log_message_reports_success(self, job_factory):
+        """Successful completions produce an LLM-facing notification."""
+        handler = SubTaskHandler(job=job_factory(), id="child-1")
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+
+        assert handler.get_log_message() == (
+            "[Notification] sub-task id=child-1 completed successfully."
+        )
+
+    def test_get_log_message_reports_success_without_id(self, job_factory):
+        """Successful completions omit the id fragment when no id exists."""
+        handler = SubTaskHandler(job=job_factory())
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+
+        assert handler.get_log_message() == (
+            "[Notification] sub-task completed successfully."
+        )
+
+    def test_get_log_message_reports_error(self, job_factory):
+        """Errored completions produce an LLM-facing error notification."""
+        handler = SubTaskHandler(job=job_factory(), id="child-1")
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+        handler._SubTaskHandler__error = TaskError("failed")  # pylint: disable=protected-access
+
+        assert handler.get_log_message() == "[Error] sub-task id=child-1 failed with failed"
+
 
 class TestCreateSubTask:
     """Tests for create_sub_task utility."""

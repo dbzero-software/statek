@@ -404,6 +404,23 @@ def subtask(f=None, *, system: bool = False, target=None):  # pylint: disable=W0
     return _decorate(f)
 
 
+@tool(system=True)
+def find_sub_task_handler(id: Optional[Any] = None, **kwargs) -> Any:  # pylint: disable=redefined-builtin,unused-argument
+    """Return a subtask handler from the current job notification history.
+
+    Args:
+        id: Optional subtask id to match. When omitted, returns the most recent
+            pending or logged subtask handler.
+
+    Returns:
+        The matching subtask handler, or None when no matching handler exists.
+    """
+    job = get_current_job()
+    if job is None:
+        return None
+    return job.find_sub_task_handler(id=id)
+
+
 def error_handler(func: Callable) -> Callable:
     """Marks a callable as an error handler.
 

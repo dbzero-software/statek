@@ -126,6 +126,13 @@ class SubTaskHandler:
         task_id = f" id={self.id}" if self.id is not None else ""
         raise RuntimeError(f"Sub-task{task_id} is not completed: {state}")
 
+    def get_log_message(self) -> str:
+        """Return the LLM-facing notification message for this completed handler."""
+        task_id = f" id={self.id}" if self.id is not None else ""
+        if self.state == SubTaskState.ERROR:
+            return f"[Error] sub-task{task_id} failed with {self.__error.err_message}"
+        return f"[Notification] sub-task{task_id} completed successfully."
+
 
 def create_sub_task(
     job: Job,
