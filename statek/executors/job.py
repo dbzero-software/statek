@@ -460,6 +460,10 @@ class Job:
             perm_ctx_getter=get_perm_ctx,
         )
 
+    def add_locals(self, **kwargs) -> None:
+        """Inject additional values into this job's Python local state."""
+        self.py_env.update_locals(**kwargs)
+
     def system_prompt(self, difficulty: Optional[TaskDifficulty] = None) -> str:
         """Return the agent system prompt formatted for this job's current difficulty."""
         if self.job_def is None or self.job_def.agent is None:

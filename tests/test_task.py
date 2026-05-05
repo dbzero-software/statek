@@ -7,7 +7,8 @@ import pytest
 from statek.task import (
     TaskFutureResult, copy_locals, create_future_task, delegate_task,
     delegate_mute_dialog, delegate_mute_task, start_dialog, submit_new_job,
-    submit_new_jobs_batch,
+    submit_new_jobs_batch, create_sub_task, SubTaskHandler, SubTaskState,
+    TaskError,
 )
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
@@ -20,6 +21,11 @@ from statek.prompt_config import make_system_prompt
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
+
+
+@db0.memo
+class CustomSubTaskHandler(SubTaskHandler):
+    """Custom subtask handler for tests."""
 
 
 class TestCopyLocals:
@@ -528,6 +534,117 @@ class TestCreateFutureTask:
         assert result.job.job_def.job_params["data_type"] == "orders"
         assert result.job.job_def.job_params["user"] == "Alice"
         assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
+
+
+class TestSubTaskHandler:
+    """Tests for sub-task handler primitives."""
+
+    def test_state_maps_ready_job_to_waiting(self, job_factory):
+        """A handler for a READY child job is waiting."""
+        child = job_factory()
+
+        handler = SubTaskHandler(job=child, id="child-1")
+
+        assert handler.state == SubTaskState.WAITING
+
+    def test_has_no_status_property(self, job_factory):
+        """The public API exposes state, not status."""
+        handler = SubTaskHandler(job=job_factory())
+
+        assert not hasattr(type(handler), "status")
+        with pytest.raises(AttributeError):
+            getattr(handler, "status")
+
+    def test_state_maps_active_job_states_to_started(self, job_factory):
+        """Active child job states are exposed as STARTED."""
+        child = job_factory()
+        handler = SubTaskHandler(job=child)
+
+        for status in (
+            JobStatus.WARMING_UP,
+            JobStatus.STARTED,
+            JobStatus.SUSPENDED,
+            JobStatus.DONE,
+        ):
+            child.set_status(status)
+            assert handler.state == SubTaskState.STARTED
+
+    def test_state_prefers_explicit_success_completion(self, job_factory):
+        """Explicit handler completion overrides child job status."""
+        child = job_factory()
+        handler = SubTaskHandler(job=child)
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+
+        assert handler.state == SubTaskState.COMPLETED
+
+    def test_state_prefers_explicit_error_completion(self, job_factory):
+        """Explicit handler errors override child job status."""
+        child = job_factory()
+        handler = SubTaskHandler(job=child)
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+        handler._SubTaskHandler__error = TaskError("failed")  # pylint: disable=protected-access
+
+        assert handler.state == SubTaskState.ERROR
+
+    def test_str_returns_completed_result(self, job_factory):
+        """String conversion exposes the successful completion result."""
+        child = job_factory()
+        handler = SubTaskHandler(job=child)
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+        handler._SubTaskHandler__result = "done"  # pylint: disable=protected-access
+
+        assert str(handler) == "done"
+
+    def test_str_returns_empty_string_for_success_without_result(self, job_factory):
+        """A successful no-result subtask stringifies to an empty string."""
+        child = job_factory()
+        handler = SubTaskHandler(job=child)
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+
+        assert str(handler) == ""
+
+    def test_str_raises_for_pending_handler(self, job_factory):
+        """String conversion raises until the subtask is completed."""
+        child = job_factory()
+        handler = SubTaskHandler(job=child, id="child-1")
+
+        with pytest.raises(RuntimeError, match="child-1"):
+            str(handler)
+
+    def test_str_raises_for_error_handler(self, job_factory):
+        """String conversion raises with the task error message on failure."""
+        child = job_factory()
+        handler = SubTaskHandler(job=child)
+        handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+        handler._SubTaskHandler__error = TaskError("failed")  # pylint: disable=protected-access
+
+        with pytest.raises(RuntimeError, match="failed"):
+            str(handler)
+
+
+class TestCreateSubTask:
+    """Tests for create_sub_task utility."""
+
+    def test_wraps_job_and_injects_handler_local(self, job_factory):
+        """create_sub_task wraps an existing job and injects sub_task_handler."""
+        child = job_factory()
+
+        handler = create_sub_task(child, id="child-1")
+
+        assert isinstance(handler, SubTaskHandler)
+        assert handler.job is child
+        assert handler.id == "child-1"
+        assert child.py_env.local_state["sub_task_handler"] is handler
+
+    def test_supports_custom_handler_type(self, job_factory):
+        """create_sub_task can construct custom handler subclasses."""
+        child = job_factory()
+
+        handler = create_sub_task(child, handler_type=CustomSubTaskHandler, id="custom")
+
+        assert isinstance(handler, CustomSubTaskHandler)
+        assert handler.id == "custom"
+        assert child.py_env.local_state["sub_task_handler"] is handler
 
 
 class TestDelegateMuteTask:

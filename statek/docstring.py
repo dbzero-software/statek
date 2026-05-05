@@ -516,9 +516,12 @@ _SKIP_PARAM_KINDS = {inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITI
 def _validate_args_documented(func: Callable, documented_args: Optional[List[ArgDocString]]):
     """Validate that all function arguments are documented."""
     sig = inspect.signature(func)
+    is_subtask = getattr(func, "__is_subtask__", False)
     func_params = {
         name for name, p in sig.parameters.items()
-        if name not in ('self', 'cls') and p.kind not in _SKIP_PARAM_KINDS
+        if name not in ('self', 'cls')
+        and not (is_subtask and name == "id")
+        and p.kind not in _SKIP_PARAM_KINDS
     }
     documented_names = {arg.name for arg in documented_args} if documented_args else set()
     undocumented = func_params - documented_names

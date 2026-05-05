@@ -1,11 +1,11 @@
 from typing import Any, Callable, Iterable, Optional, Tuple, Dict, Union
 import asyncio
 import functools
+import importlib
 import inspect
 import types as _types_module
 from copy import copy
 from datetime import date, datetime, time as _time
-from functools import wraps
 import nest_asyncio
 import dbzero as db0
 from .chat_style import ChatStyle
@@ -18,7 +18,7 @@ _TOOL_REGISTRY: list[Callable] = []
 
 
 def inject_context(func, __local_context):
-    @wraps(func)
+    @functools.wraps(func)
     def wrapped(*args, **kwargs):
         if "_local_context" in kwargs:
             raise RuntimeError("_local_context is already set")
@@ -193,6 +193,69 @@ def docs_style(f=None, *, brief_types: bool = False):
     return _decorate(f)
 
 
+def _validate_callable_accepts_kwargs(
+    func: Callable,
+    decorator_name: str
+) -> inspect.Signature:
+    """Validate that a decorated callable accepts framework keyword arguments."""
+    sig = inspect.signature(func)
+    has_var_keyword = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in sig.parameters.values()
+    )
+    if not has_var_keyword:
+        raise TypeError(
+            f"Function '{func.__name__}' must accept **kwargs to be used as "
+            f"a {decorator_name}. "
+            f"Current signature: {sig}"
+        )
+    return sig
+
+
+def _validate_subtask_signature(func: Callable) -> None:
+    """Validate that a subtask callable uses framework-managed parameters correctly."""
+    sig = _validate_callable_accepts_kwargs(func, "subtask")
+    if "id" in sig.parameters:
+        raise TypeError(
+            f"Function '{func.__name__}' cannot define parameter 'id'; "
+            "subtask id is reserved for framework-managed kwargs."
+        )
+
+
+def _prepare_decorated_call(func: Callable, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+    """Apply shared tool/subtask argument conversions."""
+    args, kwargs = _convert_enum_args(func, args, kwargs)
+    args, kwargs = _bind_by_name(func, args, kwargs)
+    return args, kwargs
+
+
+def _run_coroutine_result(result: Any) -> Any:
+    """Run a coroutine result through the current event loop."""
+    nest_asyncio.apply()
+    return asyncio.get_running_loop().run_until_complete(result)
+
+
+def _register_wrapper(wrapper: Callable, system: bool, target) -> Callable:
+    """Register an LLM-facing callable and annotate its scope metadata."""
+    wrapper.tool_system = system
+    wrapper.tool_target = target
+    _TOOL_REGISTRY.append(wrapper)
+    return wrapper
+
+
+def _bind_error_handler_result(result: Any, handler: Optional[Callable]) -> None:
+    """Attach a tool error handler to either a future or the current job."""
+    if handler is None:
+        return
+    job = get_current_job()
+    if job is None:
+        return
+    if isinstance(result, FutureResult):
+        result.bind_error_handler(handler, job)
+    else:
+        job.add_error_handler(handler, result)
+
+
 def tool(f=None, *, system: bool = False, target=None, error_handler=None): # pylint: disable=W0621
     """Marks a function as a tool for LLM agent.
 
@@ -222,54 +285,122 @@ def tool(f=None, *, system: bool = False, target=None, error_handler=None): # py
                 "accepting (context, error=None)."
             )
 
-        # Check if the function signature includes **kwargs
-        sig = inspect.signature(func)
-        has_var_keyword = any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in sig.parameters.values()
-        )
-
-        if not has_var_keyword:
-            raise TypeError(
-                f"Function '{func.__name__}' must accept **kwargs to be used as a tool. "
-                f"Current signature: {sig}"
-            )
+        _validate_callable_accepts_kwargs(func, "tool")
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            args, kwargs = _convert_enum_args(func, args, kwargs)
-            args, kwargs = _bind_by_name(func, args, kwargs)
-
-            # update globals with local context
-            result = None
+            args, kwargs = _prepare_decorated_call(func, args, kwargs)
             if inspect.iscoroutinefunction(func):
-                # This library patches asyncio to allow nested event loops
-                nest_asyncio.apply()
-                # If func is async, run it using the event loop
-                result = asyncio.get_running_loop().run_until_complete(func(*args, **kwargs))
+                result = _run_coroutine_result(func(*args, **kwargs))
             else:
-                # If func is sync, just call it
                 result = func(*args, **kwargs)
-
-            if error_handler is not None:
-                job = get_current_job()
-                if job is not None:
-                    if isinstance(result, FutureResult):
-                        result.bind_error_handler(error_handler, job)
-                    else:
-                        job.add_error_handler(error_handler, result)
-
+            _bind_error_handler_result(result, error_handler)
             return result
 
-        wrapper.tool_system = system
-        wrapper.tool_target = target
-        _TOOL_REGISTRY.append(wrapper)
-        return wrapper
+        return _register_wrapper(wrapper, system, target)
 
     if f is None:
         # Called as @tool() or @tool(system=True)
         return _decorate
     # Called as @tool (without parentheses)
+    return _decorate(f)
+
+
+def _subtask_signature(func: Callable, return_type: type) -> inspect.Signature:
+    """Return the LLM-facing signature for a subtask callable."""
+    sig = inspect.signature(func)
+    params = []
+    inserted_id = False
+    force_keyword_only = False
+
+    for param in sig.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            if not inserted_id:
+                params.append(_subtask_id_param(keyword_only=force_keyword_only))
+                inserted_id = True
+            continue
+        if param.kind == inspect.Parameter.KEYWORD_ONLY and not inserted_id:
+            params.append(_subtask_id_param(keyword_only=True))
+            inserted_id = True
+        params.append(param)
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            force_keyword_only = True
+
+    if not inserted_id:
+        params.append(_subtask_id_param(keyword_only=force_keyword_only))
+
+    return sig.replace(parameters=params, return_annotation=return_type)
+
+
+def _subtask_id_param(keyword_only: bool) -> inspect.Parameter:
+    """Return the synthetic framework-managed subtask id parameter."""
+    kind = (
+        inspect.Parameter.KEYWORD_ONLY
+        if keyword_only
+        else inspect.Parameter.POSITIONAL_OR_KEYWORD
+    )
+    return inspect.Parameter("id", kind, default=None, annotation=str)
+
+
+def _wrap_subtask_result(result: Any, task_id: Optional[Any]) -> Any:
+    """Convert a subtask function result to a SubTaskHandler."""
+    task_module = importlib.import_module("statek.task")
+    job_module = importlib.import_module("statek.executors.job")
+    SubTaskHandler = task_module.SubTaskHandler  # pylint: disable=invalid-name
+    create_sub_task = task_module.create_sub_task
+    Job = job_module.Job  # pylint: disable=invalid-name
+
+    if isinstance(result, SubTaskHandler):
+        if result.id is None and task_id is not None:
+            result.id = task_id
+        if result.job.py_env.local_state.get("sub_task_handler") is not result:
+            result.job.add_locals(sub_task_handler=result)
+        return result
+    if isinstance(result, Job):
+        return create_sub_task(result, id=task_id)
+    raise TypeError(
+        "@subtask functions must return Job or SubTaskHandler, "
+        f"got {type(result).__name__}"
+    )
+
+
+def subtask(f=None, *, system: bool = False, target=None):  # pylint: disable=W0621
+    """Mark a function as a subtask factory for LLM agents.
+
+    Decorated functions must accept ``**kwargs`` and return either a ``Job``
+    or a ``SubTaskHandler``. The wrapper exposes an optional framework-managed
+    ``id`` keyword to LLM callers. If the function returns a ``Job``, that id
+    is used when creating the handler. If the function returns an existing
+    handler, the handler is passed through, missing handler ids adopt the
+    framework id, existing handler ids are preserved, and child job local state
+    is repaired with ``sub_task_handler``.
+    """
+
+    def _decorate(func):
+        SubTaskHandler = importlib.import_module("statek.task").SubTaskHandler
+
+        _validate_subtask_signature(func)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            task_id = kwargs.pop("id", None)
+            args, kwargs = _prepare_decorated_call(func, args, kwargs)
+            if inspect.iscoroutinefunction(func):
+                result = _run_coroutine_result(func(*args, **kwargs))
+            else:
+                result = func(*args, **kwargs)
+            return _wrap_subtask_result(result, task_id)
+
+        annotations = dict(getattr(func, "__annotations__", {}))
+        annotations["id"] = str
+        annotations["return"] = SubTaskHandler
+        wrapper.__annotations__ = annotations
+        wrapper.__signature__ = _subtask_signature(func, SubTaskHandler)
+        wrapper.__is_subtask__ = True
+        return _register_wrapper(wrapper, system, target)
+
+    if f is None:
+        return _decorate
     return _decorate(f)
 
 

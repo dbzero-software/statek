@@ -1,7 +1,8 @@
 # pylint: disable=no-member
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import ast
 import inspect
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Type, Union
 import dbzero as db0
 from .exceptions import FutureError
 from .future import FutureResult, temporal
@@ -61,6 +62,80 @@ def copy_locals(code: str, dest: Dict, local_vars: Optional[Dict] = None):
 
     collector = NameCollector()
     collector.visit(tree)
+
+
+SubTaskState = db0.enum("SubTaskState", ["WAITING", "STARTED", "COMPLETED", "ERROR"])
+
+
+@db0.memo(no_default_tags=True)
+@dataclass
+class TaskError:
+    """Error information reported by a completed subtask."""
+
+    err_message: str
+
+
+@db0.memo
+class SubTaskHandler:
+    """Handle for a child job delegated as a subtask."""
+
+    def __init__(self, job: Job, id: Optional[Any] = None):  # pylint: disable=redefined-builtin
+        """Create a handler for an already-created child job.
+
+        Args:
+            job: Child job represented by this handler.
+            id: Optional caller-supplied subtask identifier.
+        """
+        self.job = job
+        self.id = id
+        self.__is_completed: bool = False
+        self.__error: Optional[TaskError] = None
+        self.__result: Optional[Any] = None
+
+    @property
+    def is_completed(self) -> bool:
+        """Return whether the handler has an explicit completion outcome."""
+        return self.__is_completed
+
+    @property
+    def error(self) -> Optional[TaskError]:
+        """Return the subtask error, if completion failed."""
+        return self.__error
+
+    @property
+    def result(self) -> Optional[Any]:
+        """Return the successful completion result, if any."""
+        return self.__result
+
+    @property
+    def state(self) -> SubTaskState:
+        """Resolve the handler state from explicit completion and child job status."""
+        if self.__is_completed:
+            return SubTaskState.ERROR if self.__error is not None else SubTaskState.COMPLETED
+        if self.job.status == JobStatus.READY:
+            return SubTaskState.WAITING
+        return SubTaskState.STARTED
+
+    def __str__(self) -> str:
+        """Return completed results and intentionally raise for unfinished handlers."""
+        state = self.state
+        if state == SubTaskState.COMPLETED:
+            return "" if self.__result is None else str(self.__result)
+        if state == SubTaskState.ERROR:
+            raise RuntimeError(self.__error.err_message)
+        task_id = f" id={self.id}" if self.id is not None else ""
+        raise RuntimeError(f"Sub-task{task_id} is not completed: {state}")
+
+
+def create_sub_task(
+    job: Job,
+    handler_type: Type[SubTaskHandler] = SubTaskHandler,
+    **kwargs,
+) -> SubTaskHandler:
+    """Create a subtask handler for an existing job and inject it into job locals."""
+    handler = handler_type(job=job, **kwargs)
+    job.add_locals(sub_task_handler=handler)
+    return handler
 
 
 @db0.memo

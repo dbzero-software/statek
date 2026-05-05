@@ -111,7 +111,29 @@ class TestJobWithError:
             job = job_factory()
             job.error = err
             assert job.error is err
-            assert job.error.error_message == "job failed"
+        assert job.error.error_message == "job failed"
+
+
+class TestJobAddLocals:
+    """Tests for injecting additional local values into an existing job."""
+
+    def test_add_locals_merges_values(self, job_factory):
+        """add_locals adds and overwrites values in py_env.local_state."""
+        job = job_factory()
+        job.py_env.local_state = {"existing": 1}
+
+        job.add_locals(existing=2, added=3)
+
+        assert job.py_env.local_state == {"existing": 2, "added": 3}
+
+    def test_add_locals_initializes_missing_local_state(self, job_factory):
+        """add_locals creates local_state when it is missing."""
+        job = job_factory()
+        job.py_env.local_state = None
+
+        job.add_locals(answer=42)
+
+        assert job.py_env.local_state == {"answer": 42}
 
 
 class TestJobDef:
