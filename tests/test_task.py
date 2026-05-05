@@ -8,7 +8,7 @@ from statek.task import (
     TaskFutureResult, copy_locals, create_future_task, delegate_task,
     delegate_mute_dialog, delegate_mute_task, start_dialog, submit_new_job,
     submit_new_jobs_batch, create_sub_task, SubTaskHandler, SubTaskState,
-    TaskError,
+    TaskError, complete_sub_task, create_new_job,
 )
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
@@ -21,6 +21,12 @@ from statek.prompt_config import make_system_prompt
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
+
+
+def _run_with_current_job(job, func):
+    """Run func while job is visible via _STATEK_CTX."""
+    _STATEK_CTX = {"job": job}  # noqa: F841
+    return func()
 
 
 @db0.memo
@@ -536,6 +542,78 @@ class TestCreateFutureTask:
         assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
 
 
+class TestCreateNewJob:
+    """Tests for the shared job-construction helper."""
+
+    def test_creates_ready_job_with_shared_vars_and_parent_state(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_new_job matches create_future_task job construction behavior."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        parent = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=None,
+            locale=parent_locale,
+        ).job
+        parent.add_error_handler(_noop_error_handler, "ctx")
+
+        job = create_new_job(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            parent_job=parent,
+            topic="orders",
+        )
+
+        assert isinstance(job, Job)
+        assert job.status == JobStatus.READY
+        assert job.job_def.agent is supervised_agent
+        assert job.job_def.locale is parent_locale
+        assert job.job_def.job_params["topic"] == "orders"
+        assert job.job_def.job_params["shared_vars"] == ["alpha"]
+        assert job.py_env.local_state["alpha"] == 42
+        assert job.parent_job is parent
+        assert len(job.error_handlers) == 1
+        assert job.error_handlers[0].error_handler is _noop_error_handler
+
+    def test_explicit_locale_overrides_parent_locale(self, db0_fixture, supervised_agent):
+        """create_new_job preserves current locale override behavior."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        child_locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.GB,
+        )
+        parent = create_new_job(supervised_agent, locale=parent_locale)
+
+        job = create_new_job(supervised_agent, parent_job=parent, locale=child_locale)
+
+        assert job.job_def.locale is child_locale
+
+    def test_warmup_code_copies_referenced_caller_locals(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_new_job copies warmup-code locals from the caller frame."""
+        x = 10
+        unused_var = 999
+
+        job = create_new_job(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            warmup_code="result = x + alpha",
+        )
+
+        assert job.job_def.warmup_code == "result = x + alpha"
+        assert job.py_env.local_state["x"] == 10
+        assert job.py_env.local_state["alpha"] == 42
+        assert "unused_var" not in job.py_env.local_state
+
+
 class TestSubTaskHandler:
     """Tests for sub-task handler primitives."""
 
@@ -646,6 +724,97 @@ class TestSubTaskHandler:
         handler._SubTaskHandler__error = TaskError("failed")  # pylint: disable=protected-access
 
         assert handler.get_log_message() == "[Error] sub-task id=child-1 failed with failed"
+
+    def test_complete_success_stores_result_and_notifies_parent(self, job_factory):
+        """Successful completion stores the result and pushes to the parent job."""
+        parent = job_factory()
+        child = job_factory()
+        child.parent_job = parent
+        handler = SubTaskHandler(job=child, id="child-1")
+
+        handler.complete(result="done")
+
+        assert handler.is_completed is True
+        assert handler.state == SubTaskState.COMPLETED
+        assert handler.result == "done"
+        assert handler.error is None
+        assert parent.find_sub_task_handler(id="child-1") is handler
+
+    def test_complete_success_without_result(self, job_factory):
+        """A no-result completion is a successful completed subtask."""
+        handler = SubTaskHandler(job=job_factory(), id="child-1")
+
+        handler.complete()
+
+        assert handler.is_completed is True
+        assert handler.state == SubTaskState.COMPLETED
+        assert handler.result is None
+        assert str(handler) == ""
+
+    def test_complete_error_stores_task_error_and_notifies_parent(self, job_factory):
+        """Errored completion stores TaskError and still notifies the parent."""
+        parent = job_factory()
+        child = job_factory()
+        child.parent_job = parent
+        handler = SubTaskHandler(job=child, id="child-1")
+
+        handler.complete(error="failed")
+
+        assert handler.is_completed is True
+        assert handler.state == SubTaskState.ERROR
+        assert handler.error.err_message == "failed"
+        assert handler.result is None
+        assert parent.find_sub_task_handler(id="child-1") is handler
+
+    def test_complete_rejects_double_completion(self, job_factory):
+        """Handlers cannot be completed twice."""
+        handler = SubTaskHandler(job=job_factory(), id="child-1")
+        handler.complete(result="done")
+
+        with pytest.raises(RuntimeError, match="already completed"):
+            handler.complete(result="again")
+
+        assert handler.result == "done"
+
+    def test_complete_rejects_mixed_result_and_error(self, job_factory):
+        """Completion cannot mix a result with an error outcome."""
+        handler = SubTaskHandler(job=job_factory(), id="child-1")
+
+        with pytest.raises(ValueError, match="result and error"):
+            handler.complete(result="done", error="failed")
+
+        assert handler.is_completed is False
+
+
+class TestCompleteSubTask:
+    """Tests for the child-job completion convenience helper."""
+
+    def test_forwards_to_current_job_subtask_handler(self, job_factory):
+        """complete_sub_task locates sub_task_handler in current job locals."""
+        parent = job_factory()
+        child = job_factory()
+        child.parent_job = parent
+        handler = create_sub_task(child, id="child-1")
+
+        _run_with_current_job(child, lambda: complete_sub_task(result="done"))
+
+        assert handler.is_completed is True
+        assert handler.result == "done"
+        assert parent.find_sub_task_handler(id="child-1") is handler
+
+    def test_requires_current_job(self, job_factory):
+        """complete_sub_task requires Statek job execution context."""
+        create_sub_task(job_factory(), id="child-1")
+
+        with pytest.raises(RuntimeError, match="current job"):
+            complete_sub_task(result="done")
+
+    def test_requires_subtask_handler_local(self, job_factory):
+        """complete_sub_task fails clearly when no handler is in locals."""
+        child = job_factory()
+
+        with pytest.raises(RuntimeError, match="sub_task_handler"):
+            _run_with_current_job(child, lambda: complete_sub_task(result="done"))
 
 
 class TestCreateSubTask:

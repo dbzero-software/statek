@@ -14,6 +14,7 @@ from .locale import StatekLocale
 from .pyenv import PyEnv
 from .settings import get_provider_settings as _get_provider_settings
 from .settings import get_statek_settings as _get_statek_settings
+from .utils import get_current_job
 
 
 def get_provider_settings(provider=None):
@@ -133,6 +134,36 @@ class SubTaskHandler:
             return f"[Error] sub-task{task_id} failed with {self.__error.err_message}"
         return f"[Notification] sub-task{task_id} completed successfully."
 
+    def complete(self, result: Optional[Any] = None, error: Optional[str] = None) -> None:
+        """Record the subtask outcome and notify the parent job when present."""
+        if self.__is_completed:
+            raise RuntimeError("Sub-task handler is already completed")
+        if result is not None and error is not None:
+            raise ValueError("Sub-task completion cannot mix result and error")
+
+        self.__result = result
+        self.__error = TaskError(error) if error is not None else None
+        self.__is_completed = True
+
+        parent_job = self.job.parent_job
+        if parent_job is not None:
+            parent_job.push_notification(self)
+
+
+def complete_sub_task(result: Optional[Any] = None, error: Optional[str] = None) -> None:
+    """Complete the subtask handler registered in the current child job locals."""
+    job = get_current_job()
+    if job is None:
+        raise RuntimeError("complete_sub_task requires a current job")
+
+    handler = job.py_env.local_state.get("sub_task_handler")
+    if handler is None:
+        raise RuntimeError("complete_sub_task requires sub_task_handler in current job locals")
+    if not isinstance(handler, SubTaskHandler):
+        raise TypeError("sub_task_handler must be a SubTaskHandler")
+
+    handler.complete(result=result, error=error)
+
 
 def create_sub_task(
     job: Job,
@@ -143,6 +174,49 @@ def create_sub_task(
     handler = handler_type(job=job, **kwargs)
     job.add_locals(sub_task_handler=handler)
     return handler
+
+
+def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    agent: Agent,
+    shared_vars: Optional[Dict[str, Any]] = None,
+    parent_job: Optional[Job] = None,
+    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    locale=None,
+    caller_frame=None,
+    **kwargs,
+) -> Job:
+    """Create a ready job with shared locals, inherited locale, and error handlers."""
+    shared_vars = shared_vars or {}
+    effective_locale = _resolve_child_locale(parent_job, locale)
+    job_def = agent.create_job_def(
+        warmup_code=warmup_code,
+        shared_vars=shared_vars,
+        locale=effective_locale,
+        **kwargs,
+    )
+
+    env = PyEnv()
+    if warmup_code and caller_frame is None:
+        caller_frame = inspect.currentframe().f_back
+    if warmup_code and caller_frame is not None:
+        caller_locals = caller_frame.f_locals
+        if isinstance(warmup_code, str):
+            copy_locals(warmup_code, env.local_state, caller_locals)
+        else:
+            for block in warmup_code:
+                copy_locals(block, env.local_state, caller_locals)
+
+    env.local_state.update(shared_vars)
+
+    job = Job(
+        job_def=job_def,
+        job_status=JobStatus.READY,
+        py_env=env,
+        parent_job=parent_job,
+    )
+    if parent_job is not None:
+        job.add_error_handlers_from(parent_job)
+    return job
 
 
 @db0.memo
@@ -180,36 +254,17 @@ def create_future_task(  # pylint: disable=too-many-arguments,too-many-positiona
     Callers may pass ``caller_frame`` when warmup code should copy referenced
     locals from a specific stack frame, as delegate helpers do.
     """
-    effective_locale = _resolve_child_locale(parent_job, locale)
-    job_def = agent.create_job_def(
-        warmup_code=warmup_code,
-        shared_vars=shared_vars,
-        locale=effective_locale,
-        **kwargs,
-    )
-
-    env = PyEnv()
     if warmup_code and caller_frame is None:
         caller_frame = inspect.currentframe().f_back
-    if warmup_code and caller_frame is not None:
-        caller_locals = caller_frame.f_locals
-        if isinstance(warmup_code, str):
-            copy_locals(warmup_code, env.local_state, caller_locals)
-        else:
-            for block in warmup_code:
-                copy_locals(block, env.local_state, caller_locals)
-
-    env.local_state.update(shared_vars)
-
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,
-        py_env=env,
+    job = create_new_job(
+        agent,
+        shared_vars=shared_vars,
         parent_job=parent_job,
+        warmup_code=warmup_code,
+        locale=locale,
+        caller_frame=caller_frame,
+        **kwargs,
     )
-    if parent_job is not None:
-        job.add_error_handlers_from(parent_job)
-
     return TaskFutureResult(job, deps=None, state_num=0)
 
 
@@ -379,15 +434,15 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
         The newly created Job instance.
     """
     caller_frame = inspect.currentframe().f_back if warmup_code else None
-    job = create_future_task(
+    job = create_new_job(
         agent,
-        shared_vars or {},
-        parent_job,
+        shared_vars=shared_vars,
+        parent_job=parent_job,
         warmup_code=warmup_code,
         locale=locale,
         caller_frame=caller_frame,
         **kwargs,
-    ).job
+    )
     job.push_user_message(message)
 
     return job
@@ -415,20 +470,11 @@ def submit_new_job(
     Returns:
         The newly created :class:`Job` instance.
     """
-    job_def = agent.create_job_def(
+    return create_new_job(
+        agent,
         shared_vars=shared_vars,
         locale=locale,
         **kwargs,
-    )
-
-    env = PyEnv()
-    if shared_vars:
-        env.local_state.update(shared_vars)
-
-    return Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,
-        py_env=env,
     )
 
 
