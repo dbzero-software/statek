@@ -78,6 +78,8 @@ class StatekSettings(BaseSettings):
     statek_rpc_port: Optional[int] = None
     """Default task difficulty used when neither example nor job metadata specifies one."""
     statek_default_difficulty: str = "M"
+    """Directory containing model pricing files (.csv/.txt); scanned recursively on init."""
+    statek_model_info_dir: Optional[str] = None
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -105,6 +107,9 @@ class StatekSettings(BaseSettings):
 
         if self.documents_dir is None:
             self.documents_dir = os.environ.get('STATEK_DOCUMENTS_DIR')
+
+        if self.statek_model_info_dir is None:
+            self.statek_model_info_dir = os.environ.get('STATEK_MODEL_INFO_DIR')
 
         # Parse STATEK_ prefixed env vars for harness settings
         for attr, env_var, conv in [

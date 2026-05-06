@@ -1,5 +1,7 @@
 """statek package."""
 
+from typing import Optional
+
 from .settings import LLM_API_Settings, StatekSettings
 from .prompt_config import PromptDef, update_prompt_config
 from .llm_api import (
@@ -16,7 +18,21 @@ from . import task
 
 __version__ = "0.1.0"
 
+
+def init(settings: Optional[StatekSettings] = None) -> None:
+    """Initialize statek before first use.
+
+    Loads model pricing from statek_model_info_dir when configured.
+    """
+    if settings is None:
+        settings = StatekSettings()
+    if settings.statek_model_info_dir:
+        from .model_pricing import init_model_pricing  # pylint: disable=import-outside-toplevel
+        init_model_pricing(settings.statek_model_info_dir)
+
+
 __all__ = [
+    "init",
     "LLM_API_Settings",
     "StatekSettings",
     "PromptDef",

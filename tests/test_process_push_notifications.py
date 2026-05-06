@@ -63,6 +63,24 @@ class TestProcessPushNotifications:
         assert job.py_env.push_log[0] == "hello-from-object"
         assert job.contains_ext_ref(message) is True
 
+    def test_processes_non_string_notification_via_job_message_adapter(
+        self, db0_fixture
+    ):
+        job = _make_started_job()
+        job.job_def.agent.context["message_adapter"] = (
+            lambda message: f"adapted-{message.text}"
+        )
+        job_uuid = db0.uuid(job)
+        queue = StatekPushQueue()
+        message = _QueuedMessage("object")
+        queue.push_to_job_console(job_uuid=job_uuid, message=message)
+
+        process_push_notifications()
+
+        assert job.py_env.push_log is not None
+        assert job.py_env.push_log[0] == "adapted-object"
+        assert job.contains_ext_ref(message) is True
+
     def test_string_notification_is_not_registered_as_ext_ref(self, db0_fixture):
         job = _make_started_job()
         job_uuid = db0.uuid(job)

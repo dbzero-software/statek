@@ -1,14 +1,33 @@
 from dataclasses import dataclass
 from datetime import datetime
+from collections import namedtuple
 import json
 import re
 import traceback as _traceback_module
-from typing import Callable, List, Optional, Iterable, Dict, Any, Sequence, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    List,
+    Optional,
+    Iterable,
+    Dict,
+    Any,
+    Sequence,
+    Type,
+    Union,
+)
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
-from statek.executors.chat_log_item import ChatLogItem, LLM_LogItem, ToolError, WarmupLogItem, UserLogItem
 from statek.executors.llm_usage import LLM_Usage
+from statek.executors.chat_log_item import (
+    ChatLogItem,
+    LLM_LogItem,
+    ReminderLogItem,
+    ToolError,
+    WarmupLogItem,
+    UserLogItem,
+)
 from statek.llm_api import LLM_API, LLM_Response
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
@@ -25,6 +44,11 @@ from statek.task_difficulty import (
     max_task_difficulty,
     parse_task_difficulty,
 )
+
+if TYPE_CHECKING:
+    from statek.agents.dialog_agent import Reminder
+
+DialogItem = namedtuple("DialogItem", ["role", "message"])
 
 """
 READY: a fresh job instance ready for execution
@@ -784,8 +808,9 @@ class Job:
              ``warmup_block_num`` order.
           3. The same alternating pattern for LLM turns: ASSISTANT (LLM
              response) + USER/TOOL (console / tool result), woven together
-             with any USER messages from ``UserLogItem`` entries and from
-             ``py_env.push_log`` keyed by console position.
+             with any USER messages from ``UserLogItem`` entries, SYSTEM
+             reminder messages, and USER messages from ``py_env.push_log``
+             keyed by console position.
 
         ``CodeBlock`` responses with ``tool_calls`` produce an ASSISTANT item
         with ``tool_calls`` set, followed by one TOOL item per call carrying
@@ -840,7 +865,7 @@ class Job:
                 continue
             next_pos = console_len
             for j in range(i + 1, len(items)):
-                if isinstance(items[j], (WarmupLogItem, LLM_LogItem)):
+                if isinstance(items[j], (WarmupLogItem, LLM_LogItem, ReminderLogItem)):
                     next_pos = items[j].console_pos
                     break
             end_positions[i] = next_pos
@@ -868,6 +893,15 @@ class Job:
                         role=ChatRole.USER,
                         content=self._with_language_hint(item.message),
                         content_src=ContentSource.USER,
+                    )
+                continue
+
+            if isinstance(item, ReminderLogItem):
+                if item.reminder.text:
+                    yield ChatHistoryItem(
+                        role=ChatRole.SYSTEM,
+                        content=item.reminder.text,
+                        content_src=ContentSource.SYSTEM,
                     )
                 continue
 
@@ -1205,6 +1239,22 @@ class Job:
         log_resp = f"```python\n{resp_code}\n```" if is_md_style else resp_code
         self._log(log_resp)
 
+    def handle_reminder(self, reminder: "Reminder") -> bool:
+        """Process a reminder if its conditions are currently met.
+
+        Reminder implementations own their activation conditions.
+        """
+        if not reminder.fire_ready(self):
+            return False
+
+        console_pos = len(self.py_env.console) if self.py_env.console else 0
+        self.chat_log.append(ReminderLogItem(
+            console_pos=console_pos,
+            reminder=reminder,
+        ))
+        self.py_env.console_append(reminder.text)
+        return True
+
     @property
     def last_response(self) -> Union[str, CodeBlock, None]:
         """
@@ -1267,6 +1317,11 @@ class Job:
                 if body is not None:
                     yield body
 
+    @staticmethod
+    def _dialog_from_code_block(resp: CodeBlock) -> Optional[str]:
+        """Extract dialog from a raw MD_DIALOG response stored as a CodeBlock."""
+        return extract_dialog(resp.code or "")
+
     def get_chat_responses(self) -> Iterable[str]:
         """Yield user-facing chat responses from the chat log, oldest first."""
         console_len = len(self.py_env.console) if self.py_env.console else 0
@@ -1290,6 +1345,54 @@ class Job:
                 item.console_pos,
                 end_positions[idx],
             )
+
+    def get_dialog(self) -> Iterable[DialogItem]:
+        """Yield user/assistant dialog messages in chronological order."""
+        console_len = len(self.py_env.console) if self.py_env.console else 0
+        turn_items = [
+            item for item in self.chat_log
+            if isinstance(item, (WarmupLogItem, LLM_LogItem))
+        ]
+        end_positions = {
+            id(item): (
+                turn_items[idx + 1].console_pos
+                if idx + 1 < len(turn_items) else console_len
+            )
+            for idx, item in enumerate(turn_items)
+        }
+
+        for item in self.chat_log:
+            if isinstance(item, str):
+                if item:
+                    yield DialogItem("user", item)
+                continue
+
+            if isinstance(item, UserLogItem):
+                if item.message:
+                    yield DialogItem("user", item.message)
+                continue
+
+            if not isinstance(item, (WarmupLogItem, LLM_LogItem)):
+                continue
+
+            if isinstance(item, LLM_LogItem) and self._is_user_facing_llm_response(item):
+                resp = item.llm_resp
+                if isinstance(resp, str):
+                    yield DialogItem("assistant", resp)
+            elif (
+                isinstance(item, LLM_LogItem)
+                and self.job_def.chat_style == ChatStyle.MD_DIALOG  # pylint: disable=no-member
+                and isinstance(item.llm_resp, CodeBlock)
+            ):
+                dialog = self._dialog_from_code_block(item.llm_resp)
+                if dialog:
+                    yield DialogItem("assistant", dialog)
+
+            for body in self._iter_chat_response_tool_logs(
+                item.console_pos,
+                end_positions[id(item)],
+            ):
+                yield DialogItem("assistant", body)
 
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
         """Return user-message timestamps paired with time-to-first user reply.
@@ -1616,7 +1719,17 @@ class Job:
         """Calculates approximate token usage based on total bytes sent and received."""
         return (self.usage.total_bytes_sent + self.usage.total_bytes_received) // 4
 
-    def push_user_message(self, message: str) -> bool:
+    def _resolve_user_message(self, message: Any) -> str:
+        """Resolve a pushed message object to the string stored in job logs."""
+        if isinstance(message, str):
+            return message
+        agent = self.job_def.agent if self.job_def is not None else None
+        adapter = agent.get_adapter("message_adapter") if agent is not None else None
+        if adapter is not None:
+            return str(adapter(message))
+        return str(message)
+
+    def push_user_message(self, message: Any) -> bool:
         """Append a user message and re-activate the job if DONE.
 
         Intended for processing push notifications (e.g. a user writing a
@@ -1634,11 +1747,15 @@ class Job:
         LLM response is now awaited.
 
         Args:
-            message: The message to push.
+            message: The message to push. Non-string values are converted with
+                the agent's ``message_adapter`` when registered, otherwise with
+                ``str(message)``.
 
         Returns:
             True if the job was transitioned DONE → STARTED, False otherwise.
         """
+        message = self._resolve_user_message(message)
+
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             if not self.chat_log:
                 self.chat_log.append(message)

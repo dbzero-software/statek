@@ -11,6 +11,7 @@ import dbzero as db0
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.agents.dialog_agent import DialogAgent
+from statek.executors.chat_log_item import ReminderLogItem
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.utils import handle_dialog, run_job_step
 from statek.future import FutureResult
@@ -829,7 +830,7 @@ class TestRunJobStepWarmupException:
 
         mock_response = MagicMock()
         mock_response.text = "exit('done')"
-        mock_response.stats = MagicMock(total_bytes_sent=0, total_bytes_received=0, cost=None)
+        mock_response.stats = LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None)
         mock_response.call_requests = None
 
         mock_api = MagicMock()
@@ -1100,8 +1101,8 @@ class TestRunJobStepCliToolCalls:
     """Tests for CLI (python_cli) tool call execution via exec_all_steps."""
 
     @pytest.mark.asyncio
-    async def test_cli_tool_output_stored_in_console(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli output lands in console AND in tool_log aligned with tool_calls."""
+    async def test_cli_tool_output_stored_only_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli output lands in tool_log, not in job console."""
         cs = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-hello")'})
         warmup_blocks = [CodeBlock(code='x = 1', tool_calls=[cs]), 'exit("ok")']
         agent = Agent(
@@ -1116,7 +1117,7 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        assert any("cli-hello" in line for line in job.py_env.console)
+        assert not any("cli-hello" in line for line in job.py_env.console or [])
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) == 1
@@ -1154,7 +1155,7 @@ class TestRunJobStepCliToolCalls:
         assert job.py_env.local_state.get('x') == 1
 
     @pytest.mark.asyncio
-    async def test_mixed_tool_results_regular_in_tool_log_cli_in_console(self, db0_fixture):  # pylint: disable=unused-argument
+    async def test_mixed_tool_results_regular_and_cli_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
         """tool_log entries align with the full tool_calls order — regular + CLI."""
         cs_regular = CallSpec(id="R-001", func_name="my_tool", args=[], kwargs={})
         cs_cli = CallSpec(id="C-001", func_name="python_cli", kwargs={"code": 'print("cli-out")'})
@@ -1180,12 +1181,11 @@ class TestRunJobStepCliToolCalls:
         assert len(tool_log) == 2
         assert 'regular_out' in tool_log[0]
         assert tool_log[1] == "cli-out"
-        # CLI output still lands in console (advances console_pos between turns).
-        assert any("cli-out" in line for line in job.py_env.console)
+        assert not any("cli-out" in line for line in job.py_env.console or [])
 
     @pytest.mark.asyncio
-    async def test_cli_error_output_stored_in_console(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli error output lands in both console and tool_log."""
+    async def test_cli_error_output_stored_only_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli error output lands in tool_log, not in job console."""
         cs = CallSpec(id="C-001", func_name="python_cli",
                       kwargs={"code": '1 / 0'})
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
@@ -1201,7 +1201,7 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        assert any("ZeroDivisionError" in line for line in job.py_env.console)
+        assert not any("ZeroDivisionError" in line for line in job.py_env.console or [])
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) >= 1
@@ -1305,6 +1305,51 @@ class TestRunJobStepMdDialog:
         assert result is True
         assert job.status == JobStatus.DONE
         mock_handle.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_md_dialog_text_only_response_with_reminder_continues(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A handled reminder prevents MD_DIALOG text-only auto-exit."""
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        agent = DialogAgent(
+            send_message=_record_dialog_message,
+            _metadata={"MODEL": "test-model"},
+        )
+        reminder = agent.set_new_reminder("Use report_outcome.")
+        job = Job(
+            job_def=agent.create_job_def(chat_style=ChatStyle.MD_DIALOG),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+
+        mock_response = LLM_Response(
+            text="Hello, how can I help?",
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog",
+                   new_callable=AsyncMock) as mock_handle:
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        mock_handle.assert_called_once()
+        assert isinstance(job.chat_log[-1], ReminderLogItem)
+        assert job.chat_log[-1].reminder is reminder
+        assert job.py_env.console[-1] == "Use report_outcome."
 
     @pytest.mark.asyncio
     async def test_md_dialog_code_response_executes_and_continues(
@@ -1528,6 +1573,50 @@ class TestRunJobStepDirect:
         mock_handle.assert_called_once()
         console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
         assert "Error: no code submitted." not in console_text
+
+    @pytest.mark.asyncio
+    async def test_direct_text_only_response_with_reminder_continues(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A handled reminder prevents DIRECT text-only auto-exit."""
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        agent = DialogAgent(
+            send_message=_record_dialog_message,
+            _metadata={"MODEL": "test-model"},
+        )
+        reminder = agent.set_new_reminder("Use report_outcome.")
+        job = Job(
+            job_def=agent.create_job_def(chat_style=ChatStyle.DIRECT),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+
+        mock_response = LLM_Response(
+            text="Dzisiejsza data to 3 kwietnia 2026 roku.",
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog",
+                   new_callable=AsyncMock):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        assert isinstance(job.chat_log[-1], ReminderLogItem)
+        assert job.chat_log[-1].reminder is reminder
+        assert job.py_env.console[-1] == "Use report_outcome."
 
 
 class TestHandleDialogMarkdownMedia:

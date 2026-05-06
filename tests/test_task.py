@@ -1,16 +1,18 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable
 import builtins
 from unittest.mock import Mock, patch
+import dbzero as db0
 import pytest
 
 from statek.task import (
-    copy_locals, delegate_task, delegate_mute_dialog, delegate_mute_task,
-    start_dialog, submit_new_job, submit_new_jobs_batch,
+    TaskFutureResult, copy_locals, create_future_task, delegate_task,
+    delegate_mute_dialog, delegate_mute_task, start_dialog, submit_new_job,
+    submit_new_jobs_batch,
 )
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import UserLogItem
-from statek.agents.dialog_agent import DialogAgent
+from statek.agents.dialog_agent import DialogAgent, RecursiveReminder
 from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
@@ -416,6 +418,118 @@ class TestDelegateTask:
         assert child_result.job.job_def.locale is parent_locale
 
 
+class TestCreateFutureTask:
+    """Tests for create_future_task utility."""
+
+    def test_creates_raw_future_with_shared_vars(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task creates a ready child job and returns its future."""
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42, "label": "test"},
+            parent_job=None,
+        )
+
+        assert isinstance(result, TaskFutureResult)
+        assert result.job.status == JobStatus.READY
+        assert result.job.job_def.agent is supervised_agent
+        assert result.job.job_def.job_params["shared_vars"] == ["alpha", "label"]
+        assert result.job.py_env.local_state["alpha"] == 42
+        assert result.job.py_env.local_state["label"] == "test"
+        assert result.job.parent_job is None
+
+    def test_inherits_parent_locale_and_error_handlers(
+        self, db0_fixture, supervised_agent
+    ):
+        """Parent locale and error handlers are propagated to the child job."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        parent = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=None,
+        ).job
+        parent.job_def.locale = locale
+        parent.add_error_handler(_noop_error_handler, "ctx")
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=parent,
+        )
+
+        assert result.job.job_def.locale is locale
+        assert result.job.parent_job is parent
+        assert len(result.job.error_handlers) == 1
+        assert result.job.error_handlers[0].error_handler is _noop_error_handler
+
+    def test_explicit_locale_overrides_parent_locale(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task can override the inherited parent locale."""
+        parent_locale = StatekLocale(
+            lang_code=StatekLangCode.PL,
+            country_code=StatekCountryCode.PL,
+        )
+        child_locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.GB,
+        )
+        parent = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=None,
+            locale=parent_locale,
+        ).job
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={},
+            parent_job=parent,
+            locale=child_locale,
+        )
+
+        assert result.job.job_def.locale is child_locale
+
+    def test_warmup_code_copies_referenced_locals(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task supports warmup code with caller locals."""
+        x = 10
+        unused_var = 999
+
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            parent_job=None,
+            warmup_code="result = x + alpha",
+        )
+
+        assert result.job.job_def.warmup_code == "result = x + alpha"
+        assert result.job.py_env.local_state["x"] == 10
+        assert result.job.py_env.local_state["alpha"] == 42
+        assert "unused_var" not in result.job.py_env.local_state
+
+    def test_kwargs_forwarded_as_job_params(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_future_task forwards extra kwargs to create_job_def."""
+        result = create_future_task(
+            supervised_agent,
+            shared_vars={"alpha": 42},
+            parent_job=None,
+            data_type="orders",
+            user="Alice",
+        )
+
+        assert result.job.job_def.job_params["data_type"] == "orders"
+        assert result.job.job_def.job_params["user"] == "Alice"
+        assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
+
+
 class TestDelegateMuteTask:
     """Tests for delegate_mute_task and get_mute_job_result."""
 
@@ -506,6 +620,17 @@ class TestDelegateMuteDialog:
         assert result.job.chat_log[0] == "hello"
         assert result.job.status == JobStatus.READY
 
+    def test_non_string_initial_message_uses_message_adapter(
+        self, db0_fixture, mock_settings
+    ):
+        """delegate_mute_dialog forwards non-string messages to start_dialog."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        agent.context["message_adapter"] = lambda msg: f"adapted-{msg.value}"
+
+        result = delegate_mute_dialog(agent, message=MessageForAdapter("object"))
+
+        assert result.job.chat_log[0] == "adapted-object"
+
     def test_result_returns_chat_responses_on_success(self, db0_fixture, mock_settings):
         """On completion, delegate_mute_dialog resolves to user-facing chat responses."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
@@ -580,6 +705,16 @@ def _make_send_message(body: str, media=None):
     return f"sent: {body}"
 
 
+class MessageForAdapter:
+    """Message object used by dialog startup adapter tests."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return f"fallback-{self.value}"
+
+
 class TestStartDialog:
     """Tests for start_dialog function."""
 
@@ -627,6 +762,27 @@ class TestStartDialog:
             and "hello world" in str(job.py_env.push_log)
         )
         assert has_msg
+
+    def test_non_string_initial_message_uses_message_adapter(
+        self, db0_fixture, mock_settings
+    ):
+        """Non-string initial messages are adapted through push_user_message."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        agent.context["message_adapter"] = lambda msg: f"adapted-{msg.value}"
+
+        job = start_dialog(agent, message=MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "adapted-object"
+
+    def test_non_string_initial_message_falls_back_to_str(
+        self, db0_fixture, mock_settings
+    ):
+        """Non-string initial messages fall back to str(message)."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        job = start_dialog(agent, message=MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "fallback-object"
 
     def test_kwargs_passed_as_job_params(self, db0_fixture, mock_settings):
         """Extra kwargs become job_params on the JobDef."""
@@ -791,6 +947,76 @@ class TestDialogAgentAddAnswerTool:
 
         assert _recorded_send_calls == [("final", "img.png")]
         assert exit_calls == ["Success"]
+
+
+class TestDialogAgentReminder:
+    """Tests for DialogAgent reminder configuration."""
+
+    def test_reminder_defaults_to_none(self, db0_fixture):
+        """DialogAgent has no reminder until one is configured."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        assert agent.reminder is None
+
+    def test_set_new_reminder_creates_recursive_reminder_by_default(self, db0_fixture):
+        """set_new_reminder stores a recursive reminder by default."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        reminder = agent.set_new_reminder("Use report_outcome.")
+
+        assert isinstance(reminder, RecursiveReminder)
+        assert reminder.text == "Use report_outcome."
+        assert agent.reminder is reminder
+
+    def test_set_new_reminder_passes_recursive_reminder_kwargs(self, db0_fixture):
+        """set_new_reminder forwards implementation-specific reminder properties."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        reminder = agent.set_new_reminder("Use report_outcome.", min_dialog_len=3)
+
+        assert isinstance(reminder, RecursiveReminder)
+        assert reminder.min_dialog_len == 3
+        assert agent.reminder is reminder
+
+    def test_set_new_reminder_rejects_base_reminder_type(self, db0_fixture):
+        """set_new_reminder does not instantiate the base reminder type."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        with pytest.raises(ValueError, match="Unsupported reminder type"):
+            agent.set_new_reminder("Follow up.", type="REMINDER")
+
+    def test_set_new_reminder_rejects_unknown_type(self, db0_fixture):
+        """Unknown reminder types fail explicitly."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        with pytest.raises(ValueError, match="Unsupported reminder type"):
+            agent.set_new_reminder("Follow up.", type="UNKNOWN")
+
+    def test_set_reminder_accepts_same_prefix_reminder(self, db0_fixture):
+        """set_reminder stores a preconfigured reminder on the same prefix."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        reminder = RecursiveReminder(text="Use report_outcome.", min_dialog_len=3)
+
+        stored = agent.set_reminder(reminder)
+
+        assert stored is reminder
+        assert agent.reminder is reminder
+
+    def test_set_reminder_rejects_non_reminder(self, db0_fixture):
+        """set_reminder only accepts Reminder-derived instances."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        with pytest.raises(TypeError, match="reminder must be a Reminder"):
+            agent.set_reminder("Use report_outcome.")
+
+    def test_set_reminder_rejects_different_prefix_reminder(self, db0_fixture):
+        """set_reminder rejects reminders stored outside the agent prefix."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+        db0.open("other_prefix", "rw")
+        reminder = RecursiveReminder(text="Use report_outcome.")
+
+        with pytest.raises(ValueError, match="same db0 prefix"):
+            agent.set_reminder(reminder)
 
 
 class TestDialogAgentCreateJobDefChatStyle:

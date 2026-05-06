@@ -6,7 +6,7 @@ import dbzero as db0
 from .exceptions import FutureError
 from .future import FutureResult, temporal
 from .system import tool
-from .agents.agent import SupervisedAgent
+from .agents.agent import Agent, SupervisedAgent
 from .agents.dialog_agent import DialogAgent
 from .executors.job import Job, JobStatus
 from .locale import StatekLocale
@@ -84,15 +84,20 @@ def is_job_completed(task_future: TaskFutureResult) -> bool:
     return task_future.job.status == JobStatus.DONE
 
 
-def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-    agent: SupervisedAgent,
-    warmup_code: Optional[Union[str, Sequence[str]]],
+def create_future_task(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    agent: Agent,
+    shared_vars: dict,
     parent_job: Optional[Job],
-    shared_vars: Optional[Dict[str, Any]],
-    locale,
-    caller_frame,
+    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    locale=None,
+    caller_frame=None,
     **kwargs,
 ) -> TaskFutureResult:
+    """Create a child job future for temporal utilities.
+
+    Callers may pass ``caller_frame`` when warmup code should copy referenced
+    locals from a specific stack frame, as delegate helpers do.
+    """
     effective_locale = _resolve_child_locale(parent_job, locale)
     job_def = agent.create_job_def(
         warmup_code=warmup_code,
@@ -102,6 +107,8 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
     )
 
     env = PyEnv()
+    if warmup_code and caller_frame is None:
+        caller_frame = inspect.currentframe().f_back
     if warmup_code and caller_frame is not None:
         caller_locals = caller_frame.f_locals
         if isinstance(warmup_code, str):
@@ -110,8 +117,7 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
             for block in warmup_code:
                 copy_locals(block, env.local_state, caller_locals)
 
-    if shared_vars:
-        env.local_state.update(shared_vars)
+    env.local_state.update(shared_vars)
 
     job = Job(
         job_def=job_def,
@@ -119,7 +125,6 @@ def _create_task_job(  # pylint: disable=too-many-arguments,too-many-positional-
         py_env=env,
         parent_job=parent_job,
     )
-
     if parent_job is not None:
         job.add_error_handlers_from(parent_job)
 
@@ -157,8 +162,15 @@ def delegate_task(agent: SupervisedAgent,
     """
     # Skip @tool and @temporal decorator frames to reach the actual caller
     caller_frame = inspect.currentframe().f_back.f_back.f_back if warmup_code else None
-    return _create_task_job(
-        agent, warmup_code, parent_job, shared_vars, locale, caller_frame, **kwargs)
+    return create_future_task(
+        agent,
+        shared_vars or {},
+        parent_job,
+        warmup_code=warmup_code,
+        locale=locale,
+        caller_frame=caller_frame,
+        **kwargs,
+    )
 
 
 def get_mute_job_result(future: TaskFutureResult) -> str:
@@ -201,15 +213,22 @@ def delegate_mute_task(agent: SupervisedAgent,
     """
     # Skip @tool and @temporal decorator frames to reach the actual caller
     caller_frame = inspect.currentframe().f_back.f_back.f_back if warmup_code else None
-    return _create_task_job(
-        agent, warmup_code, parent_job, shared_vars, locale, caller_frame, **kwargs)
+    return create_future_task(
+        agent,
+        shared_vars or {},
+        parent_job,
+        warmup_code=warmup_code,
+        locale=locale,
+        caller_frame=caller_frame,
+        **kwargs,
+    )
 
 
 @temporal(complement=get_mute_job_result, condition=is_job_completed)
 @tool
 def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     agent: DialogAgent,
-    message: str,
+    message: Any,
     parent_job: Optional[Job] = None,
     shared_vars: Optional[Dict[str, Any]] = None,
     locale: Optional[StatekLocale] = None,
@@ -224,7 +243,9 @@ def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positio
 
     Args:
         agent: The dialog agent to delegate the dialog to.
-        message: The initial user message.
+        message: The initial user message. Non-string values are converted by
+            the dialog agent's ``message_adapter`` when registered, otherwise
+            by ``str(message)``.
         parent_job: Optional parent job — when provided, the child job
                     inherits the parent's error handlers.
         shared_vars: Optional ``{var_name: value}`` mapping of variables to
@@ -246,7 +267,7 @@ def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positio
 
 def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     agent: DialogAgent,
-    message: str,
+    message: Any,
     warmup_code: Optional[Union[str, Sequence[str]]] = None,
     parent_job: Optional[Job] = None,
     shared_vars: Optional[Dict[str, Any]] = None,
@@ -257,7 +278,9 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
 
     Args:
         agent: The DialogAgent to delegate the dialog to.
-        message: The initial user message.
+        message: The initial user message. Non-string values are converted by
+            the dialog agent's ``message_adapter`` when registered, otherwise
+            by ``str(message)``.
         warmup_code: Optional Python code (single or multiple blocks) to be
                      executed prior to task start.  When provided, all
                      referenced locals of the caller are copied into the
@@ -273,37 +296,16 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
     Returns:
         The newly created Job instance.
     """
-    effective_locale = _resolve_child_locale(parent_job, locale)
-    job_def = agent.create_job_def(
+    caller_frame = inspect.currentframe().f_back if warmup_code else None
+    job = create_future_task(
+        agent,
+        shared_vars or {},
+        parent_job,
         warmup_code=warmup_code,
-        shared_vars=shared_vars,
-        locale=effective_locale,
+        locale=locale,
+        caller_frame=caller_frame,
         **kwargs,
-    )
-
-    env = PyEnv()
-    if warmup_code:
-        caller_frame = inspect.currentframe().f_back
-        caller_locals = caller_frame.f_locals
-        if isinstance(warmup_code, str):
-            copy_locals(warmup_code, env.local_state, caller_locals)
-        else:
-            for block in warmup_code:
-                copy_locals(block, env.local_state, caller_locals)
-
-    if shared_vars:
-        env.local_state.update(shared_vars)
-
-    job = Job(
-        job_def=job_def,
-        job_status=JobStatus.READY,
-        py_env=env,
-        parent_job=parent_job,
-    )
-
-    if parent_job is not None:
-        job.add_error_handlers_from(parent_job)
-
+    ).job
     job.push_user_message(message)
 
     return job

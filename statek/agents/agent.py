@@ -299,6 +299,15 @@ class Agent:
             self.init_context()
         return self._X__context
 
+    def get_adapter(self, name: str) -> Optional[Any]:
+        """Return an adapter from the volatile context by name."""
+        context = self.context or {}
+        for adapter_name in (name, f"_{name}", f"__{name}"):
+            adapter = context.get(adapter_name)
+            if adapter is not None:
+                return adapter
+        return None
+
     @property
     def all_tools(self) -> List[Callable]:
         """Return all tools assigned to this agent (both regular and internal)."""

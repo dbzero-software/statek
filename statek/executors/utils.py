@@ -899,11 +899,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Non-warmup exception: already printed to console by exec_step
             pass
         finally:
-            # Push CLI output to job console (batched at end of step) and
-            # write each CLI call's joined output into its pre-allocated
-            # tool_log slot.  Must run even on exception so the console
-            # position advances between LLM turns, preventing console_pos
-            # collisions.
+            # Write each CLI call's joined output into its pre-allocated
+            # tool_log slot.  python_cli output is intentionally not copied
+            # into job.py_env.console; tool_log is its single persisted home.
             cli_calls = code_block.get_cli_tool_calls()
             if cli_calls:
                 cli_tool_log_positions = [
@@ -912,8 +910,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 ]
                 for cli_idx in range(len(cli_calls)):
                     joined = "\n".join(cli_outputs.get(cli_idx, []))
-                    if joined:
-                        job.py_env.console_append(joined)
                     if (last_chat_log_item is not None
                             and last_chat_log_item.tool_log is not None
                             and cli_idx < len(cli_tool_log_positions)):
@@ -1000,9 +996,15 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
             has_code = bool(response.call_requests)
         else:
-            has_code = (response.call_requests
-                        or not _is_empty_code(strip_markup(response.text, strict=True)))
+            has_code = (
+                response.call_requests
+                or not _is_empty_code(strip_markup(response.text, strict=True))
+            )
         if not has_code:
+            reminder = getattr(job.job_def.agent, "reminder", None)
+            if reminder is not None and job.handle_reminder(reminder):
+                harness.check_after_step(job)
+                return False
             custom_exit(job)
             job.set_status(JobStatus.DONE)
             _log_pending_console(job)
@@ -1047,7 +1049,7 @@ def process_push_notifications(step_size=100, max_count=500, prefix: Optional[Un
                     job = db0.fetch(job_uuid)
                     if not isinstance(message, str):
                         job.add_ext_ref(message)
-                    job.push_user_message(str(message))
+                    job.push_user_message(message)
                 except Exception:  # pylint: disable=broad-except
                     pass
                 processed += 1
@@ -1255,13 +1257,22 @@ def _make_start_jobs_func(agent, job_def, task_queue_size_func, provider):
             return
 
         statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='debug')
-
-        for _ in range(jobs_to_create):
-            Job(
-                job_def=job_def,
-                job_status=JobStatus.READY,
-                py_env=PyEnv(local_state={}),
-            )
+        import logging
+        print(f"Creating {jobs_to_create} new jobs for agent {agent.role}")
+        try:
+            for i in range(jobs_to_create):
+                print(f"Creating job {i+1}/{jobs_to_create} for agent {agent.role} with model {job_def.model}", flush=True)
+                Job(
+                    job_def=job_def,
+                    job_status=JobStatus.READY,
+                    py_env=PyEnv(local_state={}),
+                )
+        except Exception as e:
+            # If job creation fails, set the error on the job definition to trigger the circuit breaker
+            import logging
+            print(f"Error creating jobs for agent '{agent.role}': {e}")
+            statek_log(f"Error creating jobs for agent '{agent.role}': {e}", level='debug')
+            raise
 
     return start_jobs_func
 

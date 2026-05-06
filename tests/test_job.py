@@ -9,6 +9,7 @@ import dbzero as db0
 import pytest
 from tests.conftest import create_chat_log_item, set_warmup_positions
 from statek.executors.job import (
+    DialogItem,
     Job,
     JobDef,
     JobDefError,
@@ -18,8 +19,14 @@ from statek.executors.job import (
 )
 from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.model_name import ModelName, parse_model_name
-from statek.chat_history import ChatRole, ContentSource
-from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
+from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
+from statek.agents.dialog_agent import RecursiveReminder
+from statek.executors.chat_log_item import (
+    LLM_LogItem,
+    ReminderLogItem,
+    UserLogItem,
+    WarmupLogItem,
+)
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
@@ -38,6 +45,16 @@ class JobExtRefThing:
 
     def __init__(self, value):
         self.value = value
+
+
+class MessageForAdapter:
+    """Message object used by push_user_message adapter tests."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return f"fallback-{self.value}"
 
 
 class TestJobDefError:
@@ -1898,6 +1915,31 @@ class TestPushUserMessageDirect:
         assert isinstance(job.chat_log[1], UserLogItem)
         assert job.chat_log[1].message == "second"
 
+    def test_uses_agent_message_adapter_for_non_string_message(
+        self, job_factory
+    ):
+        """Non-string messages are resolved through the agent message_adapter."""
+        job = job_factory()
+        job.job_def.set_chat_style(
+            ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.job_def.agent.context["message_adapter"] = (
+            lambda msg: f"adapted-{msg.value}"
+        )
+
+        job.push_user_message(MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "adapted-object"
+
+    def test_falls_back_to_str_when_message_adapter_missing(self, job_factory):
+        """Non-string messages fall back to str(message)."""
+        job = job_factory()
+        job.job_def.set_chat_style(
+            ChatStyle.DIRECT)  # pylint: disable=no-member
+
+        job.push_user_message(MessageForAdapter("object"))
+
+        assert job.chat_log[0] == "fallback-object"
+
 
 class TestPushUserMessageNumCompletions:
     """Tests for num_completions tracking in push_user_message."""
@@ -1941,6 +1983,21 @@ class TestPushUserMessageNumCompletions:
         """push_user_message returns False when no transition occurs."""
         job = job_factory()
         assert job.push_user_message("hi") is False
+
+    def test_done_to_started_clears_exit_status_and_appends_pending_llm(
+        self, job_factory
+    ):
+        """DONE->STARTED clears exit_status and records an awaited LLM turn."""
+        job = job_factory()
+        job.py_env.exit_status = "done"
+        job.set_status(JobStatus.DONE)  # pylint: disable=no-member
+
+        assert job.push_user_message("hi") is True
+
+        assert job.status == JobStatus.STARTED  # pylint: disable=no-member
+        assert job.py_env.exit_status is None
+        assert isinstance(job.chat_log[-1], LLM_LogItem)
+        assert job.chat_log[-1].llm_resp is None
 
 
 class TestJobDefErrors:
@@ -2192,6 +2249,62 @@ class TestUserLogItem:
         assert item.message == ""
 
 
+class TestJobHandleReminder:
+    """Tests for Job.handle_reminder."""
+
+    def test_recursive_reminder_without_min_dialog_len_is_ready(self, job_factory):
+        """RecursiveReminder is ready by default."""
+        job = job_factory()
+        reminder = RecursiveReminder(text="Use report_outcome.")
+
+        assert reminder.fire_ready(job) is True
+
+    def test_recursive_reminder_waits_for_min_dialog_len(self, job_factory):
+        """min_dialog_len gates reminders on the dialog length."""
+        job = job_factory()
+        job.chat_log.append("initial user message")
+        reminder = RecursiveReminder(text="Use report_outcome.", min_dialog_len=2)
+
+        assert reminder.fire_ready(job) is False
+
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="print('internal')"),
+        ))
+
+        assert reminder.fire_ready(job) is False
+
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="response"))
+
+        assert reminder.fire_ready(job) is True
+
+    def test_recursive_reminder_is_processed(self, job_factory):
+        """RecursiveReminder appends console text and records a ReminderLogItem."""
+        job = job_factory()
+        job.py_env.console = ["existing"]
+        reminder = RecursiveReminder(text="Use report_outcome.")
+
+        processed = job.handle_reminder(reminder)
+
+        assert processed is True
+        assert job.py_env.console == ["existing", "Use report_outcome."]
+        assert len(job.chat_log) == 1
+        assert isinstance(job.chat_log[0], ReminderLogItem)
+        assert job.chat_log[0].console_pos == 1
+        assert job.chat_log[0].reminder is reminder
+
+    def test_unready_reminder_is_skipped(self, job_factory):
+        """Unready reminders are skipped without side effects."""
+        job = job_factory()
+        reminder = RecursiveReminder(text="Not yet supported.", min_dialog_len=1)
+
+        processed = job.handle_reminder(reminder)
+
+        assert processed is False
+        assert job.py_env.console is None
+        assert job.chat_log == []
+
+
 # ---------------------------------------------------------------------------
 # get_next_request with user messages (str / UserLogItem)
 # ---------------------------------------------------------------------------
@@ -2248,6 +2361,34 @@ class TestGetNextRequestUserMessages:
         assert history[-1].role == ChatRole.USER
         assert history[-1].content == "user follow-up"
         assert history[-1].content_src == ContentSource.USER
+
+    def test_reminder_log_item_in_chat_log_yields_system_item(self, job_factory):
+        """A ReminderLogItem is yielded as an injected SYSTEM ChatHistoryItem."""
+        job = job_factory()
+        reminder = RecursiveReminder(text="Use report_outcome before finishing.")
+        job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
+
+        history = list(job.get_next_request()["chat_history"])
+
+        assert len(history) == 1
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[0].content == "Use report_outcome before finishing."
+        assert history[0].content_src == ContentSource.SYSTEM
+
+    def test_reminder_log_item_formats_as_system_message(self, job_factory):
+        """Reminder content is sent to OpenAI-compatible LLMs as role=system."""
+        job = job_factory()
+        reminder = RecursiveReminder(text="Use report_outcome before finishing.")
+        job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
+        history = list(job.get_next_request()["chat_history"])
+        settings = types.SimpleNamespace(get_xml_box_tags=lambda: {"console": "out"})
+
+        formatted = format_chat_history_item(history[0], ChatStyle.MARKDOWN, settings)
+
+        assert formatted == {
+            "role": "system",
+            "content": "Use report_outcome before finishing.",
+        }
 
     def test_user_log_item_in_chat_log_yields_user_item_with_hint(self, job_def_factory):
         """UserLogItem follow-ups get the language hint in chat history."""
@@ -2535,6 +2676,82 @@ class TestGetChatResponses:
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="internal"))
 
         assert list(job.get_chat_responses()) == ["internal", "done"]
+
+
+class TestGetDialog:
+    """Tests for Job.get_dialog."""
+
+    def test_yields_user_and_assistant_messages_in_order(self, job_factory):
+        """User messages and visible LLM responses are yielded chronologically."""
+        job = job_factory()
+        job.chat_log.append("hello")
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="# Hi"))
+        job.chat_log.append(UserLogItem(message="follow-up"))
+        job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="# Done"))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("user", "hello"),
+            DialogItem("assistant", "# Hi"),
+            DialogItem("user", "follow-up"),
+            DialogItem("assistant", "# Done"),
+        ]
+
+    def test_filters_internal_turns_and_includes_answer_tool_output(self, job_factory):
+        """Only exchanged dialog is yielded, including assistant answer tool bodies."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.chat_log.append("question")
+        job.py_env.console = [
+            "log: search('alice')",
+            "log: answer(body='tool answer', media=None)",
+        ]
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
+        ))
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="plain reply"))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("user", "question"),
+            DialogItem("assistant", "tool answer"),
+            DialogItem("assistant", "plain reply"),
+        ]
+
+    def test_plain_code_block_code_is_not_dialog(self, job_factory):
+        """Executable CodeBlock code is not yielded as assistant dialog."""
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="print('internal')"),
+        ))
+
+        assert not list(job.get_dialog())
+
+    def test_md_dialog_code_block_extracts_only_dialog_text(self, job_factory):
+        """Raw MD_DIALOG CodeBlock content yields only text outside fences."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="# Visible\n```python\nprint('internal')\n```"),
+        ))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("assistant", "# Visible"),
+        ]
+
+    def test_md_dialog_unfenced_code_block_text_is_dialog(self, job_factory):
+        """Unfenced MD_DIALOG CodeBlock text is treated as assistant dialog."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(code="# Visible"),
+        ))
+
+        assert list(job.get_dialog()) == [
+            DialogItem("assistant", "# Visible"),
+        ]
 
 
 class TestGetLlmResponseTimes:
