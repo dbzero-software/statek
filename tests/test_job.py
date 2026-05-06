@@ -2364,6 +2364,22 @@ class TestSubTaskNotifications:
         assert history[2].content == "done"
         assert history[2].content_src == ContentSource.CONSOLE
 
+    def test_subtask_log_item_formats_fake_tool_result_for_llm(self, job_factory):
+        """Synthetic subtask tool results format with the generated tool call id."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", result="done")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=handler, tool_log="done"))
+
+        history = list(job.get_next_request()["chat_history"])
+        messages = [format_chat_history_item(item, ChatStyle.DIRECT) for item in history]
+
+        assert messages[1]["tool_calls"][0]["id"] == "STATEK-SUBTASK-000"
+        assert messages[2] == {
+            "role": "tool",
+            "content": "done",
+            "tool_call_id": "STATEK-SUBTASK-000",
+        }
+
     def test_subtask_log_item_error_yields_system_message_only(self, job_factory):
         """Errored subtask notifications do not simulate a result lookup."""
         job = job_factory()
@@ -2386,7 +2402,15 @@ class TestSubTaskNotifications:
 
         assert job.find_sub_task_handler() is second
         assert job.find_sub_task_handler(id="first") is first
-        assert job.find_sub_task_handler(id="missing") is None
+
+        with pytest.raises(RuntimeError, match="Sub-task id=missing has not completed"):
+            job.find_sub_task_handler(id="missing")
+
+    def test_find_sub_task_handler_without_id_returns_none_on_miss(self, job_factory):
+        """Lookup without an id keeps the optional most-recent semantics."""
+        job = job_factory()
+
+        assert job.find_sub_task_handler() is None
 
     def test_find_sub_task_handler_prefers_pending_notifications(self, job_factory):
         """Pending notifications are searched before persisted chat log items."""

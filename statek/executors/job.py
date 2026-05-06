@@ -482,6 +482,8 @@ class Job:
         for item in reversed(self.chat_log):
             if isinstance(item, SubTaskLogItem) and (id is None or item.handler.id == id):
                 return item.handler
+        if id is not None:
+            raise RuntimeError(f"Sub-task id={id} has not completed; wait for the callback notification.")
         return None
 
     def _chat_log_finalized_for_notifications(self) -> bool:
@@ -1000,7 +1002,7 @@ class Job:
                         role=ChatRole.TOOL,
                         content=result,
                         content_src=ContentSource.CONSOLE,
-                        tool_calls=call,
+                        tool_calls=[call],
                     )
                 continue
 
