@@ -729,6 +729,15 @@ def _log_pending_console(job: Job):
     job._log_console_batch(from_pos, to_pos)  # pylint: disable=protected-access
 
 
+def _process_pending_notification_follow_up(job: Job, harness) -> bool:
+    """Process pending subtask notifications before a job is finalized."""
+    if not job._process_pending_notifications():  # pylint: disable=protected-access
+        return False
+    job.py_env.exit_status = None
+    harness.check_after_step(job)
+    return True
+
+
 async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
     """Dispatch LLM response text to the user via the DialogAgent's send_message.
 
@@ -790,7 +799,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         see: experiments/ai/run_job_step.ipynb
     """
 
-    # Step 0: Check harness constraints before step
+    # Harness pre-check outside the design step count
     harness = get_llm_harness()
     harness.check_before_step(job)
 
@@ -804,7 +813,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 2: Get next code block pending execution
     code = job.get_next_code_block()
 
-    # Step 3: If code is None, change status to STARTED and go to step #9
+    # Step 3: If code is None, change status to STARTED and go to step #11
     if code is None:
         job.set_status(JobStatus.STARTED)
     else:
@@ -879,7 +888,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             job.awaited_result = None
             job.next_instr_num = None
         except FutureError as e:
-            # Handle FutureError - suspend job
+            # Step 7: Handle FutureError and suspend the job
             job.awaited_result = e.future_result
             job.next_instr_num = e.instr_num
             # Change status STARTED -> SUSPENDED (no change for WARMING_UP)
@@ -887,7 +896,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 job.set_status(JobStatus.SUSPENDED)
             return False
         except Exception as e:
-            # Step 7: Handle all other exceptions
+            # Step 8: Handle all other exceptions
             if job.status == JobStatus.WARMING_UP:
                 # Critical job definition failure — terminate job and record error
                 job.job_def.set_error(e)
@@ -917,14 +926,16 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                         if j < len(last_chat_log_item.tool_log):
                             last_chat_log_item.tool_log[j] = joined
 
-
-        # Step 6 & 7: Check if code has finished (exit_status not None)
+        # Step 9: If code has finished, transition to DONE and return True
         if job.py_env.exit_status is not None:
+            # Apply the Step 16 follow-up guard before code-triggered DONE.
+            if _process_pending_notification_follow_up(job, harness):
+                return False
             job.set_status(JobStatus.DONE)
             _log_pending_console(job)
             return True
 
-        # Step 8: Handle warmup block progression or transition to STARTED
+        # Step 10: Handle warmup block progression or transition to STARTED
         if job.status == JobStatus.WARMING_UP:
             # Log this warmup block's console slice
             warmup_batch_from = warmup_log_item.console_pos
@@ -939,7 +950,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 # All warmup blocks completed, transition to STARTED
                 job.set_status(JobStatus.STARTED)
 
-    # Step 9: Get LLM API provider. JobDef metadata is the frozen job
+    # Step 11: Get LLM API provider. JobDef metadata is the frozen job
     # configuration; the loop-level provider acts as a default only.
     metadata = job.job_def.metadata or {}
     provider_to_use = select_model_provider(
@@ -952,7 +963,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     )
     llm_api = LLM_API.get(provider_name=provider_to_use)
 
-    # Step 10: Get next request parameters — log pending console batch first
+    # Step 12: Get next request parameters — log pending console batch first
     _log_pending_console(job)
     request = job.get_next_request()
     request["model"] = format_model_for_provider(
@@ -963,7 +974,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     if 'chat_history' in request:
         request['chat_history'] = list(request['chat_history'])
 
-    # Step 11: Run the request with LLM API - await response
+    # Step 13: Run the request with LLM API - await response
     response = await llm_api.process_request(**request)
 
     # add byte stats from LLM API response
@@ -973,10 +984,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     if response.stats.cost is not None:
         job.total_cost += response.stats.cost
 
-    # Step 12: Add new log item using append_chat_log
+    # Step 14: Add new log item using append_chat_log
     job.append_chat_log(request, response)
 
-    # Step 13: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
+    # Step 15: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
     dialog_error = False
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         try:
@@ -986,8 +997,9 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             job.console_append(error_msg, error_message=error_msg)
             dialog_error = True
 
-    # MD_DIALOG / DIRECT: if LLM returned only text (no code / no tool calls), job is done;
-    # if LLM returned code (MD_DIALOG) or tool calls (DIRECT), continue the loop.
+    # Step 16: MD_DIALOG/DIRECT text-only responses can finish only after
+    # unhandled reminders and pending notifications have been processed.
+    # If LLM returned code (MD_DIALOG) or tool calls (DIRECT), continue the loop.
     # If send_message raised, always continue so the LLM can react to the error.
     if not dialog_error and job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
@@ -1002,15 +1014,17 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             if reminder is not None and job.handle_reminder(reminder):
                 harness.check_after_step(job)
                 return False
+            if _process_pending_notification_follow_up(job, harness):
+                return False
             custom_exit(job)
             job.set_status(JobStatus.DONE)
             _log_pending_console(job)
             return True
 
-    # Step 14: Check harness constraints after step
+    # Harness post-check outside the design step count
     harness.check_after_step(job)
 
-    # Step 15: Return False
+    # Step 17: Return False
     return False
 
 

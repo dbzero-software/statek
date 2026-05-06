@@ -11,7 +11,7 @@ import dbzero as db0
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.agents.dialog_agent import DialogAgent
-from statek.executors.chat_log_item import ReminderLogItem
+from statek.executors.chat_log_item import ReminderLogItem, SubTaskLogItem
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.utils import handle_dialog, run_job_step
 from statek.future import FutureResult
@@ -19,6 +19,7 @@ from statek.exceptions import FutureError
 from statek.llm_harness import LLM_Harness
 from statek.llm_api import LLM_Response, LLM_Stats, CallParams, OpenRouter_API
 from statek.settings import LLM_API_Settings
+from statek.task import SubTaskHandler
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -49,6 +50,14 @@ _DIALOG_SENT_MESSAGES = []
 
 def _record_dialog_message(body: str, media=None):
     _DIALOG_SENT_MESSAGES.append((body, media))
+
+
+def _completed_subtask_handler(job, subtask_id=None, result=None):
+    """Create a completed handler fixture before the public complete API exists."""
+    handler = SubTaskHandler(job=job, id=subtask_id)
+    handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+    handler._SubTaskHandler__result = result  # pylint: disable=protected-access
+    return handler
 
 
 def create_future_not_ready():
@@ -1617,6 +1626,43 @@ class TestRunJobStepDirect:
         assert isinstance(job.chat_log[-1], ReminderLogItem)
         assert job.chat_log[-1].reminder is reminder
         assert job.py_env.console[-1] == "Use report_outcome."
+
+    @pytest.mark.asyncio
+    async def test_direct_text_only_response_with_pending_subtask_continues(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """Pending subtask notifications are processed before DIRECT auto-exit."""
+        job = self._make_job(job_def_factory)
+        handler = _completed_subtask_handler(
+            Job(job_def=job.job_def, job_status=JobStatus.READY),
+            subtask_id="child-1",
+            result="done",
+        )
+        job.push_notification(handler)
+
+        mock_response = LLM_Response(
+            text="Dzisiejsza data to 3 kwietnia 2026 roku.",
+            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+            call_requests=None,
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=mock_response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        assert isinstance(job.chat_log[-1], SubTaskLogItem)
+        assert job.chat_log[-1].handler is handler
+        assert job.py_env.exit_status is None
 
 
 class TestHandleDialogMarkdownMedia:

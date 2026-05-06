@@ -8,10 +8,18 @@ from .llm_api import (
 )
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
-from .system import (tool, docstr, get_any, get_all, error_handler,
-                     is_valid_error_handler, docs_style)
+from .system import (tool, subtask, docstr, get_any, get_all, error_handler,
+                     is_valid_error_handler, docs_style, find_sub_task_handler)
 from .utils import (statek_print, format_default_llm_repr,
                     get_current_agent, get_current_agent_name, get_current_job)
+from .task import (
+    SubTaskHandler,
+    SubTaskState,
+    TaskError,
+    complete_sub_task,
+    create_new_job,
+    create_sub_task,
+)
 from . import task
 
 __version__ = "0.1.0"
@@ -32,6 +40,14 @@ __all__ = [
     "LLM_Harness",
     "LLM_HarnessError",
     "get_llm_harness",
+    "subtask",
+    "SubTaskHandler",
+    "SubTaskState",
+    "TaskError",
+    "complete_sub_task",
+    "create_new_job",
+    "create_sub_task",
+    "find_sub_task_handler",
     "statek_print",
     "format_default_llm_repr",
     "get_current_agent",

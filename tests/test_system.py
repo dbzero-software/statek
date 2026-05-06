@@ -5,10 +5,12 @@
 from typing import Tuple
 import pytest
 import dbzero as db0
-from statek.system import (docstr, brief, panic, tool, create_tool, inject_context, find_tools,
-                           select_tools, error_handler)
+from statek.system import (docstr, brief, panic, tool, subtask, create_tool, inject_context,
+                           find_tools, select_tools, error_handler)
 from statek.chat_style import ChatStyle
 from statek.future import get_unpack_size, temporal, FutureResult
+from statek.executors.job import Job
+from statek.task import SubTaskHandler
 from statek.utils import format_callable_decl
 
 class TestDocs:
@@ -594,6 +596,151 @@ class TestToolBindByName:
 
         result = send_to("user")
         assert result == "user"
+
+
+class TestSubtaskDecorator:
+    """Test cases for the @subtask decorator."""
+
+    def test_requires_var_keyword_parameter(self):
+        """Subtask functions must accept **kwargs like regular tools."""
+        with pytest.raises(TypeError, match=r"must accept \*\*kwargs"):
+            @subtask
+            def start_child() -> Job:
+                return None
+
+    def test_rejects_explicit_id_parameter(self):
+        """The subtask id is framework-managed and cannot be a source parameter."""
+        with pytest.raises(TypeError, match="reserved"):
+            @subtask
+            def start_child(id: str, **kwargs) -> Job:  # pylint: disable=redefined-builtin,unused-argument
+                return None
+
+    def test_wraps_job_result_as_handler(self, job_factory):
+        """A subtask returning Job is wrapped as SubTaskHandler."""
+        @subtask
+        def start_child(name: str, **kwargs) -> Job:  # pylint: disable=unused-argument
+            return job_factory()
+
+        handler = start_child("alpha", id="child-1")
+
+        assert isinstance(handler, SubTaskHandler)
+        assert handler.id == "child-1"
+        assert handler.job.py_env.local_state["sub_task_handler"] is handler
+
+    def test_existing_handler_result_passes_through_and_injects_local(self, job_factory):
+        """A returned SubTaskHandler is reused and made available to its child job."""
+        existing = SubTaskHandler(job=job_factory(), id="existing")
+
+        @subtask
+        def start_child(**kwargs) -> SubTaskHandler:  # pylint: disable=unused-argument
+            return existing
+
+        assert start_child(id="ignored") is existing
+        assert existing.id == "existing"
+        assert existing.job.py_env.local_state["sub_task_handler"] is existing
+
+    def test_existing_handler_without_id_uses_framework_id(self, job_factory):
+        """A returned handler without id adopts the framework-managed id."""
+        existing = SubTaskHandler(job=job_factory())
+
+        @subtask
+        def start_child(**kwargs) -> SubTaskHandler:  # pylint: disable=unused-argument
+            return existing
+
+        assert start_child(id="child-1") is existing
+        assert existing.id == "child-1"
+        assert existing.job.py_env.local_state["sub_task_handler"] is existing
+
+    def test_string_converted_to_enum(self, db0_fixture, job_factory):  # pylint: disable=unused-argument
+        """Subtasks share @tool enum conversion behavior."""
+        SeverityLevel = db0.enum("SubTaskSeverityLevel", ["INFO", "WARNING", "ERROR"])
+        seen = []
+
+        @subtask
+        def start_child(level: SeverityLevel, **kwargs) -> Job:  # pylint: disable=unused-argument
+            seen.append(level)
+            return job_factory()
+
+        start_child("INFO")
+
+        assert seen == [SeverityLevel.INFO]
+
+    def test_string_bound_to_context_variable(self, job_factory):
+        """Subtasks share @tool bind-by-name behavior."""
+        class User:
+            pass
+
+        seen = []
+
+        @subtask
+        def start_child(user: User, **kwargs) -> Job:  # pylint: disable=unused-argument
+            seen.append(user)
+            return job_factory()
+
+        user = User()
+        wrapped = inject_context(start_child, {"user": user})
+
+        wrapped("user")
+
+        assert seen == [user]
+
+    def test_brief_signature_reports_subtask_handler_and_id(self, job_factory, capsys):
+        """Subtask documentation exposes framework-managed id."""
+        @subtask
+        def start_child(name: str, **kwargs) -> Job:  # pylint: disable=unused-argument
+            """Start child job.
+
+            Args:
+                name (str): Child name.
+
+            Returns:
+                Job: The child job.
+            """
+            return job_factory()
+
+        brief(start_child)
+        captured = capsys.readouterr()
+
+        assert "start_child(name, id=None)" in captured.out
+
+    def test_brief_signature_inserts_id_before_keyword_only(self, job_factory, capsys):
+        """Subtask documentation keeps synthetic id before keyword-only params."""
+        @subtask
+        def start_child(name: str, *, priority: int = 1, **kwargs) -> Job:  # pylint: disable=unused-argument
+            """Start child job.
+
+            Args:
+                name (str): Child name.
+                priority (int): Child priority.
+
+            Returns:
+                Job: The child job.
+            """
+            return job_factory()
+
+        brief(start_child)
+        captured = capsys.readouterr()
+
+        assert "start_child(name, id=None, priority=1)" in captured.out
+
+    def test_brief_signature_makes_id_keyword_only_after_varargs(self, job_factory, capsys):
+        """Subtask id remains visible for functions with variable positional args."""
+        @subtask
+        def start_child(*names: str, priority: int = 1, **kwargs) -> Job:  # pylint: disable=unused-argument
+            """Start child job.
+
+            Args:
+                priority (int): Child priority.
+
+            Returns:
+                Job: The child job.
+            """
+            return job_factory()
+
+        brief(start_child)
+        captured = capsys.readouterr()
+
+        assert "start_child(id=None, priority=1)" in captured.out
 
 
 class TestToolSystemFlag:

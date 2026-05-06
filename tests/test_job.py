@@ -24,6 +24,7 @@ from statek.agents.dialog_agent import RecursiveReminder
 from statek.executors.chat_log_item import (
     LLM_LogItem,
     ReminderLogItem,
+    SubTaskLogItem,
     UserLogItem,
     WarmupLogItem,
 )
@@ -31,12 +32,25 @@ from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
 from statek.utils import CodeBlock, CallSpec
+from statek.system import find_sub_task_handler
+from statek.task import SubTaskHandler, TaskError
 
 
 def _run_with_current_job(job, func):
     """Run func while job is visible via _STATEK_CTX."""
     _STATEK_CTX = {"job": job}  # noqa: F841
     return func()
+
+
+def _completed_subtask_handler(job, subtask_id=None, result=None, error=None):
+    """Create a completed handler fixture before the public complete API exists."""
+    handler = SubTaskHandler(job=job, id=subtask_id)
+    handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
+    if error is not None:
+        handler._SubTaskHandler__error = TaskError(error)  # pylint: disable=protected-access
+    else:
+        handler._SubTaskHandler__result = result  # pylint: disable=protected-access
+    return handler
 
 
 @db0.memo
@@ -111,7 +125,29 @@ class TestJobWithError:
             job = job_factory()
             job.error = err
             assert job.error is err
-            assert job.error.error_message == "job failed"
+        assert job.error.error_message == "job failed"
+
+
+class TestJobAddLocals:
+    """Tests for injecting additional local values into an existing job."""
+
+    def test_add_locals_merges_values(self, job_factory):
+        """add_locals adds and overwrites values in py_env.local_state."""
+        job = job_factory()
+        job.py_env.local_state = {"existing": 1}
+
+        job.add_locals(existing=2, added=3)
+
+        assert job.py_env.local_state == {"existing": 2, "added": 3}
+
+    def test_add_locals_initializes_missing_local_state(self, job_factory):
+        """add_locals creates local_state when it is missing."""
+        job = job_factory()
+        job.py_env.local_state = None
+
+        job.add_locals(answer=42)
+
+        assert job.py_env.local_state == {"answer": 42}
 
 
 class TestJobDef:
@@ -2303,6 +2339,150 @@ class TestJobHandleReminder:
         assert processed is False
         assert job.py_env.console is None
         assert job.chat_log == []
+
+
+class TestSubTaskNotifications:
+    """Tests for subtask notification log integration."""
+
+    def test_subtask_log_item_yields_system_message_and_fake_tool_result(self, job_factory):
+        """Successful subtask notifications are visible as system + synthetic tool history."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", result="done")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=handler, tool_log="done"))
+
+        history = list(job.get_next_request()["chat_history"])
+
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[0].content == "[Notification] sub-task id=child-1 completed successfully."
+        assert history[0].content_src == ContentSource.SYSTEM
+        assert history[1].role == ChatRole.ASSISTANT
+        assert history[1].tool_calls[0].func_name == "python_cli"
+        assert history[1].tool_calls[0].kwargs == {
+            "code": "print(find_sub_task_handler(id='child-1'))"
+        }
+        assert history[2].role == ChatRole.TOOL
+        assert history[2].content == "done"
+        assert history[2].content_src == ContentSource.CONSOLE
+
+    def test_subtask_log_item_formats_fake_tool_result_for_llm(self, job_factory):
+        """Synthetic subtask tool results format with the generated tool call id."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", result="done")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=handler, tool_log="done"))
+
+        history = list(job.get_next_request()["chat_history"])
+        messages = [format_chat_history_item(item, ChatStyle.DIRECT) for item in history]
+
+        assert messages[1]["tool_calls"][0]["id"] == "STATEK-SUBTASK-000"
+        assert messages[2] == {
+            "role": "tool",
+            "content": "done",
+            "tool_call_id": "STATEK-SUBTASK-000",
+        }
+
+    def test_subtask_log_item_error_yields_system_message_only(self, job_factory):
+        """Errored subtask notifications do not simulate a result lookup."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", error="failed")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=handler))
+
+        history = list(job.get_next_request()["chat_history"])
+
+        assert len(history) == 1
+        assert history[0].role == ChatRole.SYSTEM
+        assert history[0].content == "[Error] sub-task id=child-1 failed with failed"
+
+    def test_find_sub_task_handler_searches_reverse_chat_log(self, job_factory):
+        """Most recent handlers are found first unless an id is requested."""
+        job = job_factory()
+        first = _completed_subtask_handler(job_factory(), subtask_id="first", result="one")
+        second = _completed_subtask_handler(job_factory(), subtask_id="second", result="two")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=first))
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=second))
+
+        assert job.find_sub_task_handler() is second
+        assert job.find_sub_task_handler(id="first") is first
+
+        with pytest.raises(RuntimeError, match="Sub-task id=missing has not completed"):
+            job.find_sub_task_handler(id="missing")
+
+    def test_find_sub_task_handler_without_id_returns_none_on_miss(self, job_factory):
+        """Lookup without an id keeps the optional most-recent semantics."""
+        job = job_factory()
+
+        assert job.find_sub_task_handler() is None
+
+    def test_find_sub_task_handler_prefers_pending_notifications(self, job_factory):
+        """Pending notifications are searched before persisted chat log items."""
+        job = job_factory()
+        stored = _completed_subtask_handler(job_factory(), subtask_id="same", result="stored")
+        pending = _completed_subtask_handler(job_factory(), subtask_id="same", result="pending")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=stored))
+        job.set_status(JobStatus.STARTED)
+
+        job.push_notification(pending)
+
+        assert job.find_sub_task_handler(id="same") is pending
+        assert job.chat_log[-1].handler is stored
+
+    def test_tool_find_sub_task_handler_forwards_to_current_job(self, job_factory):
+        """System tool lookup uses the current job context."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", result="done")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=handler))
+
+        result = _run_with_current_job(
+            job,
+            lambda: find_sub_task_handler(id="child-1"),
+        )
+
+        assert result is handler
+
+    def test_push_notification_requires_completed_handler(self, job_factory):
+        """Uncompleted handlers cannot be pushed into parent notifications."""
+        job = job_factory()
+        handler = SubTaskHandler(job=job_factory(), id="child-1")
+
+        with pytest.raises(RuntimeError, match="completed"):
+            job.push_notification(handler)
+
+    def test_push_notification_done_appends_and_restarts_parent(self, job_factory):
+        """DONE parents receive completed notifications directly and restart."""
+        job = job_factory()
+        job.set_status(JobStatus.DONE)
+        job.py_env.exit_status = "finished"
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", result="done")
+
+        job.push_notification(handler)
+
+        assert job.status == JobStatus.STARTED
+        assert job.py_env.exit_status is None
+        assert isinstance(job.chat_log[-1], SubTaskLogItem)
+        assert job.chat_log[-1].handler is handler
+        assert job.chat_log[-1].tool_log == "done"
+
+    def test_push_notification_active_buffers_until_last_item_finalized(self, job_factory):
+        """Active jobs keep notifications pending until tool-call log state is finalized."""
+        job = job_factory()
+        job.set_status(JobStatus.STARTED)
+        job.chat_log.append(LLM_LogItem(
+            console_pos=0,
+            llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
+        ))
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", result="done")
+
+        job.push_notification(handler)
+
+        assert len(job.chat_log) == 1
+        assert job.find_sub_task_handler(id="child-1") is handler
+        assert job._process_pending_notifications() is False  # pylint: disable=protected-access
+
+        job.chat_log[-1].tool_log = [""]
+
+        assert job._process_pending_notifications() is True  # pylint: disable=protected-access
+        assert isinstance(job.chat_log[-1], SubTaskLogItem)
+        assert job.chat_log[-1].handler is handler
+        assert job._process_pending_notifications() is False  # pylint: disable=protected-access
 
 
 # ---------------------------------------------------------------------------

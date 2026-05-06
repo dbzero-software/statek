@@ -7,6 +7,7 @@ from statek.utils import CodeBlock
 
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
+    from statek.task import SubTaskHandler
 
 
 @db0.memo(no_default_tags=True)
@@ -86,6 +87,13 @@ class WarmupLogItem(ChatLogItem):
 class ReminderLogItem(ChatLogItem):
     """The triggering reminder."""
     reminder: "Reminder"
+
+
+@db0.memo(no_default_tags=True)
+@dataclass(kw_only=True)
+class SubTaskLogItem(ChatLogItem):
+    """The triggering subtask handler."""
+    handler: "SubTaskHandler"
 
 
 @db0.memo(no_default_tags=True)
