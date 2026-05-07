@@ -434,15 +434,15 @@ def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-argu
         The newly created Job instance.
     """
     caller_frame = inspect.currentframe().f_back if warmup_code else None
-    job = create_future_task(
+    job = create_new_job(
         agent,
-        shared_vars or {},
-        parent_job,
+        shared_vars=shared_vars,
+        parent_job=parent_job,
         warmup_code=warmup_code,
         locale=locale,
         caller_frame=caller_frame,
         **kwargs,
-    ).job
+    )
     job.push_user_message(message)
 
     return job

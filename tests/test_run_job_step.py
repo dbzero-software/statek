@@ -1627,8 +1627,7 @@ class TestRunJobStepDirect:
         assert job.chat_log[-1].reminder is reminder
         assert job.py_env.console[-1] == "Use report_outcome."
 
-<<<<<<< HEAD
-=======
+
     @pytest.mark.asyncio
     async def test_direct_text_only_response_with_pending_subtask_continues(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
@@ -1665,8 +1664,6 @@ class TestRunJobStepDirect:
         assert isinstance(job.chat_log[-1], SubTaskLogItem)
         assert job.chat_log[-1].handler is handler
         assert job.py_env.exit_status is None
-
->>>>>>> e88d42b77dcc90c1bb5c835edf5ceec3d4af0d35
 
 class TestHandleDialogMarkdownMedia:
     """Tests markdown media-link preservation during dialog delivery."""

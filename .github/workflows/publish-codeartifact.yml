@@ -1,6 +1,12 @@
 name: Publish to AWS CodeArtifact
 
 on:
+<<<<<<< HEAD
+=======
+  push:
+    tags:
+      - '**'
+>>>>>>> 5c8f5bbb58ef14467c4ce4900f45d2928455ad1c
   release:
     types: [published]
   workflow_dispatch:
