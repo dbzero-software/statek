@@ -961,6 +961,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             or get_statek_settings().default_llm_api_provider
         ),
     )
+    job._sync_usage_pricing()
     llm_api = LLM_API.get(provider_name=provider_to_use)
 
     # Step 12: Get next request parameters — log pending console batch first

@@ -2,11 +2,13 @@
 # pylint: disable=unused-argument,no-member
 
 from datetime import datetime
+from decimal import Decimal
 from unittest.mock import MagicMock, PropertyMock, patch
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.pyenv import PyEnv
+from statek.model_pricing import set_model_pricing
 from statek.system import tool, docstr
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec
@@ -25,6 +27,7 @@ from web_ui.pages.job_detail import (
     _get_tool_data_for_block,
     _get_exception_messages,
     _get_job_model,
+    _get_effective_job_cost,
     _get_job_provider,
     _get_job_temperature,
     _job_uses_reasoning,
@@ -1503,6 +1506,20 @@ class _StubUsage:  # pylint: disable=too-few-public-methods
         return self.total_reported_cost
 
 
+class _StaleUsage:  # pylint: disable=too-few-public-methods
+    total_reported_cost = None
+    context_bytes = 0
+    total_bytes_sent = 0
+    total_bytes_received = 0
+    total_input_tokens = 1_000_000
+    total_cached_tokens = 250_000
+    total_output_tokens = 100_000
+
+    @property
+    def total_cost(self):
+        return None
+
+
 class _StubJob:  # pylint: disable=too-few-public-methods
     def __init__(self):
         self.job_def = MagicMock()
@@ -1514,9 +1531,36 @@ class _StubJob:  # pylint: disable=too-few-public-methods
         self.warmup_block_num = None
         self.chat_log = []
         self.py_env = _StubPyEnv()
+        self.get_current_model = MagicMock(return_value=self.job_def.model)
 
     def _warmup_end_positions(self):
         return [2]
+
+
+class TestEffectiveJobCost:
+    def test_uses_existing_usage_cost(self):
+        job = _StubJob()
+        assert _get_effective_job_cost(job) == 0.0042
+
+    def test_reprices_stale_usage_from_current_model(self, db0_fixture):
+        set_model_pricing(
+            "openai", "gpt-5.4-mini",
+            Decimal("0.40"), Decimal("1.60"),
+            input_price_per_cached_M=Decimal("0.10"),
+        )
+        job = _StubJob()
+        job.usage = _StaleUsage()
+        job.job_def.metadata = {
+            "PROVIDER": "openai",
+            "MODEL": {
+                TaskDifficulty.low: "gpt-5.4-mini",
+                TaskDifficulty.medium: "gpt-5.4-mini",
+                TaskDifficulty.high: "gpt-4o",
+            },
+        }
+        job.get_current_model = MagicMock(return_value="gpt-5.4-mini")
+
+        assert _get_effective_job_cost(job) == 0.485
 
 
 class TestBuildRawRepr:

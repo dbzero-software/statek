@@ -39,6 +39,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWr
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
+from statek.model_pricing import get_model_pricing
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 from statek.task_difficulty import (
     TaskDifficulty,
@@ -433,14 +434,10 @@ class Job:
         self.created_at = created_at or datetime.now()
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
-        self.usage = LLM_Usage.for_model(
-            job_def.provider or "UNKNOWN",
-            job_def.model or "",
-            job_def.model_family,
-        )
-        self.error = None
         # The last dynamically-resolved difficulty level in this task.
         self.__last_difficulty: Optional[TaskDifficulty] = None
+        self.usage = LLM_Usage(pricing=self._current_model_pricing())
+        self.error = None
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
         # Application-specific external memo references, created lazily.
@@ -544,6 +541,27 @@ class Job:
             self.py_env.exit_status = None
             return
         self._pending_notifications().append(item)
+
+    def _current_model_pricing(self):
+        """Return pricing for the concrete model used by the current LLM request."""
+        metadata = self.job_def.metadata or {}
+        raw_model = self.get_current_model()
+        provider = select_model_provider(
+            raw_model,
+            default_provider=(
+                metadata.get("PROVIDER")
+                or get_statek_settings().default_llm_api_provider
+            ),
+        )
+        model_name = ensure_model_name(raw_model)
+        model = format_model_for_provider(raw_model, provider) if provider else model_name.model
+        provider_key = provider.upper() if provider else None
+        model_family = model_name.model_family if provider_key == "OPENROUTER" else None
+        return get_model_pricing(provider or "UNKNOWN", model or "", model_family)
+
+    def _sync_usage_pricing(self) -> None:
+        """Keep persisted usage objects priced against the current concrete model."""
+        self.usage.pricing = self._current_model_pricing()
 
     def system_prompt(self, difficulty: Optional[TaskDifficulty] = None) -> str:
         """Return the agent system prompt formatted for this job's current difficulty."""

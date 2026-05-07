@@ -6,6 +6,7 @@ import json
 import traceback
 from datetime import datetime
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Optional
 
 import dbzero as db0
@@ -14,6 +15,7 @@ from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.llm_api import LLM_API, select_request_tools
 from statek.locale import LANGUAGE_HINTS
+from statek.model_pricing import get_model_pricing
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
 from statek.executors.chat_log_item import (
@@ -22,7 +24,7 @@ from statek.executors.chat_log_item import (
     ToolError,
     WarmupLogItem,
 )
-from statek.model_name import ensure_model_name, select_model_provider
+from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from web_ui.nicegui_compat import ui
 from web_ui.components.json_viewer import create_json_viewer
 from web_ui.components.status_badge import create_status_badge
@@ -239,6 +241,59 @@ def _job_uses_reasoning(job) -> bool:
         return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
     except Exception:  # pylint: disable=broad-except
         return False
+
+
+def _calculate_usage_cost(usage, pricing) -> Optional[float]:
+    """Calculate usage cost from token counters and a valid pricing object."""
+    if pricing is None or not getattr(pricing, 'is_valid', False):
+        return None
+    input_tokens = getattr(usage, 'total_input_tokens', 0) or 0
+    output_tokens = getattr(usage, 'total_output_tokens', 0) or 0
+    if input_tokens + output_tokens <= 0:
+        return None
+    cached_tokens = getattr(usage, 'total_cached_tokens', 0) or 0
+    non_cached = input_tokens - cached_tokens
+    cached_price = (
+        pricing.input_price_per_cached_M
+        if pricing.input_price_per_cached_M is not None
+        else pricing.input_price_per_M
+    )
+    return float(
+        (Decimal(non_cached) * pricing.input_price_per_M
+         + Decimal(cached_tokens) * cached_price
+         + Decimal(output_tokens) * pricing.output_price_per_M)
+        / Decimal("1000000")
+    )
+
+
+def _get_effective_job_cost(job) -> float:
+    """Return cost for a job, re-pricing stale usage objects when possible."""
+    usage = getattr(job, 'usage', None)
+    if usage is None:
+        return 0.0
+
+    total_cost = getattr(usage, 'total_cost', None)
+    if total_cost:
+        return float(total_cost)
+
+    try:
+        if not job.job_def:
+            return float(total_cost or 0.0)
+        metadata = job.job_def.metadata or {}
+        raw_model = job.get_current_model()
+        provider = select_model_provider(
+            raw_model,
+            default_provider=metadata.get("PROVIDER"),
+        )
+        model_name = ensure_model_name(raw_model)
+        model = format_model_for_provider(raw_model, provider) if provider else model_name.model
+        provider_key = provider.upper() if provider else None
+        model_family = model_name.model_family if provider_key == "OPENROUTER" else None
+        pricing = get_model_pricing(provider or "UNKNOWN", model or "", model_family, no_create=True)
+        calculated = _calculate_usage_cost(usage, pricing)
+        return float(calculated or total_cost or 0.0)
+    except Exception:  # pylint: disable=broad-except
+        return float(total_cost or 0.0)
 
 
 def _get_tool_data_for_block(code_block, chat_log_item) -> list:
@@ -1507,7 +1562,7 @@ def create_job_detail_dialog(job) -> None:
             chat_style_str = str(job.job_def.chat_style)
     except Exception:  # pylint: disable=broad-except
         pass
-    total_cost = job.usage.total_cost or 0.0
+    total_cost = _get_effective_job_cost(job)
     num_turns = getattr(job, 'num_turns', 0) or 0
     exception_count = getattr(job, 'exception_count', 0) or 0
     try:
