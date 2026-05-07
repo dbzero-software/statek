@@ -24,6 +24,7 @@ from statek.executors.chat_log_item import (
     ChatLogItem,
     LLM_LogItem,
     ReminderLogItem,
+    SubTaskLogItem,
     ToolError,
     WarmupLogItem,
     UserLogItem,
@@ -47,6 +48,7 @@ from statek.task_difficulty import (
 
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
+    from statek.task import SubTaskHandler
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
 
@@ -443,6 +445,8 @@ class Job:
         self.num_completions: Optional[int] = None
         # Application-specific external memo references, created lazily.
         self.__ext_ref = None
+        # Subtask notifications received while the current chat item is active.
+        self.__pending_chat_log: List[SubTaskLogItem] = []
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
@@ -472,6 +476,74 @@ class Job:
             ext_scan=ext_scan,
             perm_ctx_getter=get_perm_ctx,
         )
+
+    def add_locals(self, **kwargs) -> None:
+        """Inject additional values into this job's Python local state."""
+        self.py_env.update_locals(**kwargs)
+
+    def _pending_notifications(self) -> List[SubTaskLogItem]:
+        """Return pending subtask notifications, initializing old jobs lazily."""
+        if not hasattr(self, "_Job__pending_chat_log") or self.__pending_chat_log is None:
+            self.__pending_chat_log = []
+        return self.__pending_chat_log
+
+    def find_sub_task_handler(self, id: Optional[Any] = None) -> Optional["SubTaskHandler"]:  # pylint: disable=redefined-builtin
+        """Find a pending or logged subtask handler by id, or the most recent one."""
+        for item in reversed(self._pending_notifications()):
+            if id is None or item.handler.id == id:
+                return item.handler
+        for item in reversed(self.chat_log):
+            if isinstance(item, SubTaskLogItem) and (id is None or item.handler.id == id):
+                return item.handler
+        if id is not None:
+            raise RuntimeError(f"Sub-task id={id} has not completed; wait for the callback notification.")
+        return None
+
+    def _chat_log_finalized_for_notifications(self) -> bool:
+        """Return whether pending notifications can be safely appended now."""
+        if not self.chat_log:
+            return True
+        last = self.chat_log[-1]
+        if not isinstance(last, LLM_LogItem):
+            return True
+        if last.llm_resp is None:
+            return False
+        if isinstance(last.llm_resp, CodeBlock) and last.llm_resp.tool_calls:
+            tool_log = last.tool_log
+            if tool_log is None:
+                return False
+            if isinstance(tool_log, list):
+                return len(tool_log) >= len(last.llm_resp.tool_calls)
+            return len(last.llm_resp.tool_calls) == 1
+        return True
+
+    def _process_pending_notifications(self) -> bool:
+        """Move pending subtask notifications to chat_log at safe boundaries."""
+        pending = self._pending_notifications()
+        if not pending or not self._chat_log_finalized_for_notifications():
+            return False
+        self.chat_log.extend(pending)
+        self.__pending_chat_log = []
+        return True
+
+    def push_notification(self, handler: "SubTaskHandler") -> None:
+        """Push a completed subtask notification into this job."""
+        if not handler.is_completed:
+            raise RuntimeError("Subtask handler must be completed before notification")
+
+        item = SubTaskLogItem(
+            console_pos=len(self.py_env.console) if self.py_env.console else 0,
+            handler=handler,
+        )
+        if handler.error is None:
+            item.tool_log = str(handler)
+
+        if self.status == JobStatus.DONE:  # pylint: disable=no-member
+            self.chat_log.append(item)
+            self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+            self.py_env.exit_status = None
+            return
+        self._pending_notifications().append(item)
 
     def system_prompt(self, difficulty: Optional[TaskDifficulty] = None) -> str:
         """Return the agent system prompt formatted for this job's current difficulty."""
@@ -702,6 +774,23 @@ class Job:
                     parts.append(f"{value}{hint_suffix}")
         return "\n".join(parts)
 
+    @staticmethod
+    def _subtask_lookup_code(handler: "SubTaskHandler") -> str:
+        """Return the synthetic lookup code shown for a completed subtask."""
+        if handler.id is None:
+            return "print(find_sub_task_handler())"
+        return f"print(find_sub_task_handler(id={handler.id!r}))"
+
+    @staticmethod
+    def _subtask_tool_call(idx: int, handler: "SubTaskHandler") -> CallSpecWrapper:
+        """Return the synthetic python_cli call representing subtask result lookup."""
+        return CallSpecWrapper(
+            id=f"STATEK-SUBTASK-{idx:03d}",
+            func_name="python_cli",
+            args=None,
+            kwargs={"code": Job._subtask_lookup_code(handler)},
+        )
+
     def get_next_prompt(self) -> str:
         """
         Generate the next prompt to be included in the LLM chat.
@@ -865,7 +954,7 @@ class Job:
                 continue
             next_pos = console_len
             for j in range(i + 1, len(items)):
-                if isinstance(items[j], (WarmupLogItem, LLM_LogItem, ReminderLogItem)):
+                if isinstance(items[j], (WarmupLogItem, LLM_LogItem, ReminderLogItem, SubTaskLogItem)):
                     next_pos = items[j].console_pos
                     break
             end_positions[i] = next_pos
@@ -902,6 +991,31 @@ class Job:
                         role=ChatRole.SYSTEM,
                         content=item.reminder.text,
                         content_src=ContentSource.SYSTEM,
+                    )
+                continue
+
+            if isinstance(item, SubTaskLogItem):
+                yield ChatHistoryItem(
+                    role=ChatRole.SYSTEM,
+                    content=item.handler.get_log_message(),
+                    content_src=ContentSource.SYSTEM,
+                )
+                if item.tool_log is not None:
+                    call = self._subtask_tool_call(idx, item.handler)
+                    yield ChatHistoryItem(
+                        role=ChatRole.ASSISTANT,
+                        content=None,
+                        content_src=ContentSource.SYSTEM,
+                        tool_calls=[call],
+                    )
+                    result = item.get_tool_result(0)
+                    if isinstance(result, ToolError):
+                        result = result.err_message
+                    yield ChatHistoryItem(
+                        role=ChatRole.TOOL,
+                        content=result,
+                        content_src=ContentSource.CONSOLE,
+                        tool_calls=[call],
                     )
                 continue
 

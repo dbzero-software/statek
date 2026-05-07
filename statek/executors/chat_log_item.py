@@ -7,6 +7,7 @@ from statek.utils import CodeBlock
 
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
+    from statek.task import SubTaskHandler
 
 
 @db0.memo(no_default_tags=True)
@@ -89,6 +90,16 @@ class ReminderLogItem(ChatLogItem):
 
 
 @db0.memo(no_default_tags=True)
+<<<<<<< HEAD
+=======
+@dataclass(kw_only=True)
+class SubTaskLogItem(ChatLogItem):
+    """The triggering subtask handler."""
+    handler: "SubTaskHandler"
+
+
+@db0.memo(no_default_tags=True)
+>>>>>>> e88d42b77dcc90c1bb5c835edf5ceec3d4af0d35
 @dataclass
 class UserLogItem:
     """User message submitted for job initiation or as a push notification."""
