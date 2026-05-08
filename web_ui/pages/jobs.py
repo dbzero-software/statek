@@ -5,7 +5,7 @@ import dbzero as db0
 from web_ui.nicegui_compat import ui
 from web_ui.components.status_badge import create_status_badge
 from web_ui.model_bindings import get_all_jobs
-from web_ui.pages.job_detail import create_job_detail_dialog
+from web_ui.pages.job_detail import create_job_detail_dialog, _get_effective_job_cost
 
 PAGE_SIZE = 20
 
@@ -68,7 +68,7 @@ def _render_job_row(job) -> None:
     status_str = _job_status_str(job)
     model = _job_model(job)
     num_turns = getattr(job, 'num_turns', 0)
-    total_cost = getattr(job, 'total_cost', 0.0)
+    total_cost = _get_effective_job_cost(job)
     cost_label = f'${total_cost:.4f}' if total_cost else '—'
     tps_label = _job_tps_label(job)
 

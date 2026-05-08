@@ -224,3 +224,17 @@ def test_statek_default_difficulty_loaded_from_environment_variable():
         del os.environ['STATEK_DEFAULT_DIFFICULTY']
 
     assert settings.statek_default_difficulty == "H"
+
+
+def test_statek_model_info_dir_defaults_to_none():
+    settings = StatekSettings()
+    assert settings.statek_model_info_dir is None
+
+
+def test_statek_model_info_dir_from_environment_variable():
+    os.environ['STATEK_MODEL_INFO_DIR'] = '/some/path'
+    try:
+        settings = StatekSettings()
+    finally:
+        del os.environ['STATEK_MODEL_INFO_DIR']
+    assert settings.statek_model_info_dir == '/some/path'

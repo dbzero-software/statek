@@ -4,6 +4,7 @@
 
 import types
 from datetime import datetime, timedelta
+from decimal import Decimal
 from unittest.mock import patch, MagicMock
 import dbzero as db0
 import pytest
@@ -18,6 +19,7 @@ from statek.executors.job import (
     parse_model_metadata,
 )
 from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
+from statek.model_pricing import set_model_pricing
 from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.dialog_agent import RecursiveReminder
@@ -932,6 +934,46 @@ def test_get_current_model_uses_example_dynamic_difficulty(job_def_factory):
         assert job.get_current_model() == "medium"
 
     assert job._Job__last_difficulty == TaskDifficulty.medium  # pylint: disable=protected-access
+
+
+def test_usage_pricing_uses_concrete_difficulty_model(job_def_factory):
+    """Usage cost uses the selected MODEL entry, not the raw difficulty mapping."""
+    set_model_pricing("openai", "gpt-5.4-mini", Decimal("0.40"), Decimal("1.60"))
+    job_def = job_def_factory(
+        metadata={
+            "PROVIDER": "openai",
+            "MODEL": "LM:gpt-5.4-mini,H:gpt-4o",
+            "DEFAULT_DIFFICULTY": "medium",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    job.usage.total_input_tokens = 1_000_000
+
+    assert job.usage.pricing.is_valid is True
+    assert job.usage.total_cost == pytest.approx(0.40)
+
+
+def test_sync_usage_pricing_preserves_tokens_for_existing_usage(job_def_factory):
+    """Older jobs with token counts can be re-priced without losing usage data."""
+    set_model_pricing("openai", "gpt-5.4-mini", Decimal("0.40"), Decimal("1.60"))
+    job_def = job_def_factory(
+        metadata={
+            "PROVIDER": "openai",
+            "MODEL": "LM:gpt-5.4-mini,H:gpt-4o",
+            "DEFAULT_DIFFICULTY": "medium",
+        }
+    )
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.usage.pricing = set_model_pricing(
+        "openai", "L:bad,M:bad,H:bad", Decimal("0"), Decimal("0")
+    )
+    job.usage.total_input_tokens = 1_000_000
+
+    job._sync_usage_pricing()  # pylint: disable=protected-access
+
+    assert job.usage.total_input_tokens == 1_000_000
+    assert job.usage.total_cost == pytest.approx(0.40)
 
 
 def test_get_next_request_formats_system_prompt_with_current_difficulty(agent):

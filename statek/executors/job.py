@@ -19,6 +19,7 @@ from typing import (
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import PyEnv
+from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
     LLM_LogItem,
@@ -38,6 +39,7 @@ from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWr
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
+from statek.model_pricing import get_model_pricing
 from statek.settings import get_statek_settings, ChatStyle, statek_log
 from statek.task_difficulty import (
     TaskDifficulty,
@@ -305,6 +307,18 @@ class JobDef:
             return None
         return ensure_model_name(model).model_family
 
+    @property
+    def provider(self) -> Optional[str]:
+        """Return the effective LLM provider for this job definition."""
+        metadata = self.metadata or {}
+        return select_model_provider(
+            self.model or None,
+            default_provider=(
+                metadata.get("PROVIDER")
+                or get_statek_settings().default_llm_api_provider
+            ),
+        )
+
     def set_error(self, error: Exception, collect_traceback: bool = True) -> None:
         """Create a JobDefError from the given exception and associate it with this JobDef."""
         jde = JobDefError(error, collect_traceback=collect_traceback)
@@ -420,14 +434,10 @@ class Job:
         self.created_at = created_at or datetime.now()
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
-        # Total context bytes used by this job so far
-        self.context_bytes = 0
-        self.total_bytes_sent = 0
-        self.total_bytes_received = 0
-        # Total cost as reported by the LLM API provider
-        self.total_cost = 0.0
         # The last dynamically-resolved difficulty level in this task.
         self.__last_difficulty: Optional[TaskDifficulty] = None
+        self.usage = LLM_Usage(pricing=self._current_model_pricing())
+        self.error = None
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
         # Application-specific external memo references, created lazily.
@@ -531,6 +541,27 @@ class Job:
             self.py_env.exit_status = None
             return
         self._pending_notifications().append(item)
+
+    def _current_model_pricing(self):
+        """Return pricing for the concrete model used by the current LLM request."""
+        metadata = self.job_def.metadata or {}
+        raw_model = self.get_current_model()
+        provider = select_model_provider(
+            raw_model,
+            default_provider=(
+                metadata.get("PROVIDER")
+                or get_statek_settings().default_llm_api_provider
+            ),
+        )
+        model_name = ensure_model_name(raw_model)
+        model = format_model_for_provider(raw_model, provider) if provider else model_name.model
+        provider_key = provider.upper() if provider else None
+        model_family = model_name.model_family if provider_key == "OPENROUTER" else None
+        return get_model_pricing(provider or "UNKNOWN", model or "", model_family)
+
+    def _sync_usage_pricing(self) -> None:
+        """Keep persisted usage objects priced against the current concrete model."""
+        self.usage.pricing = self._current_model_pricing()
 
     def system_prompt(self, difficulty: Optional[TaskDifficulty] = None) -> str:
         """Return the agent system prompt formatted for this job's current difficulty."""
@@ -1818,7 +1849,7 @@ class Job:
     @property
     def approx_token_usage(self) -> int:
         """Calculates approximate token usage based on total bytes sent and received."""
-        return (self.total_bytes_sent + self.total_bytes_received) // 4
+        return (self.usage.total_bytes_sent + self.usage.total_bytes_received) // 4
 
     def _resolve_user_message(self, message: Any) -> str:
         """Resolve a pushed message object to the string stored in job logs."""

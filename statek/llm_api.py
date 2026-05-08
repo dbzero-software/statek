@@ -25,7 +25,12 @@ def _func_name_from_tool_calls(tool_calls) -> str:
     cs = tool_calls if not isinstance(tool_calls, list) else (tool_calls[0] if tool_calls else None)
     return cs.func_name if cs is not None else ""
 
-LLM_Stats = namedtuple("LLM_Stats", ["total_bytes_sent", "total_bytes_received", "cost"])
+LLM_Stats = namedtuple(
+    "LLM_Stats",
+    ["total_bytes_sent", "total_bytes_received", "cost",
+     "input_tokens", "output_tokens", "cached_tokens"],
+    defaults=[0, 0, 0],
+)
 # text: response text from the LLM (empty string when the LLM made tool calls instead)
 # stats: byte/cost accounting
 # call_requests: list of CallParams when the LLM requested tool calls, else None
@@ -592,12 +597,17 @@ class OpenRouter_API(LLM_API):
             if self.response_format and response_text:
                 response_text = json.loads(response_text)["python_code"]
 
-            cost = data.get("usage", {}).get("cost")
+            _usage = data.get("usage", {})
+            cost = _usage.get("cost")
+            _details = _usage.get("prompt_tokens_details") or {}
 
             stats = LLM_Stats(
                 total_bytes_sent=total_bytes_sent,
                 total_bytes_received=total_bytes_received,
-                cost=cost
+                cost=cost,
+                input_tokens=_usage.get("prompt_tokens", 0),
+                output_tokens=_usage.get("completion_tokens", 0),
+                cached_tokens=_details.get("cached_tokens", 0),
             )
 
             return LLM_Response(
@@ -834,12 +844,15 @@ class VertexAI_API(LLM_API):
             response_text, call_requests = self._parse_response(data)
             if self.response_format and response_text:
                 response_text = json.loads(response_text)["python_code"]
-            usage = data.get("usageMetadata", {})
-            cost = usage.get("cost")
+            _usage = data.get("usageMetadata", {})
+            cost = _usage.get("cost")
             stats = LLM_Stats(
                 total_bytes_sent=total_bytes_sent,
                 total_bytes_received=total_bytes_received,
                 cost=cost,
+                input_tokens=_usage.get("promptTokenCount", 0),
+                output_tokens=_usage.get("candidatesTokenCount", 0),
+                cached_tokens=_usage.get("cachedContentTokenCount", 0),
             )
             return LLM_Response(
                 text=response_text,
@@ -1166,12 +1179,16 @@ class ClaudeAI_API(LLM_API):
             if self.response_format and response_text:
                 response_text = json.loads(response_text)["python_code"]
 
-            cost = data.get("usage", {}).get("cost")
+            _usage = data.get("usage", {})
+            cost = _usage.get("cost")
 
             stats = LLM_Stats(
                 total_bytes_sent=total_bytes_sent,
                 total_bytes_received=total_bytes_received,
-                cost=cost
+                cost=cost,
+                input_tokens=_usage.get("input_tokens", 0),
+                output_tokens=_usage.get("output_tokens", 0),
+                cached_tokens=_usage.get("cache_read_input_tokens", 0),
             )
 
             return LLM_Response(

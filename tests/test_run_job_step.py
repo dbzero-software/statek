@@ -293,8 +293,8 @@ class TestRunJobStepHarnessIsolation:
 
         assert result1 is False
         assert result2 is False
-        assert job1.total_bytes_sent + job1.total_bytes_received == 1000
-        assert job2.total_bytes_sent + job2.total_bytes_received == 1200
+        assert job1.usage.total_bytes_sent + job1.usage.total_bytes_received == 1000
+        assert job2.usage.total_bytes_sent + job2.usage.total_bytes_received == 1200
         assert job1.approx_token_usage == 250
         assert job2.approx_token_usage == 300
 
@@ -839,7 +839,7 @@ class TestRunJobStepWarmupException:
 
         mock_response = MagicMock()
         mock_response.text = "exit('done')"
-        mock_response.stats = MagicMock(total_bytes_sent=0, total_bytes_received=0, cost=None)
+        mock_response.stats = LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None)
         mock_response.call_requests = None
 
         mock_api = MagicMock()
@@ -1627,6 +1627,7 @@ class TestRunJobStepDirect:
         assert job.chat_log[-1].reminder is reminder
         assert job.py_env.console[-1] == "Use report_outcome."
 
+
     @pytest.mark.asyncio
     async def test_direct_text_only_response_with_pending_subtask_continues(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
@@ -1663,7 +1664,6 @@ class TestRunJobStepDirect:
         assert isinstance(job.chat_log[-1], SubTaskLogItem)
         assert job.chat_log[-1].handler is handler
         assert job.py_env.exit_status is None
-
 
 class TestHandleDialogMarkdownMedia:
     """Tests markdown media-link preservation during dialog delivery."""

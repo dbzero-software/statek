@@ -4,8 +4,8 @@
 # Build dependencies
 build>=1.0.0
 
-# app dependencies
-dbzero==0.2.2
+# app ependencies
+dbzero==0.2.4
 pydantic==2.12.5
 pydantic-settings==2.12.0
 httpx==0.28.1

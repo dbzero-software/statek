@@ -51,6 +51,10 @@ disable = ["C0111", "C0103", "C0302", "R0801", "R0902", "R0903"]
 [tool.pylint.format]
 max-line-length = 100
 
+[tool.pylint.design]
+max-args = 7
+max-positional-arguments = 7
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
