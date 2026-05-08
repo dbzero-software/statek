@@ -190,7 +190,6 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
     effective_locale = _resolve_child_locale(parent_job, locale)
     job_def = agent.create_job_def(
         warmup_code=warmup_code,
-        shared_vars=shared_vars,
         locale=effective_locale,
         **kwargs,
     )
