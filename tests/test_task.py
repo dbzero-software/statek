@@ -324,14 +324,14 @@ class TestDelegateTask:
         assert result.job.py_env.local_state["alpha"] == 42
         assert result.job.py_env.local_state["label"] == "test"
 
-    def test_delegate_task_dict_shared_vars_reported_in_job_params(
+    def test_delegate_task_dict_shared_vars_not_reported_in_job_params(
         self, db0_fixture, supervised_agent, mock_settings
     ):
-        """Dict shared_vars surface their names in the job_def's job_params."""
+        """Dict shared_vars stay local to the child job state."""
         result = delegate_task(
             supervised_agent, shared_vars={"alpha": 1, "beta": 2}
         )
-        assert result.job.job_def.job_params["shared_vars"] == ["alpha", "beta"]
+        assert result.job.job_def.job_params is None
 
     def test_delegate_task_shared_vars_no_print_warmup_generated(
         self, db0_fixture, supervised_agent, mock_settings
@@ -446,7 +446,7 @@ class TestCreateFutureTask:
         assert isinstance(result, TaskFutureResult)
         assert result.job.status == JobStatus.READY
         assert result.job.job_def.agent is supervised_agent
-        assert result.job.job_def.job_params["shared_vars"] == ["alpha", "label"]
+        assert result.job.job_def.job_params is None
         assert result.job.py_env.local_state["alpha"] == 42
         assert result.job.py_env.local_state["label"] == "test"
         assert result.job.parent_job is None
@@ -539,7 +539,6 @@ class TestCreateFutureTask:
 
         assert result.job.job_def.job_params["data_type"] == "orders"
         assert result.job.job_def.job_params["user"] == "Alice"
-        assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
 
 
 class TestCreateNewJob:
@@ -573,7 +572,7 @@ class TestCreateNewJob:
         assert job.job_def.agent is supervised_agent
         assert job.job_def.locale is parent_locale
         assert job.job_def.job_params["topic"] == "orders"
-        assert job.job_def.job_params["shared_vars"] == ["alpha"]
+        assert "shared_vars" not in job.job_def.job_params
         assert job.py_env.local_state["alpha"] == 42
         assert job.parent_job is parent
         assert len(job.error_handlers) == 1
@@ -980,7 +979,7 @@ class TestDelegateMuteDialog:
         assert result.job.py_env.local_state["alpha"] == 42
         assert result.job.job_def.locale is locale
         assert result.job.job_def.job_params["topic"] == "weather"
-        assert result.job.job_def.job_params["shared_vars"] == ["alpha"]
+        assert "shared_vars" not in result.job.job_def.job_params
 
     def test_delegate_mute_dialog_inherits_parent_locale_when_unspecified(
         self, db0_fixture, mock_settings
@@ -1127,15 +1126,15 @@ class TestStartDialog:
         assert job.py_env.local_state["alpha"] == 42
         assert job.py_env.local_state["label"] == "test"
 
-    def test_start_dialog_dict_shared_vars_reported_in_job_params(
+    def test_start_dialog_dict_shared_vars_not_reported_in_job_params(
         self, db0_fixture, mock_settings
     ):
-        """Dict shared_vars surface their names in the job_def's job_params."""
+        """Dict shared_vars stay local to the dialog job state."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(
             agent, message="hi", shared_vars={"alpha": 1, "beta": 2}
         )
-        assert job.job_def.job_params["shared_vars"] == ["alpha", "beta"]
+        assert job.job_def.job_params is None
 
     def test_start_dialog_shared_vars_no_print_warmup_generated(
         self, db0_fixture, mock_settings
@@ -1385,6 +1384,7 @@ class TestSubmitNewJob:
         job = submit_new_job(supervised_agent, shared_vars=data)
         assert job.py_env.local_state["count"] == 42
         assert job.py_env.local_state["label"] == "test"
+        assert job.job_def.job_params is None
 
     def test_kwargs_forwarded_as_job_params(self, db0_fixture, mock_settings):
         """Extra kwargs become job_params on the JobDef."""
