@@ -3,12 +3,30 @@
 import os
 import logging
 from functools import lru_cache
-from typing import Optional, Dict
+from typing import Any, Optional, Dict
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from statek.chat_style import ChatStyle  # noqa: F401  # re-exported for backward compatibility
+from statek.multi_source_settings import (
+    AwsSecretsManagerSource,
+    MultiSourceBaseSettings,
+    SettingValuesSource,
+)
 from statek.prompt_config import PromptDef, load_prompt_files
 from statek.docstring import ACL_Item, Statek_ACL
+
+AWS_SECRETS_MANAGER_SETTINGS_SECRET_ID = "AWS_SECRETS_MANAGER_SETTINGS_SECRET_ID"
+
+
+def get_settings_sources() -> list[SettingValuesSource]:
+    """
+    Build settings sources enabled for this process.
+    """
+    secret_id = os.getenv(AWS_SECRETS_MANAGER_SETTINGS_SECRET_ID)
+    if not secret_id:
+        return []
+
+    return [AwsSecretsManagerSource(secret_id)]
 
 
 class LLM_API_Settings(BaseSettings):
@@ -28,7 +46,7 @@ class LLM_API_Settings(BaseSettings):
     model_config = SettingsConfigDict(extra='ignore')
 
 
-class StatekSettings(BaseSettings):
+class StatekSettings(MultiSourceBaseSettings):
     """Main settings class for Statek, aggregating LLM API settings by provider.
 
     Environment variables should be prefixed with the provider name:
@@ -164,8 +182,14 @@ class StatekSettings(BaseSettings):
                 if self.prompt_files_dir else {}
             )
 
-    @staticmethod
-    def _parse_llm_providers_from_env() -> Dict[str, LLM_API_Settings]:  # pylint: disable=too-many-branches
+    def _get_value_from_sources_or_env(self, env_var: str):
+        value = self.get_value_from_sources(env_var)
+        if value is not None:
+            return value
+
+        return os.environ.get(env_var)
+
+    def _parse_llm_providers_from_env(self) -> Dict[str, LLM_API_Settings]:
         """Parse environment variables to extract LLM provider settings.
 
         Looks for environment variables with the pattern:
@@ -174,30 +198,32 @@ class StatekSettings(BaseSettings):
         Returns:
             Dictionary mapping provider names to their LLM_API_Settings
         """
-        providers: Dict[str, Dict[str, str]] = {}
+        providers: Dict[str, Dict[str, Any]] = {}
 
-        # Scan environment variables for provider-prefixed keys
-        for key, value in os.environ.items():
-            if '_API_URL' in key:
-                provider = key.replace('_API_URL', '')
-                if provider not in providers:
-                    providers[provider] = {}
-                providers[provider]['api_url'] = value
-            elif '_API_KEY' in key:
-                provider = key.replace('_API_KEY', '')
-                if provider not in providers:
-                    providers[provider] = {}
-                providers[provider]['api_key'] = value
-            elif '_RESPONSE_FORMAT_FILE' in key:
-                provider = key.replace('_RESPONSE_FORMAT_FILE', '')
-                if provider not in providers:
-                    providers[provider] = {}
-                providers[provider]['response_format_file'] = value
-            elif '_USE_PROMPT_CACHING' in key:
-                provider = key.replace('_USE_PROMPT_CACHING', '')
-                if provider not in providers:
-                    providers[provider] = {}
-                providers[provider]['use_prompt_caching'] = value.lower() in ('true', '1', 'yes')
+        api_url_suffix = '_API_URL'
+        for key in os.environ:
+            if not key.endswith(api_url_suffix):
+                continue
+
+            provider = key[:-len(api_url_suffix)]
+            settings_dict: Dict[str, Any] = {}
+
+            for field_name, env_suffix in [
+                ('api_url', '_API_URL'),
+                ('api_key', '_API_KEY'),
+                ('response_format_file', '_RESPONSE_FORMAT_FILE'),
+                ('use_prompt_caching', '_USE_PROMPT_CACHING'),
+            ]:
+                value = self._get_value_from_sources_or_env(f'{provider}{env_suffix}')
+                if value is None:
+                    continue
+
+                if field_name == 'use_prompt_caching':
+                    settings_dict[field_name] = str(value).lower() in ('true', '1', 'yes')
+                else:
+                    settings_dict[field_name] = value
+
+            providers[provider] = settings_dict
 
         # Create LLM_API_Settings instances for each provider
         llm_settings = {}
@@ -263,13 +289,13 @@ class StatekSettings(BaseSettings):
 @lru_cache()
 def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Settings]:
     """Get LLM_API_Settings for a specific provider or the default provider."""
-    settings = StatekSettings()
+    settings = StatekSettings(sources=get_settings_sources())
     return settings.get_provider_settings(provider)
 
 @lru_cache()
 def get_statek_settings() -> StatekSettings:
     """Get the cached StatekSettings instance."""
-    return StatekSettings()
+    return StatekSettings(sources=get_settings_sources())
 
 
 def get_prompt_def(name: str) -> Optional[PromptDef]:

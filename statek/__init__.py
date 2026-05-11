@@ -2,7 +2,12 @@
 
 from typing import Optional
 
-from .settings import LLM_API_Settings, StatekSettings
+from .settings import LLM_API_Settings, StatekSettings, get_statek_settings
+from .multi_source_settings import (
+    AwsSecretsManagerSource,
+    MultiSourceBaseSettings,
+    SettingValuesSource,
+)
 from .prompt_config import PromptDef, update_prompt_config
 from .llm_api import (
     LLM_API, OpenRouter_API, OpenAI_API, VertexAI_API, ClaudeAI_API,
@@ -33,7 +38,7 @@ def init(settings: Optional[StatekSettings] = None) -> None:
     Loads model pricing from statek_model_info_dir when configured.
     """
     if settings is None:
-        settings = StatekSettings()
+        settings = get_statek_settings()
     if settings.statek_model_info_dir:
         from .model_pricing import init_model_pricing  # pylint: disable=import-outside-toplevel
         init_model_pricing(settings.statek_model_info_dir)
@@ -43,6 +48,9 @@ __all__ = [
     "init",
     "LLM_API_Settings",
     "StatekSettings",
+    "AwsSecretsManagerSource",
+    "MultiSourceBaseSettings",
+    "SettingValuesSource",
     "PromptDef",
     "update_prompt_config",
     "LLM_API",
