@@ -4,6 +4,7 @@ from typing import Any, List, Optional, Tuple
 
 import dbzero as db0
 
+from statek.agents.agent import SupervisedAgent
 from statek.fifo_queue import FiFoQueue
 from statek.rpc_integration import rpc as db0_rpc
 
@@ -18,6 +19,7 @@ class StatekPushQueue:
 
     def __init__(self):
         self.__job_console_queue = FiFoQueue()
+        self.__agent_queue = FiFoQueue()
 
     def is_empty(self) -> bool:
         return self.__job_console_queue.is_empty()
@@ -31,6 +33,27 @@ class StatekPushQueue:
             message: Arbitrary string-convertible object to push.
         """
         self.__job_console_queue.push_back(job_uuid=job_uuid, message=message)
+
+    def push_to_agent_queue(self, agent: SupervisedAgent, event: Any):
+        """Append an event to the queue for a specific supervised agent.
+
+        Args:
+            agent: Destination agent instance.
+            event: Agent/application-specific event object.
+        """
+        self.__agent_queue.push_back(agent=agent, event=event)
+
+    def has_agent_events(
+        self,
+        agent: SupervisedAgent,
+        max_scan: int = 100,
+    ) -> bool:
+        """Check whether the agent event queue has an entry for *agent*."""
+        agent_uuid = db0.uuid(agent)
+        return self.__agent_queue.has_item(
+            filter=lambda **kwargs: db0.uuid(kwargs.get("agent")) == agent_uuid,
+            max_scan=max_scan,
+        ) is True
 
     def has_job(self, job_uuid: str, max_scan: int = 100) -> Optional[bool]:
         """Check whether a job UUID is present in the job-console queue.
@@ -74,3 +97,26 @@ class StatekPushQueue:
                 job_filter = _filter_by_uuid
         items = self.__job_console_queue.pop_front(count, filter=job_filter)
         return [(item["job_uuid"], item["message"]) for item in items]
+
+    @db0_rpc.remote
+    def pop_from_agent_queue(
+        self,
+        agent: SupervisedAgent,
+        count: int,
+    ) -> List[Any]:
+        """Retrieve and remove up to *count* events queued for *agent*.
+
+        Args:
+            agent: Destination agent instance.
+            count: Maximum number of event objects to retrieve.
+
+        Returns:
+            List of event objects in FIFO order.
+        """
+        agent_uuid = db0.uuid(agent)
+
+        def _filter_by_agent(**kwargs):
+            return db0.uuid(kwargs["agent"]) == agent_uuid
+
+        items = self.__agent_queue.pop_front(count, filter=_filter_by_agent)
+        return [item["event"] for item in items]

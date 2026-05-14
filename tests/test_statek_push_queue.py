@@ -2,7 +2,7 @@
 # pylint: disable=no-member,unused-argument,too-few-public-methods
 import dbzero as db0
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.agents.agent import Agent
+from statek.agents.agent import Agent, SupervisedAgent
 from statek.prompt_config import make_system_prompt
 from statek.statek_push_queue import StatekPushQueue
 
@@ -30,6 +30,15 @@ def _make_job_on_current_prefix():
     job_def = JobDef(agent=agent)
     return Job(job_def=job_def, model_family="test", model="test-model",
                job_status=JobStatus.READY)  # pylint: disable=no-member
+
+
+def _make_supervised_agent(role="test-agent"):
+    return SupervisedAgent(
+        role=role,
+        _system_prompt=make_system_prompt("test"),
+        _metadata={"MODEL": "test-model"},
+        _tools=[],
+    )
 
 
 @db0.memo
@@ -270,3 +279,57 @@ def test_has_job_does_not_remove_items_from_queue(db0_fixture):
         (first_uuid, "first"),
         (second_uuid, "second"),
     ]
+
+
+def test_pop_from_agent_queue_returns_empty_list_when_empty(db0_fixture):
+    queue = StatekPushQueue()
+    agent = _make_supervised_agent()
+
+    assert queue.pop_from_agent_queue(agent, 10) == []
+
+
+def test_pop_from_agent_queue_returns_pushed_events(db0_fixture):
+    queue = StatekPushQueue()
+    agent = _make_supervised_agent()
+
+    queue.push_to_agent_queue(agent, "event")
+
+    assert queue.pop_from_agent_queue(agent, 10) == ["event"]
+
+
+def test_pop_from_agent_queue_preserves_memo_event_objects(db0_fixture):
+    queue = StatekPushQueue()
+    agent = _make_supervised_agent()
+    event = _QueuedMessage("event-object")
+
+    queue.push_to_agent_queue(agent, event)
+
+    assert queue.pop_from_agent_queue(agent, 10) == [event]
+
+
+def test_pop_from_agent_queue_respects_count_and_fifo_order(db0_fixture):
+    queue = StatekPushQueue()
+    agent = _make_supervised_agent()
+
+    for i in range(5):
+        queue.push_to_agent_queue(agent, f"event{i}")
+
+    assert queue.pop_from_agent_queue(agent, 3) == [
+        "event0",
+        "event1",
+        "event2",
+    ]
+    assert queue.pop_from_agent_queue(agent, 10) == ["event3", "event4"]
+
+
+def test_pop_from_agent_queue_filters_by_agent(db0_fixture):
+    queue = StatekPushQueue()
+    agent_a = _make_supervised_agent("agent-a")
+    agent_b = _make_supervised_agent("agent-b")
+
+    queue.push_to_agent_queue(agent_a, "for-a-1")
+    queue.push_to_agent_queue(agent_b, "for-b")
+    queue.push_to_agent_queue(agent_a, "for-a-2")
+
+    assert queue.pop_from_agent_queue(agent_a, 10) == ["for-a-1", "for-a-2"]
+    assert queue.pop_from_agent_queue(agent_b, 10) == ["for-b"]

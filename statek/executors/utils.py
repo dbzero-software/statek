@@ -6,7 +6,7 @@ import asyncio
 import builtins
 import re
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Tuple, Union
+from typing import Callable, Optional, Sequence, Set, Tuple, TYPE_CHECKING, Union
 from contextlib import contextmanager
 import dbzero as db0
 
@@ -34,6 +34,9 @@ from statek.utils import (
     parse_dialog,
     strip_markup
 )
+
+if TYPE_CHECKING:
+    from statek.agents.agent import Agent
 
 STATEK_LOGGER = get_statek_logger()
 MARKDOWN_MEDIA_LINK_PATTERN = re.compile(r'!?\[[^\]]*\]\([^\s)]+(?:\s+"[^"]*")?\)')
@@ -1070,6 +1073,54 @@ def process_push_notifications(step_size=100, max_count=500, prefix: Optional[Un
                 processed += 1
 
 
+def process_agent_events(agents: Optional[Set['Agent']] = None, max_count=100):
+    """Create jobs for queued events addressed to supervised agents.
+
+    Each agent warmup must reference exactly one external local. The event is
+    injected into the new job under that local name.
+    """
+    from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+    from statek.task import create_new_job  # pylint: disable=import-outside-toplevel,cyclic-import
+
+    if max_count <= 0:
+        return
+
+    queues = []
+    for queue_prefix in db0.get_prefixes():
+        queue = db0.find_singleton(StatekPushQueue, queue_prefix.name)
+        if queue is not None:
+            queues.append(queue)
+    if not queues:
+        return
+
+    agents_to_process = (
+        list(db0.find(SupervisedAgent)) if agents is None else list(agents)
+    )
+    agent_local_names = []
+    for agent in agents_to_process:
+        if not any(queue.has_agent_events(agent, max_scan=max_count) for queue in queues):
+            continue
+        referenced_locals = agent.referenced_locals
+        if len(referenced_locals) != 1:
+            raise ValueError(
+                f"Agent '{agent.role}' warmup definition must reference exactly "
+                f"one external local, got {referenced_locals!r}"
+            )
+        agent_local_names.append((agent, referenced_locals[0]))
+
+    processed = 0
+    for queue in queues:
+        if processed >= max_count:
+            break
+        for agent, local_name in agent_local_names:
+            if processed >= max_count:
+                break
+            events = queue.pop_from_agent_queue(agent, max_count - processed)
+            for event in events:
+                create_new_job(agent, shared_vars={local_name: event})
+                processed += 1
+
+
 def unsuspend_jobs():
     """
     Review continuation conditions of suspended jobs and change their status to STARTED
@@ -1161,6 +1212,8 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
         unsuspend_jobs()
 
         process_push_notifications()
+
+        process_agent_events(max_count=max(0, max_concurrency - len(pending_tasks)))
 
         if start_jobs_func is not None:
             available_capacity = max_concurrency - len(pending_tasks)
