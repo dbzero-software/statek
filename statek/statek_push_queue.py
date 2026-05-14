@@ -12,14 +12,15 @@ from statek.rpc_integration import rpc as db0_rpc
 class StatekPushQueue:
     """Singleton wrapper over one or more FiFoQueues for specific use-cases.
 
-    Manages a dedicated queue per channel (currently: job_console).
+    Manages a dedicated queue per channel (currently: job_console) and a
+    dedicated event queue per supervised agent.
     Both push and pop are decorated with @db0_rpc.remote so they can be
     invoked across prefix boundaries.
     """
 
     def __init__(self):
         self.__job_console_queue = FiFoQueue()
-        self.__agent_queue = FiFoQueue()
+        self.__agent_queues = {}
 
     def is_empty(self) -> bool:
         return self.__job_console_queue.is_empty()
@@ -41,19 +42,15 @@ class StatekPushQueue:
             agent: Destination agent instance.
             event: Agent/application-specific event object.
         """
-        self.__agent_queue.push_back(agent=agent, event=event)
+        self.__get_agent_queue(agent).push_back(event=event)
 
     def has_agent_events(
         self,
         agent: SupervisedAgent,
-        max_scan: int = 100,
     ) -> bool:
-        """Check whether the agent event queue has an entry for *agent*."""
-        agent_uuid = db0.uuid(agent)
-        return self.__agent_queue.has_item(
-            filter=lambda **kwargs: db0.uuid(kwargs.get("agent")) == agent_uuid,
-            max_scan=max_scan,
-        ) is True
+        """Check whether *agent* has a non-empty event queue."""
+        queue = self.__get_agent_queue(agent, create=False)
+        return queue is not None and not queue.is_empty()
 
     def has_job(self, job_uuid: str, max_scan: int = 100) -> Optional[bool]:
         """Check whether a job UUID is present in the job-console queue.
@@ -113,10 +110,22 @@ class StatekPushQueue:
         Returns:
             List of event objects in FIFO order.
         """
-        agent_uuid = db0.uuid(agent)
-
-        def _filter_by_agent(**kwargs):
-            return db0.uuid(kwargs["agent"]) == agent_uuid
-
-        items = self.__agent_queue.pop_front(count, filter=_filter_by_agent)
+        queue = self.__get_agent_queue(agent, create=False)
+        if queue is None:
+            return []
+        items = queue.pop_front(count)
         return [item["event"] for item in items]
+
+    def __get_agent_queue(
+        self,
+        agent: SupervisedAgent,
+        create: bool = True,
+    ) -> Optional[FiFoQueue]:
+        """Return the dedicated queue for *agent*, creating it when requested."""
+        agent_uuid = db0.uuid(agent)
+        if agent_uuid not in self.__agent_queues:
+            if not create:
+                return None
+            self.__agent_queues[agent_uuid] = FiFoQueue()
+
+        return self.__agent_queues[agent_uuid]

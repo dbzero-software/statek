@@ -1098,7 +1098,7 @@ def process_agent_events(agents: Optional[Set['Agent']] = None, max_count=100):
     )
     agent_local_names = []
     for agent in agents_to_process:
-        if not any(queue.has_agent_events(agent, max_scan=max_count) for queue in queues):
+        if not any(queue.has_agent_events(agent) for queue in queues):
             continue
         referenced_locals = agent.referenced_locals
         if len(referenced_locals) != 1:

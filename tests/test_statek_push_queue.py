@@ -288,6 +288,21 @@ def test_pop_from_agent_queue_returns_empty_list_when_empty(db0_fixture):
     assert queue.pop_from_agent_queue(agent, 10) == []
 
 
+def test_has_agent_events_checks_agent_queue_emptiness(db0_fixture):
+    queue = StatekPushQueue()
+    agent = _make_supervised_agent()
+
+    assert queue.has_agent_events(agent) is False
+
+    queue.push_to_agent_queue(agent, "event")
+
+    assert queue.has_agent_events(agent) is True
+
+    queue.pop_from_agent_queue(agent, 10)
+
+    assert queue.has_agent_events(agent) is False
+
+
 def test_pop_from_agent_queue_returns_pushed_events(db0_fixture):
     queue = StatekPushQueue()
     agent = _make_supervised_agent()
