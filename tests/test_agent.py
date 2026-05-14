@@ -10,6 +10,7 @@ from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import SystemPrompt, make_system_prompt, parse_system_prompt
 from statek.task_difficulty import TaskDifficulty
+from statek.utils import CodeBlock
 from tests.conftest import clock, docstr, exit_tool
 
 
@@ -406,6 +407,69 @@ class TestWarmupDef:
         agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
         result = agent.update_warmup_def(None)
         assert result is False
+
+    def test_referenced_locals_empty_without_warmup_def(self, db0_fixture):  # pylint: disable=unused-argument
+        """referenced_locals is empty when the agent has no warmup definition."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        assert agent.referenced_locals == []
+
+    def test_referenced_locals_reads_agent_warmup_def(self, db0_fixture):  # pylint: disable=unused-argument
+        """referenced_locals returns external names from the agent warmup definition."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        agent.update_warmup_def("user = message.sender\nprint(user, locale)")
+
+        assert agent.referenced_locals == ["message", "locale"]
+
+    def test_referenced_locals_combines_multi_block_warmup(self, db0_fixture):  # pylint: disable=unused-argument
+        """referenced_locals preserves first-use order across warmup blocks."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        agent.update_warmup_def(
+            "user = message.sender\n"
+            "# ----------\n"
+            "result = format_message(user, locale, message)"
+        )
+
+        assert agent.referenced_locals == ["message", "format_message", "locale"]
+
+    def test_referenced_locals_handles_code_block_warmup(self, db0_fixture):  # pylint: disable=unused-argument
+        """referenced_locals supports parsed CodeBlock warmup values."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        agent.warmup_def = WarmupDef(
+            warmup_code=CodeBlock(code="result = event.payload", tool_calls=[])
+        )
+
+        assert agent.referenced_locals == ["event"]
+
+    def test_referenced_locals_is_cached(self, db0_fixture):  # pylint: disable=unused-argument
+        """referenced_locals computes once until the warmup definition changes."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        agent.update_warmup_def("user = message.sender")
+
+        with patch("statek.task.get_referenced_locals", return_value=["message"]) as parser:
+            assert agent.referenced_locals == ["message"]
+            assert agent.referenced_locals == ["message"]
+
+        assert parser.call_count == 1
+
+    def test_referenced_locals_cache_cleared_on_warmup_update(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_warmup_def clears cached referenced locals when warmup changes."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        agent.update_warmup_def("user = message.sender")
+        assert agent.referenced_locals == ["message"]
+
+        agent.update_warmup_def("payload = event.payload")
+
+        assert agent.referenced_locals == ["event"]
+
+    def test_referenced_locals_cache_cleared_when_warmup_removed(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_warmup_def clears cached referenced locals when warmup is removed."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        agent.update_warmup_def("user = message.sender")
+        assert agent.referenced_locals == ["message"]
+
+        agent.update_warmup_def(None)
+
+        assert agent.referenced_locals == []
 
 
 class TestCreateJobDefWarmup:

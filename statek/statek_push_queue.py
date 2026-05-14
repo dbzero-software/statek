@@ -4,6 +4,7 @@ from typing import Any, List, Optional, Tuple
 
 import dbzero as db0
 
+from statek.agents.agent import SupervisedAgent
 from statek.fifo_queue import FiFoQueue
 from statek.rpc_integration import rpc as db0_rpc
 
@@ -11,13 +12,15 @@ from statek.rpc_integration import rpc as db0_rpc
 class StatekPushQueue:
     """Singleton wrapper over one or more FiFoQueues for specific use-cases.
 
-    Manages a dedicated queue per channel (currently: job_console).
+    Manages a dedicated queue per channel (currently: job_console) and a
+    dedicated event queue per supervised agent.
     Both push and pop are decorated with @db0_rpc.remote so they can be
     invoked across prefix boundaries.
     """
 
     def __init__(self):
         self.__job_console_queue = FiFoQueue()
+        self.__agent_queues = {}
 
     def is_empty(self) -> bool:
         return self.__job_console_queue.is_empty()
@@ -31,6 +34,23 @@ class StatekPushQueue:
             message: Arbitrary string-convertible object to push.
         """
         self.__job_console_queue.push_back(job_uuid=job_uuid, message=message)
+
+    def push_to_agent_queue(self, agent: SupervisedAgent, event: Any):
+        """Append an event to the queue for a specific supervised agent.
+
+        Args:
+            agent: Destination agent instance.
+            event: Agent/application-specific event object.
+        """
+        self.__get_agent_queue(agent).push_back(event=event)
+
+    def has_agent_events(
+        self,
+        agent: SupervisedAgent,
+    ) -> bool:
+        """Check whether *agent* has a non-empty event queue."""
+        queue = self.__get_agent_queue(agent, create=False)
+        return queue is not None and not queue.is_empty()
 
     def has_job(self, job_uuid: str, max_scan: int = 100) -> Optional[bool]:
         """Check whether a job UUID is present in the job-console queue.
@@ -74,3 +94,38 @@ class StatekPushQueue:
                 job_filter = _filter_by_uuid
         items = self.__job_console_queue.pop_front(count, filter=job_filter)
         return [(item["job_uuid"], item["message"]) for item in items]
+
+    @db0_rpc.remote
+    def pop_from_agent_queue(
+        self,
+        agent: SupervisedAgent,
+        count: int,
+    ) -> List[Any]:
+        """Retrieve and remove up to *count* events queued for *agent*.
+
+        Args:
+            agent: Destination agent instance.
+            count: Maximum number of event objects to retrieve.
+
+        Returns:
+            List of event objects in FIFO order.
+        """
+        queue = self.__get_agent_queue(agent, create=False)
+        if queue is None:
+            return []
+        items = queue.pop_front(count)
+        return [item["event"] for item in items]
+
+    def __get_agent_queue(
+        self,
+        agent: SupervisedAgent,
+        create: bool = True,
+    ) -> Optional[FiFoQueue]:
+        """Return the dedicated queue for *agent*, creating it when requested."""
+        agent_uuid = db0.uuid(agent)
+        if agent_uuid not in self.__agent_queues:
+            if not create:
+                return None
+            self.__agent_queues[agent_uuid] = FiFoQueue()
+
+        return self.__agent_queues[agent_uuid]

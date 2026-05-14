@@ -403,6 +403,37 @@ class SupervisedAgent(Agent):
     """
     warmup_def: Optional[WarmupDef] = None
 
+    _X__ref_locals: Optional[List[str]] = None
+
+    @property
+    def referenced_locals(self) -> List[str]:
+        """External local names referenced by this agent's warmup definition."""
+        if self._X__ref_locals is not None:
+            return self._X__ref_locals
+
+        if self.warmup_def is None or self.warmup_def.warmup_code is None:
+            self._X__ref_locals = []
+            return self._X__ref_locals
+
+        from statek.task import get_referenced_locals  # pylint: disable=import-outside-toplevel,cyclic-import
+
+        warmup_code = self.warmup_def.warmup_code
+        code_blocks = []
+
+        def _append_code_block(block):
+            code = block.code if isinstance(block, CodeBlock) else block
+            if code:
+                code_blocks.append(code)
+
+        if isinstance(warmup_code, (str, CodeBlock)):
+            _append_code_block(warmup_code)
+        else:
+            for block in warmup_code:
+                _append_code_block(block)
+
+        self._X__ref_locals = list(get_referenced_locals("\n".join(code_blocks)))
+        return self._X__ref_locals
+
     def update_warmup_def(self, unparsed_warmup_def: str) -> bool:
         """Set or update warmup_def only if it has changed.
 
@@ -420,11 +451,13 @@ class SupervisedAgent(Agent):
             return False
         if new_value is None:
             self.warmup_def = None
+            self._X__ref_locals = None
             STATEK_LOGGER.debug("Agent '%s' warmup_def cleared", self.role)
             return True
         if self.warmup_def is not None and self.warmup_def.warmup_code == new_value:
             return False
         self.warmup_def = WarmupDef(warmup_code=new_value)
+        self._X__ref_locals = None
         STATEK_LOGGER.debug("Agent '%s' warmup_def updated", self.role)
         return True
 
