@@ -192,7 +192,7 @@ class TestGetReferencedLocals:
             "send(user, channel)\n"
         )
 
-        assert list(get_referenced_locals(code)) == ["message", "send", "channel"]
+        assert list(get_referenced_locals(code)) == ["message", "channel"]
 
     def test_deduplicates_repeated_references(self):
         code = "result = message.sender + message.body"
@@ -222,16 +222,22 @@ class TestGetReferencedLocals:
             "result = format_message(user, text, locale)\n"
         )
 
-        assert list(get_referenced_locals(code)) == [
-            "message",
-            "format_message",
-            "locale",
-        ]
+        assert list(get_referenced_locals(code)) == ["message", "locale"]
 
     def test_ignores_builtin_names(self):
         code = "result = len(items) + max(values)"
 
         assert list(get_referenced_locals(code)) == ["items", "values"]
+
+    def test_ignores_direct_function_callees(self):
+        code = "result = transform(message, locale=locale)"
+
+        assert list(get_referenced_locals(code)) == ["message", "locale"]
+
+    def test_method_call_receivers_are_referenced(self):
+        code = "result = client.transform(message)"
+
+        assert list(get_referenced_locals(code)) == ["client", "message"]
 
     def test_handles_comprehension_targets_as_local(self):
         code = "result = [item.value + offset for item in items if item.enabled]"

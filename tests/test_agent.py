@@ -429,7 +429,7 @@ class TestWarmupDef:
             "result = format_message(user, locale, message)"
         )
 
-        assert agent.referenced_locals == ["message", "format_message", "locale"]
+        assert agent.referenced_locals == ["message", "locale"]
 
     def test_referenced_locals_handles_code_block_warmup(self, db0_fixture):  # pylint: disable=unused-argument
         """referenced_locals supports parsed CodeBlock warmup values."""
