@@ -56,6 +56,14 @@ def test_statek_push_queue_is_singleton(db0_fixture):
     assert q1 is q2
 
 
+def test_statek_push_queue_can_be_created_as_scoped_singleton(db0_fixture):
+    queue = StatekPushQueue(prefix="queue-prefix")
+
+    assert db0.get_prefix_of(queue).name == "queue-prefix"
+    assert StatekPushQueue(prefix="queue-prefix") is queue
+    assert db0.find_singleton(StatekPushQueue, prefix="queue-prefix") is queue
+
+
 def test_push_to_job_console_accepts_job_uuid_and_message(db0_fixture):
     job = _make_job(db0_fixture)
     job_uuid = db0.uuid(job)

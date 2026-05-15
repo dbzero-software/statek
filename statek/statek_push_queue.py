@@ -18,7 +18,8 @@ class StatekPushQueue:
     invoked across prefix boundaries.
     """
 
-    def __init__(self):
+    def __init__(self, prefix=None):
+        db0.set_prefix(self, prefix)
         self.__job_console_queue = FiFoQueue()
         self.__agent_queues = {}
 

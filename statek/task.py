@@ -65,6 +65,16 @@ class _ReferencedLocalsCollector(ast.NodeVisitor):
         if isinstance(node.ctx, ast.Load):
             self.add_reference(node.id)
 
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Attribute):
+            self.visit(node.func.value)
+        elif not isinstance(node.func, ast.Name):
+            self.visit(node.func)
+        for arg in node.args:
+            self.visit(arg)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+
     def visit_Assign(self, node):
         self.visit(node.value)
         for target in node.targets:
