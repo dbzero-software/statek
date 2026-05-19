@@ -20,7 +20,11 @@ if TYPE_CHECKING:
     from statek.llm_api import CallParams
 
 ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
-ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
+ParsedWarmupBlock = namedtuple(
+    "ParsedWarmupBlock",
+    ["code", "tool_calls", "metadata"],
+    defaults=[None],
+)
 
 
 @db0.memo
@@ -104,6 +108,10 @@ class CodeBlock:
         return hash((self.code, tcs))
 
 _STATEK_TOOL_MARKER = "#STATEK: as tool"
+_STATEK_METADATA_RE = re.compile(
+    r'^\s*#STATEK:\s*(?P<key>[A-Za-z_]\w*)\s*=\s*(?P<value>.+?)\s*$'
+)
+_STATEK_METADATA_VALUE_TYPES = (str, int, float, bool, type(None))
 
 
 def parse_func_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-builtin
@@ -204,28 +212,54 @@ def parse_warmup_block(code: str) -> ParsedWarmupBlock:
     """Parse a single warmup block into code and tool call definitions.
 
     Lines annotated with ``#STATEK: as tool`` are extracted as tool calls
-    and removed from the returned code field.
+    and removed from the returned code field. Full-line ``#STATEK: key = value``
+    comments are extracted as metadata and removed from the returned code field.
 
     Args:
         code: Python code block to be parsed
 
     Returns:
-        ParsedWarmupBlock with clean code and a list of ParsedFuncCall tool calls
+        ParsedWarmupBlock with clean code, ParsedFuncCall tool calls, and metadata
 
     Raises:
-        ValueError: if an annotated line is not a valid function call
+        ValueError: if an annotated line is not a valid function call or metadata
         SyntaxError: if an annotated line contains invalid Python syntax
     """
     clean_lines = []
     tool_calls = []
+    metadata = {}
     for line in code.splitlines():
+        metadata_match = _STATEK_METADATA_RE.match(line)
+        if metadata_match:
+            key = metadata_match.group('key')
+            value_text = metadata_match.group('value')
+            try:
+                value = ast.literal_eval(value_text)
+            except (ValueError, SyntaxError) as exc:
+                raise ValueError(
+                    f"Invalid warmup metadata value for {key!r}: {value_text!r}"
+                ) from exc
+            if not isinstance(value, _STATEK_METADATA_VALUE_TYPES):
+                raise ValueError(
+                    f"Invalid warmup metadata value for {key!r}: {value_text!r}"
+                )
+            metadata[key] = value
+            continue
+
+        if line.lstrip().startswith('#STATEK:'):
+            raise ValueError(f"Invalid warmup metadata line: {line!r}")
+
         marker_pos = line.find(_STATEK_TOOL_MARKER)
         if marker_pos != -1:
             call_str = line[:marker_pos].rstrip()
             tool_calls.append(parse_func_call(call_str))
         else:
             clean_lines.append(line)
-    return ParsedWarmupBlock(code="\n".join(clean_lines), tool_calls=tool_calls)
+    return ParsedWarmupBlock(
+        code="\n".join(clean_lines),
+        tool_calls=tool_calls,
+        metadata=metadata,
+    )
 
 
 def build_warmup_code(

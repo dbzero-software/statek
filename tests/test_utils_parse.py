@@ -171,6 +171,64 @@ def test_parse_warmup_block_no_tool_calls():
     result = parse_warmup_block(code)
     assert result.code == code
     assert result.tool_calls == []
+    assert result.metadata == {}
+
+
+def test_parse_warmup_block_metadata_line():
+    """A #STATEK metadata line is parsed and removed from code."""
+    code = "#STATEK: hidden = True\ninit_shared_context(user)"
+    result = parse_warmup_block(code)
+    assert result.code == "init_shared_context(user)"
+    assert result.tool_calls == []
+    assert result.metadata == {"hidden": True}
+
+
+def test_parse_warmup_block_metadata_all_allowed_scalar_values():
+    """Metadata accepts string, numeric, bool, and None constants."""
+    code = (
+        "#STATEK: label = 'startup'\n"
+        "#STATEK: priority = 3\n"
+        "#STATEK: score = 0.75\n"
+        "#STATEK: enabled = False\n"
+        "#STATEK: owner = None\n"
+        "x = 1"
+    )
+    result = parse_warmup_block(code)
+    assert result.code == "x = 1"
+    assert result.metadata == {
+        "label": "startup",
+        "priority": 3,
+        "score": 0.75,
+        "enabled": False,
+        "owner": None,
+    }
+
+
+def test_parse_warmup_block_metadata_and_tool_call():
+    """Metadata lines and #STATEK: as tool lines are parsed independently."""
+    code = (
+        "#STATEK: hidden = True\n"
+        "list_of_examples() #STATEK: as tool\n"
+        "print('ready')"
+    )
+    result = parse_warmup_block(code)
+    assert result.code == "print('ready')"
+    assert result.tool_calls == [
+        ParsedFuncCall(name='list_of_examples', args=[], kwargs=None)
+    ]
+    assert result.metadata == {"hidden": True}
+
+
+def test_parse_warmup_block_metadata_rejects_non_literal_value():
+    """Metadata values must be literal constants only."""
+    with pytest.raises(ValueError, match="metadata"):
+        parse_warmup_block("#STATEK: hidden = user.is_hidden\nx = 1")
+
+
+def test_parse_warmup_block_metadata_rejects_collection_value():
+    """Collection literals are not allowed as warmup metadata values."""
+    with pytest.raises(ValueError, match="metadata"):
+        parse_warmup_block("#STATEK: tags = ['a', 'b']\nx = 1")
 
 
 def test_parse_warmup_block_single_tool_call():
