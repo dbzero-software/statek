@@ -58,13 +58,16 @@ CallSpecWrapper = namedtuple("CallSpecWrapper", ["id", "func_name", "args", "kwa
 @db0.memo
 @dataclass
 class CodeBlock:
-    """A block of executable Python code with optional tool-call requests."""
+    """A block of executable Python code with optional tool-call requests and metadata."""
     code: Optional[str] = None
     tool_calls: Optional[Sequence[CallSpec]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
     def __eq__(self, other):
         if isinstance(other, CodeBlock):
             if self.code != other.code:
+                return False
+            if _metadata_dict(self) != _metadata_dict(other):
                 return False
             self_tcs = list(self.tool_calls) if self.tool_calls else []
             other_tcs = list(other.tool_calls) if other.tool_calls else []
@@ -75,7 +78,7 @@ class CodeBlock:
                 and a.args == b.args and a.kwargs == b.kwargs
                 for a, b in zip(self_tcs, other_tcs)
             )
-        if isinstance(other, str) and not self.tool_calls:
+        if isinstance(other, str) and not self.tool_calls and not self.metadata:
             return self.code == other
         return NotImplemented
 
@@ -105,7 +108,19 @@ class CodeBlock:
 
     def __hash__(self):
         tcs = tuple(self.tool_calls) if self.tool_calls else ()
-        return hash((self.code, tcs))
+        return hash((self.code, tcs, tuple(sorted(_metadata_dict(self).items()))))
+
+
+def _metadata_dict(block: CodeBlock) -> Dict[str, Any]:
+    """Return a plain metadata dict for a CodeBlock-like object."""
+    metadata = getattr(block, "metadata", None)
+    return dict(metadata) if metadata else {}
+
+
+def _is_hidden_warmup_block(block: Any) -> bool:
+    """Return whether a parsed warmup block is marked hidden."""
+    metadata = getattr(block, "metadata", None)
+    return metadata is not None and metadata.get("hidden") is True
 
 _STATEK_TOOL_MARKER = "#STATEK: as tool"
 _STATEK_METADATA_RE = re.compile(
@@ -282,7 +297,8 @@ def build_warmup_code(
     counter = 0
     blocks = []
     for parsed_block in parsed_warmup_code:
-        if not parsed_block.tool_calls:
+        metadata = parsed_block.metadata or None
+        if not parsed_block.tool_calls and not metadata:
             blocks.append(parsed_block.code)
         else:
             tool_calls = []
@@ -294,7 +310,11 @@ def build_warmup_code(
                     args=tc.args if tc.args else [],
                     kwargs=tc.kwargs if tc.kwargs is not None else {},
                 ))
-            blocks.append(CodeBlock(code=parsed_block.code, tool_calls=tool_calls))
+            blocks.append(CodeBlock(
+                code=parsed_block.code,
+                tool_calls=tool_calls,
+                metadata=metadata,
+            ))
 
     if len(blocks) == 1:
         return blocks[0]

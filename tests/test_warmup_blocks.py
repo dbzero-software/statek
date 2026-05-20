@@ -11,6 +11,7 @@ from statek.executors.utils import run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
 from statek.chat_style import ChatStyle
+from statek.utils import CodeBlock
 
 
 @db0.memo
@@ -116,6 +117,13 @@ y = 2"""
         result = parse_warmup_code(code)
         assert result[0] == "x = 1"
         assert result[1] == "y = 2"
+
+    def test_parse_hidden_metadata_preserved_on_block(self, db0_fixture):  # pylint: disable=unused-argument
+        """Hidden warmup metadata is preserved on the parsed warmup block."""
+        result = parse_warmup_code("#STATEK: hidden = True\nprint('hidden')")
+        assert isinstance(result, CodeBlock)
+        assert result.code == "print('hidden')"
+        assert result.metadata == {"hidden": True}
 
 
 class TestRunJobStepMultipleBlocks:
@@ -295,3 +303,31 @@ class TestRunJobStepMultipleBlocks:
         positions = job._warmup_end_positions()  # pylint: disable=protected-access
         assert positions[0] == len(job.py_env.console)
         assert positions[0] > 0
+
+    @pytest.mark.asyncio
+    async def test_hidden_warmup_block_executes_normally(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """Hidden warmup blocks execute and advance like regular warmup blocks."""
+        parsed_warmup = parse_warmup_code(
+            "#STATEK: hidden = True\n"
+            "x = 41\n"
+            "print('hidden ran')\n"
+            "# ----------\n"
+            "y = x + 1"
+        )
+        job_def = job_def_factory(warmup_code=parsed_warmup)
+        job = Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,
+        )
+
+        result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.WARMING_UP
+        assert job.py_env.local_state["x"] == 41
+        assert any("hidden ran" in line for line in job.py_env.console)
+        assert job.warmup_block_num == 1

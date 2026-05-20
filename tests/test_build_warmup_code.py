@@ -9,9 +9,9 @@ from statek.utils import (
 pytestmark = pytest.mark.usefixtures("db0_fixture")
 
 
-def _parsed(code, tool_calls=None):
+def _parsed(code, tool_calls=None, metadata=None):
     """Helper to create a ParsedWarmupBlock directly."""
-    return ParsedWarmupBlock(code=code, tool_calls=tool_calls or [])
+    return ParsedWarmupBlock(code=code, tool_calls=tool_calls or [], metadata=metadata or {})
 
 
 def test_build_warmup_code_single_no_tool_calls_returns_str():
@@ -26,6 +26,14 @@ def test_build_warmup_code_single_with_tool_calls_returns_code_block():
     tc = ParsedFuncCall(name='show_example', args=[1], kwargs=None)
     result = build_warmup_code([_parsed("show_example(1)", [tc])])
     assert isinstance(result, CodeBlock)
+
+
+def test_build_warmup_code_metadata_without_tool_calls_returns_code_block():
+    """A metadata-bearing block keeps metadata even when it has no tool calls."""
+    result = build_warmup_code([_parsed("x = 1", metadata={"hidden": True})])
+    assert isinstance(result, CodeBlock)
+    assert result.code == "x = 1"
+    assert result.metadata == {"hidden": True}
 
 
 def test_build_warmup_code_code_block_has_code_and_tool_calls():
@@ -117,6 +125,11 @@ class TestCodeBlockEquality:
         tc = ParsedFuncCall(name='ping', args=[], kwargs=None)
         block = build_warmup_code([_parsed("ping()", [tc])])
         assert block != "ping()"
+
+    def test_code_block_with_metadata_not_equal_str(self):
+        """CodeBlock metadata participates in equality with plain strings."""
+        block = CodeBlock(code="x = 1", tool_calls=[], metadata={"hidden": True})
+        assert block != "x = 1"
 
     def test_code_block_equals_str_empty_tool_calls(self):
         """CodeBlock with empty tool_calls list should equal the equivalent str."""

@@ -38,6 +38,7 @@ from statek.utils import (
     CallSpecWrapper,
     CodeBlock,
     ParsedWarmupBlock,
+    _is_hidden_warmup_block,
     _find_locals_in_context,
     build_warmup_code,
     extract_dialog,
@@ -241,14 +242,20 @@ def _next_task_difficulty(difficulty: TaskDifficulty) -> TaskDifficulty:
 
 
 def _warmup_code_text(warmup) -> str:
-    """Return the concatenated text of all warmup code blocks."""
+    """Return concatenated LLM-facing text of non-hidden warmup code blocks."""
     if warmup is None:
+        return ""
+    if _is_hidden_warmup_block(warmup):
         return ""
     if isinstance(warmup, str):
         return warmup
     if isinstance(warmup, CodeBlock):
         return warmup.code or ""
-    return "".join(w if isinstance(w, str) else (w.code or "") for w in warmup)
+    return "".join(
+        w if isinstance(w, str) else (w.code or "")
+        for w in warmup
+        if not _is_hidden_warmup_block(w)
+    )
 
 
 def _tool_log_text(item: Optional["LLM_LogItem"]) -> str:
@@ -882,16 +889,22 @@ class Job:
                 # is the console output OF the last warmup block, spanning from the
                 # end of the previous block to the end of the last block.
                 warmup_blocks = [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
-                n = len(warmup_blocks)
+                visible_indices = [
+                    idx for idx, block in enumerate(warmup_blocks)
+                    if not _is_hidden_warmup_block(block)
+                ]
+                if not visible_indices:
+                    return ""
+                block_idx = visible_indices[-1]
                 positions = self._warmup_end_positions()
                 last_end = (
-                    positions[n - 1]
-                    if n - 1 < len(positions)
+                    positions[block_idx]
+                    if block_idx < len(positions)
                     else len(self.py_env.console) if self.py_env.console else 0
                 )
                 prev_end = (
-                    positions[n - 2]
-                    if n >= 2 and n - 2 < len(positions)
+                    positions[block_idx - 1]
+                    if block_idx >= 1 and block_idx - 1 < len(positions)
                     else 0
                 )
                 limit = last_end - prev_end
@@ -1090,6 +1103,8 @@ class Job:
                     warmup_blocks[block_num]
                     if block_num < len(warmup_blocks) else None
                 )
+                if _is_hidden_warmup_block(block):
+                    continue
                 asst_src = ContentSource.SYSTEM
             elif isinstance(item, LLM_LogItem):
                 block = item.llm_resp

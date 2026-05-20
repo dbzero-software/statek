@@ -1485,6 +1485,36 @@ class TestBuildHistorySections:
         assert sections[0].title == 'Warmup Code 1'
         assert sections[0].render_as_code is True
 
+    def test_includes_hidden_warmup_section_with_marker(self, db0_fixture):
+        hidden_block = CodeBlock(code='hidden_setup()', metadata={'hidden': True})
+        job = _make_job(
+            warmup_code=[hidden_block, 'visible_setup()'],
+            warmup_console_positions=[1, 2],
+            console=['hidden output', 'visible output'],
+        )
+        job.get_chat_history.return_value = [
+            ChatHistoryItem(
+                role=ChatRole.ASSISTANT,
+                content='visible_setup()',
+                content_src=ContentSource.SYSTEM,
+            ),
+            ChatHistoryItem(
+                role=ChatRole.USER,
+                content='visible output',
+                content_src=ContentSource.CONSOLE,
+            ),
+        ]
+
+        sections = _build_history_sections(job)
+
+        assert [section.title for section in sections] == [
+            'Warmup Code 1 (Hidden)',
+            'Warmup Code 2',
+        ]
+        assert sections[0].hidden is True
+        assert sections[0].content == 'hidden_setup()'
+        assert sections[0].followups[0].content == 'hidden output\n'
+
 
 class _StubPyEnv:  # pylint: disable=too-few-public-methods
     def __init__(self):

@@ -335,7 +335,7 @@ class TestSupervisedAgentCustomRole:
         assert job_def.agent.role == "custom_worker"
 
 
-class TestWarmupDef:
+class TestWarmupDef:  # pylint: disable=too-many-public-methods
     """Test cases for WarmupDef and SupervisedAgent.update_warmup_def."""
 
     def test_warmup_def_creation_with_string(self, db0_fixture):  # pylint: disable=unused-argument
@@ -426,7 +426,9 @@ class TestWarmupDef:
         )
 
         assert result is True
-        assert agent.warmup_def.warmup_code == "print('ready')"
+        assert isinstance(agent.warmup_def.warmup_code, CodeBlock)
+        assert agent.warmup_def.warmup_code.code == "print('ready')"
+        assert agent.warmup_def.warmup_code.metadata == {"hidden": True, "label": "startup"}
         assert agent.warmup_def.metadata == {"hidden": True, "label": "startup"}
         assert agent.warmup_def.hidden is True
 
@@ -438,7 +440,9 @@ class TestWarmupDef:
         result = agent.update_warmup_def("#STATEK: hidden = True")
 
         assert result is True
-        assert agent.warmup_def.warmup_code == ""
+        assert isinstance(agent.warmup_def.warmup_code, CodeBlock)
+        assert agent.warmup_def.warmup_code.code == ""
+        assert agent.warmup_def.warmup_code.metadata == {"hidden": True}
         assert agent.warmup_def.metadata == {"hidden": True}
         assert agent.warmup_def.hidden is True
 
@@ -468,7 +472,9 @@ class TestWarmupDef:
 
         assert result is True
         assert agent.warmup_def is not original_warmup_def
-        assert agent.warmup_def.warmup_code == "print('ready')"
+        assert isinstance(agent.warmup_def.warmup_code, CodeBlock)
+        assert agent.warmup_def.warmup_code.code == "print('ready')"
+        assert agent.warmup_def.warmup_code.metadata == {"hidden": False}
         assert agent.warmup_def.metadata == {"hidden": False}
         assert agent.warmup_def.hidden is False
 
