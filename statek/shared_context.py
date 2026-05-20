@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 import dbzero as db0
 
@@ -56,9 +56,59 @@ class SharedContext:
         var.use_count += 1
         return var
 
+    def _peek_var(self, key: str) -> Optional[ContextVar]:
+        """Return a stored context variable without incrementing usage."""
+        return self.__context_vars.get(key)
+
     def __contains__(self, key: str) -> bool:
         """Return whether *key* exists in the shared context."""
         return key in self.__context_vars
 
 
-__all__ = ["ContextVar", "SharedContext"]
+ReadableContexts = Optional[Union[SharedContext, Iterable[SharedContext]]]
+
+
+@db0.memo
+class SharedContextProxy:
+    """Merged shared-context view with one writable context."""
+
+    def __init__(self, writable: SharedContext, readables: ReadableContexts = None):
+        self.__writable = writable
+        self.__readables = self.__normalize_readables(readables)
+
+    @staticmethod
+    def __normalize_readables(readables: ReadableContexts) -> Tuple[SharedContext, ...]:
+        if readables is None:
+            return ()
+        if isinstance(readables, SharedContext):
+            return (readables,)
+        return tuple(readables)
+
+    def __contexts(self) -> Tuple[SharedContext, ...]:
+        return (self.__writable, *self.__readables)
+
+    def set_var(self, category: Any, key: str, value: Any, description: str) -> None:
+        """Store a variable in the writable context."""
+        self.__writable.set_var(category, key, value, description)
+
+    def get_var(self, key: str) -> Optional[ContextVar]:
+        """Return the newest matching variable and increment only that variable."""
+        latest = None
+        for context in self.__contexts():
+            var = context._peek_var(key)  # pylint: disable=protected-access
+            if var is not None and (latest is None or var.created_at > latest.created_at):
+                latest = var
+        if latest is None:
+            return None
+        latest.use_count += 1
+        return latest
+
+    def __contains__(self, key: str) -> bool:
+        """Return whether *key* exists in any proxied context."""
+        return any(
+            context._peek_var(key) is not None  # pylint: disable=protected-access
+            for context in self.__contexts()
+        )
+
+
+__all__ = ["ContextVar", "SharedContext", "SharedContextProxy"]
