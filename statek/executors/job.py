@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Any,
     Sequence,
+    Tuple,
     Type,
     Union,
 )
@@ -31,11 +32,22 @@ from statek.executors.chat_log_item import (
 )
 from statek.llm_api import LLM_API, LLM_Response
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
-from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
-                          strip_markup, extract_dialog,
-                          parse_warmup_block, build_warmup_code,
-                          parse_tool_log, _STATEK_TOOL_MARKER, get_current_job,
-                          perm_ctx_get, _find_locals_in_context)
+from statek.utils import (
+    _STATEK_TOOL_MARKER,
+    CallSpec,
+    CallSpecWrapper,
+    CodeBlock,
+    ParsedWarmupBlock,
+    _find_locals_in_context,
+    build_warmup_code,
+    extract_dialog,
+    get_current_job,
+    parse_tool_log,
+    parse_warmup_block,
+    perm_ctx_get,
+    prompt_append_console,
+    strip_markup,
+)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
@@ -52,6 +64,8 @@ if TYPE_CHECKING:
     from statek.task import SubTaskHandler
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
+WarmupCodeInput = Optional[Union[str, Sequence[str]]]
+ParsedWarmupCode = Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]
 
 """
 READY: a fresh job instance ready for execution
@@ -64,10 +78,58 @@ DONE: execution has been completed (with either success or failure)
 class JobStatus:
     pass
 
+def some_function(x: int) -> int:
+    return x + 1
 
-def parse_warmup_code(
-    warmup_code: Optional[Union[str, Sequence[str]]],
-) -> Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]:
+def _parse_warmup_blocks(warmup_code: WarmupCodeInput) -> Optional[List[ParsedWarmupBlock]]:
+    """Parse raw warmup input into per-block parsed warmup definitions.
+
+    Args:
+        warmup_code: Single raw warmup string, sequence of blocks, or None.
+
+    Returns:
+        Parsed warmup blocks, or None when no non-empty blocks are present.
+    """
+    if warmup_code is None:
+        return None
+
+    if isinstance(warmup_code, str):
+        raw_blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
+    else:
+        raw_blocks = list(warmup_code)
+
+    raw_blocks = [block.strip() for block in raw_blocks if block.strip()]
+
+    if not raw_blocks:
+        return None
+
+    return [parse_warmup_block(block) for block in raw_blocks]
+
+
+def parse_warmup_code_with_metadata(
+    warmup_code: WarmupCodeInput,
+) -> Tuple[ParsedWarmupCode, Optional[Dict[str, Any]]]:
+    """Parse warmup code and return aggregate metadata from parsed blocks.
+
+    Args:
+        warmup_code: Single raw warmup string, sequence of blocks, or None.
+
+    Returns:
+        Tuple containing built warmup code and aggregate metadata, each optional.
+    """
+    parsed_blocks = _parse_warmup_blocks(warmup_code)
+    if parsed_blocks is None:
+        return None, None
+
+    metadata = {}
+    for parsed_block in parsed_blocks:
+        if parsed_block.metadata:
+            metadata.update(parsed_block.metadata)
+
+    return build_warmup_code(parsed_blocks), metadata or None
+
+
+def parse_warmup_code(warmup_code: WarmupCodeInput) -> ParsedWarmupCode:
     """Parse warmup_code through parse_warmup_block and build_warmup_code.
 
     If warmup_code is a string containing comment lines with 10+ dashes
@@ -83,24 +145,8 @@ def parse_warmup_code(
         Single str or CodeBlock if only one block
         List of str and/or CodeBlock if multiple blocks
     """
-    if warmup_code is None:
-        return None
-
-    if isinstance(warmup_code, str):
-        # Split on comment lines containing 10 or more dashes (e.g. # ----------)
-        raw_blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
-    else:
-        # Already a sequence — each item is a separate block
-        raw_blocks = list(warmup_code)
-
-    # Strip each block and filter empty ones
-    raw_blocks = [block.strip() for block in raw_blocks if block.strip()]
-
-    if not raw_blocks:
-        return None
-
-    parsed_blocks = [parse_warmup_block(block) for block in raw_blocks]
-    return build_warmup_code(parsed_blocks)
+    parsed_code, _metadata = parse_warmup_code_with_metadata(warmup_code)
+    return parsed_code
 
 
 def parse_model_metadata(input: str) -> Union[str, Dict[TaskDifficulty, str]]:

@@ -353,6 +353,28 @@ class TestWarmupDef:
         wd = WarmupDef(warmup_code=["block1", "block2"])
         assert list(wd.warmup_code) == ["block1", "block2"]
 
+    def test_warmup_def_metadata_defaults_to_none(self, db0_fixture):  # pylint: disable=unused-argument
+        """WarmupDef metadata is optional."""
+        wd = WarmupDef(warmup_code="print('hello')")
+        assert wd.metadata is None
+
+    def test_warmup_def_hidden_defaults_false(self, db0_fixture):  # pylint: disable=unused-argument
+        """WarmupDef.hidden is False without explicit hidden metadata."""
+        wd = WarmupDef(warmup_code="print('hello')")
+        assert wd.hidden is False
+
+    def test_warmup_def_hidden_true_from_metadata(self, db0_fixture):  # pylint: disable=unused-argument
+        """WarmupDef.hidden is True only for hidden=True metadata."""
+        wd = WarmupDef(warmup_code="print('hello')", metadata={"hidden": True})
+        assert wd.hidden is True
+
+    @pytest.mark.parametrize("metadata", [{"hidden": False}, {"hidden": "True"}, {"other": True}])
+    def test_warmup_def_hidden_false_without_explicit_true(
+            self, db0_fixture, metadata):  # pylint: disable=unused-argument
+        """WarmupDef.hidden ignores non-True hidden metadata."""
+        wd = WarmupDef(warmup_code="print('hello')", metadata=metadata)
+        assert wd.hidden is False
+
     def test_supervised_agent_warmup_def_default_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Test SupervisedAgent has warmup_def defaulting to None."""
         agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
@@ -365,6 +387,7 @@ class TestWarmupDef:
         assert result is True
         assert agent.warmup_def is not None
         assert agent.warmup_def.warmup_code == "print('hello')"
+        assert agent.warmup_def.metadata is None
 
     def test_update_warmup_def_no_change(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def returns False when value hasn't changed."""
@@ -393,6 +416,61 @@ class TestWarmupDef:
         # Should be parsed into multiple blocks
         blocks = list(warmup)
         assert len(blocks) == 2
+
+    def test_update_warmup_def_stores_metadata(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_warmup_def stores metadata parsed from warmup comments."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+
+        result = agent.update_warmup_def(
+            "#STATEK: hidden = True\n#STATEK: label = 'startup'\nprint('ready')"
+        )
+
+        assert result is True
+        assert agent.warmup_def.warmup_code == "print('ready')"
+        assert agent.warmup_def.metadata == {"hidden": True, "label": "startup"}
+        assert agent.warmup_def.hidden is True
+
+    def test_update_warmup_def_metadata_only_block_preserves_empty_code(
+            self, db0_fixture):  # pylint: disable=unused-argument
+        """A metadata-only warmup block stores metadata with empty parsed code."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+
+        result = agent.update_warmup_def("#STATEK: hidden = True")
+
+        assert result is True
+        assert agent.warmup_def.warmup_code == ""
+        assert agent.warmup_def.metadata == {"hidden": True}
+        assert agent.warmup_def.hidden is True
+
+    def test_update_warmup_def_aggregates_metadata_from_blocks(
+            self, db0_fixture):  # pylint: disable=unused-argument
+        """update_warmup_def aggregates metadata from each parsed block."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+
+        agent.update_warmup_def(
+            "#STATEK: hidden = True\n"
+            "block1\n"
+            "# ----------\n"
+            "#STATEK: label = 'second'\n"
+            "block2"
+        )
+
+        assert agent.warmup_def.metadata == {"hidden": True, "label": "second"}
+
+    def test_update_warmup_def_changed_metadata_updates_value(
+            self, db0_fixture):  # pylint: disable=unused-argument
+        """Changing only metadata causes warmup_def to update."""
+        agent = SupervisedAgent(role="test", _system_prompt=make_system_prompt("test"), _tools=[])
+        agent.update_warmup_def("#STATEK: hidden = True\nprint('ready')")
+        original_warmup_def = agent.warmup_def
+
+        result = agent.update_warmup_def("#STATEK: hidden = False\nprint('ready')")
+
+        assert result is True
+        assert agent.warmup_def is not original_warmup_def
+        assert agent.warmup_def.warmup_code == "print('ready')"
+        assert agent.warmup_def.metadata == {"hidden": False}
+        assert agent.warmup_def.hidden is False
 
     def test_update_warmup_def_to_none(self, db0_fixture):  # pylint: disable=unused-argument
         """Test update_warmup_def can set warmup_def to None."""
