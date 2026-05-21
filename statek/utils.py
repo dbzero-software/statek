@@ -20,7 +20,11 @@ if TYPE_CHECKING:
     from statek.llm_api import CallParams
 
 ParsedFuncCall = namedtuple("ParsedFuncCall", ["name", "args", "kwargs"])
-ParsedWarmupBlock = namedtuple("ParsedWarmupBlock", ["code", "tool_calls"])
+ParsedWarmupBlock = namedtuple(
+    "ParsedWarmupBlock",
+    ["code", "tool_calls", "metadata"],
+    defaults=[None],
+)
 
 
 @db0.memo
@@ -54,13 +58,16 @@ CallSpecWrapper = namedtuple("CallSpecWrapper", ["id", "func_name", "args", "kwa
 @db0.memo
 @dataclass
 class CodeBlock:
-    """A block of executable Python code with optional tool-call requests."""
+    """A block of executable Python code with optional tool-call requests and metadata."""
     code: Optional[str] = None
     tool_calls: Optional[Sequence[CallSpec]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
     def __eq__(self, other):
         if isinstance(other, CodeBlock):
             if self.code != other.code:
+                return False
+            if _metadata_dict(self) != _metadata_dict(other):
                 return False
             self_tcs = list(self.tool_calls) if self.tool_calls else []
             other_tcs = list(other.tool_calls) if other.tool_calls else []
@@ -71,7 +78,7 @@ class CodeBlock:
                 and a.args == b.args and a.kwargs == b.kwargs
                 for a, b in zip(self_tcs, other_tcs)
             )
-        if isinstance(other, str) and not self.tool_calls:
+        if isinstance(other, str) and not self.tool_calls and not self.metadata:
             return self.code == other
         return NotImplemented
 
@@ -101,9 +108,25 @@ class CodeBlock:
 
     def __hash__(self):
         tcs = tuple(self.tool_calls) if self.tool_calls else ()
-        return hash((self.code, tcs))
+        return hash((self.code, tcs, tuple(sorted(_metadata_dict(self).items()))))
+
+
+def _metadata_dict(block: CodeBlock) -> Dict[str, Any]:
+    """Return a plain metadata dict for a CodeBlock-like object."""
+    metadata = getattr(block, "metadata", None)
+    return dict(metadata) if metadata else {}
+
+
+def _is_hidden_warmup_block(block: Any) -> bool:
+    """Return whether a parsed warmup block is marked hidden."""
+    metadata = getattr(block, "metadata", None)
+    return metadata is not None and metadata.get("hidden") is True
 
 _STATEK_TOOL_MARKER = "#STATEK: as tool"
+_STATEK_METADATA_RE = re.compile(
+    r'^\s*#STATEK:\s*(?P<key>[A-Za-z_]\w*)\s*=\s*(?P<value>.+?)\s*$'
+)
+_STATEK_METADATA_VALUE_TYPES = (str, int, float, bool, type(None))
 
 
 def parse_func_call(input: str) -> ParsedFuncCall:  # pylint: disable=redefined-builtin
@@ -204,28 +227,54 @@ def parse_warmup_block(code: str) -> ParsedWarmupBlock:
     """Parse a single warmup block into code and tool call definitions.
 
     Lines annotated with ``#STATEK: as tool`` are extracted as tool calls
-    and removed from the returned code field.
+    and removed from the returned code field. Full-line ``#STATEK: key = value``
+    comments are extracted as metadata and removed from the returned code field.
 
     Args:
         code: Python code block to be parsed
 
     Returns:
-        ParsedWarmupBlock with clean code and a list of ParsedFuncCall tool calls
+        ParsedWarmupBlock with clean code, ParsedFuncCall tool calls, and metadata
 
     Raises:
-        ValueError: if an annotated line is not a valid function call
+        ValueError: if an annotated line is not a valid function call or metadata
         SyntaxError: if an annotated line contains invalid Python syntax
     """
     clean_lines = []
     tool_calls = []
+    metadata = {}
     for line in code.splitlines():
+        metadata_match = _STATEK_METADATA_RE.match(line)
+        if metadata_match:
+            key = metadata_match.group('key')
+            value_text = metadata_match.group('value')
+            try:
+                value = ast.literal_eval(value_text)
+            except (ValueError, SyntaxError) as exc:
+                raise ValueError(
+                    f"Invalid warmup metadata value for {key!r}: {value_text!r}"
+                ) from exc
+            if not isinstance(value, _STATEK_METADATA_VALUE_TYPES):
+                raise ValueError(
+                    f"Invalid warmup metadata value for {key!r}: {value_text!r}"
+                )
+            metadata[key] = value
+            continue
+
+        if line.lstrip().startswith('#STATEK:'):
+            raise ValueError(f"Invalid warmup metadata line: {line!r}")
+
         marker_pos = line.find(_STATEK_TOOL_MARKER)
         if marker_pos != -1:
             call_str = line[:marker_pos].rstrip()
             tool_calls.append(parse_func_call(call_str))
         else:
             clean_lines.append(line)
-    return ParsedWarmupBlock(code="\n".join(clean_lines), tool_calls=tool_calls)
+    return ParsedWarmupBlock(
+        code="\n".join(clean_lines),
+        tool_calls=tool_calls,
+        metadata=metadata,
+    )
 
 
 def build_warmup_code(
@@ -248,7 +297,8 @@ def build_warmup_code(
     counter = 0
     blocks = []
     for parsed_block in parsed_warmup_code:
-        if not parsed_block.tool_calls:
+        metadata = parsed_block.metadata or None
+        if not parsed_block.tool_calls and not metadata:
             blocks.append(parsed_block.code)
         else:
             tool_calls = []
@@ -260,7 +310,11 @@ def build_warmup_code(
                     args=tc.args if tc.args else [],
                     kwargs=tc.kwargs if tc.kwargs is not None else {},
                 ))
-            blocks.append(CodeBlock(code=parsed_block.code, tool_calls=tool_calls))
+            blocks.append(CodeBlock(
+                code=parsed_block.code,
+                tool_calls=tool_calls,
+                metadata=metadata,
+            ))
 
     if len(blocks) == 1:
         return blocks[0]

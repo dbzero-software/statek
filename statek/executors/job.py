@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Any,
     Sequence,
+    Tuple,
     Type,
     Union,
 )
@@ -31,11 +32,23 @@ from statek.executors.chat_log_item import (
 )
 from statek.llm_api import LLM_API, LLM_Response
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
-from statek.utils import (prompt_append_console, CodeBlock, CallSpec, CallSpecWrapper,
-                          strip_markup, extract_dialog,
-                          parse_warmup_block, build_warmup_code,
-                          parse_tool_log, _STATEK_TOOL_MARKER, get_current_job,
-                          perm_ctx_get, _find_locals_in_context)
+from statek.utils import (
+    _STATEK_TOOL_MARKER,
+    CallSpec,
+    CallSpecWrapper,
+    CodeBlock,
+    ParsedWarmupBlock,
+    _is_hidden_warmup_block,
+    _find_locals_in_context,
+    build_warmup_code,
+    extract_dialog,
+    get_current_job,
+    parse_tool_log,
+    parse_warmup_block,
+    perm_ctx_get,
+    prompt_append_console,
+    strip_markup,
+)
 from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
@@ -52,6 +65,8 @@ if TYPE_CHECKING:
     from statek.task import SubTaskHandler
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
+WarmupCodeInput = Optional[Union[str, Sequence[str]]]
+ParsedWarmupCode = Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]
 
 """
 READY: a fresh job instance ready for execution
@@ -64,10 +79,58 @@ DONE: execution has been completed (with either success or failure)
 class JobStatus:
     pass
 
+def some_function(x: int) -> int:
+    return x + 1
 
-def parse_warmup_code(
-    warmup_code: Optional[Union[str, Sequence[str]]],
-) -> Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]:
+def _parse_warmup_blocks(warmup_code: WarmupCodeInput) -> Optional[List[ParsedWarmupBlock]]:
+    """Parse raw warmup input into per-block parsed warmup definitions.
+
+    Args:
+        warmup_code: Single raw warmup string, sequence of blocks, or None.
+
+    Returns:
+        Parsed warmup blocks, or None when no non-empty blocks are present.
+    """
+    if warmup_code is None:
+        return None
+
+    if isinstance(warmup_code, str):
+        raw_blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
+    else:
+        raw_blocks = list(warmup_code)
+
+    raw_blocks = [block.strip() for block in raw_blocks if block.strip()]
+
+    if not raw_blocks:
+        return None
+
+    return [parse_warmup_block(block) for block in raw_blocks]
+
+
+def parse_warmup_code_with_metadata(
+    warmup_code: WarmupCodeInput,
+) -> Tuple[ParsedWarmupCode, Optional[Dict[str, Any]]]:
+    """Parse warmup code and return aggregate metadata from parsed blocks.
+
+    Args:
+        warmup_code: Single raw warmup string, sequence of blocks, or None.
+
+    Returns:
+        Tuple containing built warmup code and aggregate metadata, each optional.
+    """
+    parsed_blocks = _parse_warmup_blocks(warmup_code)
+    if parsed_blocks is None:
+        return None, None
+
+    metadata = {}
+    for parsed_block in parsed_blocks:
+        if parsed_block.metadata:
+            metadata.update(parsed_block.metadata)
+
+    return build_warmup_code(parsed_blocks), metadata or None
+
+
+def parse_warmup_code(warmup_code: WarmupCodeInput) -> ParsedWarmupCode:
     """Parse warmup_code through parse_warmup_block and build_warmup_code.
 
     If warmup_code is a string containing comment lines with 10+ dashes
@@ -83,24 +146,8 @@ def parse_warmup_code(
         Single str or CodeBlock if only one block
         List of str and/or CodeBlock if multiple blocks
     """
-    if warmup_code is None:
-        return None
-
-    if isinstance(warmup_code, str):
-        # Split on comment lines containing 10 or more dashes (e.g. # ----------)
-        raw_blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
-    else:
-        # Already a sequence — each item is a separate block
-        raw_blocks = list(warmup_code)
-
-    # Strip each block and filter empty ones
-    raw_blocks = [block.strip() for block in raw_blocks if block.strip()]
-
-    if not raw_blocks:
-        return None
-
-    parsed_blocks = [parse_warmup_block(block) for block in raw_blocks]
-    return build_warmup_code(parsed_blocks)
+    parsed_code, _metadata = parse_warmup_code_with_metadata(warmup_code)
+    return parsed_code
 
 
 def parse_model_metadata(input: str) -> Union[str, Dict[TaskDifficulty, str]]:
@@ -195,14 +242,20 @@ def _next_task_difficulty(difficulty: TaskDifficulty) -> TaskDifficulty:
 
 
 def _warmup_code_text(warmup) -> str:
-    """Return the concatenated text of all warmup code blocks."""
+    """Return concatenated LLM-facing text of non-hidden warmup code blocks."""
     if warmup is None:
+        return ""
+    if _is_hidden_warmup_block(warmup):
         return ""
     if isinstance(warmup, str):
         return warmup
     if isinstance(warmup, CodeBlock):
         return warmup.code or ""
-    return "".join(w if isinstance(w, str) else (w.code or "") for w in warmup)
+    return "".join(
+        w if isinstance(w, str) else (w.code or "")
+        for w in warmup
+        if not _is_hidden_warmup_block(w)
+    )
 
 
 def _tool_log_text(item: Optional["LLM_LogItem"]) -> str:
@@ -836,16 +889,22 @@ class Job:
                 # is the console output OF the last warmup block, spanning from the
                 # end of the previous block to the end of the last block.
                 warmup_blocks = [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
-                n = len(warmup_blocks)
+                visible_indices = [
+                    idx for idx, block in enumerate(warmup_blocks)
+                    if not _is_hidden_warmup_block(block)
+                ]
+                if not visible_indices:
+                    return ""
+                block_idx = visible_indices[-1]
                 positions = self._warmup_end_positions()
                 last_end = (
-                    positions[n - 1]
-                    if n - 1 < len(positions)
+                    positions[block_idx]
+                    if block_idx < len(positions)
                     else len(self.py_env.console) if self.py_env.console else 0
                 )
                 prev_end = (
-                    positions[n - 2]
-                    if n >= 2 and n - 2 < len(positions)
+                    positions[block_idx - 1]
+                    if block_idx >= 1 and block_idx - 1 < len(positions)
                     else 0
                 )
                 limit = last_end - prev_end
@@ -1044,6 +1103,8 @@ class Job:
                     warmup_blocks[block_num]
                     if block_num < len(warmup_blocks) else None
                 )
+                if _is_hidden_warmup_block(block):
+                    continue
                 asst_src = ContentSource.SYSTEM
             elif isinstance(item, LLM_LogItem):
                 block = item.llm_resp
