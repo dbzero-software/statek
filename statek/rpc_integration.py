@@ -5,6 +5,10 @@ from typing import Any
 
 class _RpcMock:
     @staticmethod
+    def init(*_args, **_kwargs):
+        return None
+
+    @staticmethod
     def remote(func=None, **_kwargs):
         if func is None:
             return lambda wrapped: wrapped
@@ -31,4 +35,4 @@ rpc = _load_rpc()
 
 
 def has_rpc() -> bool:
-    return rpc() is not _RPC_MOCK
+    return rpc is not _RPC_MOCK

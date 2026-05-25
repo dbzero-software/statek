@@ -16,6 +16,7 @@ Configuration via environment variables:
 """
 
 import argparse
+from contextvars import ContextVar
 import logging
 import os
 import secrets
@@ -64,13 +65,16 @@ def _parse_args() -> argparse.Namespace:
                              '(may be repeated, e.g. --open-prefix /Org/proj/env/data)')
     parser.add_argument('--dangerously-skip-auth', action='store_true',
                         help='Disable authentication entirely (development only)')
-    parser.add_argument('--impersonate', default=None, metavar='EMAIL',
-                        help='Impersonate a user by email (only valid with --dangerously-skip-auth)')
+    parser.add_argument(
+        '--impersonate', default=None, metavar='EMAIL',
+        help='Impersonate a user by email (only valid with --dangerously-skip-auth)',
+    )
     args, _ = parser.parse_known_args()
     return args
 
 
 _args = _parse_args()
+_rpc_auth_token_var: ContextVar[str | None] = ContextVar("statek_rpc_auth_token", default=None)
 
 # Eagerly import modules so db0 can deserialize their @db0.memo classes
 # (e.g. agent subclasses defined in external projects).
@@ -132,6 +136,7 @@ _oidc_client = setup_oidc_auth(
     session_file='/tmp/statek_webui_sessions',
     resolve_user=False,
     access_check=_check_super_admin,
+    rpc_auth_token_var=_rpc_auth_token_var,
 )
 
 
@@ -141,7 +146,12 @@ _oidc_client = setup_oidc_auth(
 
 @app.on_startup
 def startup():
-    db0.init(_args.db0_path, prefix=STATEK_PREFIX, read_write=False)
+    rpc_config = (
+        {"dangerously_skip_auth": True}
+        if _args.dangerously_skip_auth
+        else {"auth_token_var": _rpc_auth_token_var}
+    )
+    db0.init(_args.db0_path, prefix=STATEK_PREFIX, read_write=False, rpc=rpc_config)
     for prefix in _args.open_prefixes:
         db0.open(prefix, "r")
         log.info('Opened additional prefix (read-only): %s', prefix)
