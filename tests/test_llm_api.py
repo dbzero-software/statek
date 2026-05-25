@@ -55,42 +55,6 @@ def sys_tool():
     return my_sys_tool
 
 
-@pytest.fixture()
-def openrouter_api():
-    settings = LLM_API_Settings(
-        api_url="https://openrouter.ai/api/v1/chat/completions",
-        api_key="test-key",
-    )
-    return OpenRouter_API(settings=settings)
-
-
-@pytest.fixture()
-def openai_api():
-    settings = LLM_API_Settings(
-        api_url="https://api.openai.com/v1/chat/completions",
-        api_key="test-key",
-    )
-    return OpenAI_API(settings=settings)
-
-
-@pytest.fixture()
-def vertexai_api():
-    settings = LLM_API_Settings(
-        api_url="https://aiplatform.googleapis.com/v1",
-        api_key="test-token",
-    )
-    return VertexAI_API(settings=settings, project="p1", location="us-central1")
-
-
-@pytest.fixture()
-def claude_api():
-    settings = LLM_API_Settings(
-        api_url="https://api.anthropic.com/v1/messages",
-        api_key="test-key",
-    )
-    return Claude_API(settings=settings, use_prompt_caching=False)
-
-
 # ---------------------------------------------------------------------------
 # LLM_API.get factory
 # ---------------------------------------------------------------------------
