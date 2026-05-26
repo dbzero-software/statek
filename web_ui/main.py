@@ -134,7 +134,6 @@ _oidc_client = setup_oidc_auth(
     skip_auth=_args.dangerously_skip_auth,
     impersonate=_args.impersonate,
     session_file='/tmp/statek_webui_sessions',
-    resolve_user=False,
     access_check=_check_super_admin,
     rpc_auth_token_var=_rpc_auth_token_var,
 )

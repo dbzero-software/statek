@@ -1,28 +1,20 @@
-"""Tests for Statek UI shared auth helper resolution."""
+"""Tests for Statek UI auth helper exports."""
 
-import importlib
-import sys
+import inspect
+
+from web_ui import auth
+from web_ui.auth import nicegui_oidc
 
 
-def test_statek_auth_resolves_shared_oidc_from_external_paths(tmp_path, monkeypatch):
-    helper_path = tmp_path / "web_ui" / "auth" / "nicegui_oidc.py"
-    helper_path.parent.mkdir(parents=True)
-    helper_path.write_text(
-        "class OIDCSettingsBase:\n"
-        "    pass\n\n"
-        "def setup_oidc_auth():\n"
-        "    return 'ok'\n",
-        encoding="utf-8",
-    )
-    original_module = sys.modules.pop("web_ui.auth", None)
-    monkeypatch.setenv("STATEK_EXTERNAL_PATHS", str(tmp_path))
+def test_statek_auth_exports_local_oidc_helpers():
+    """The auth package must use Statek-owned helpers, not project-specific modules."""
+    assert auth.OIDCSettingsBase is nicegui_oidc.OIDCSettingsBase
+    assert auth.setup_oidc_auth is nicegui_oidc.setup_oidc_auth
+    assert nicegui_oidc.__name__ == "web_ui.auth.nicegui_oidc"
 
-    try:
-        module = importlib.import_module("web_ui.auth")
-    finally:
-        sys.modules.pop("web_ui.auth", None)
-        if original_module is not None:
-            sys.modules["web_ui.auth"] = original_module
 
-    assert module.OIDCSettingsBase.__name__ == "OIDCSettingsBase"
-    assert module.setup_oidc_auth() == "ok"
+def test_statek_auth_module_has_no_selltime_coupling():
+    """Statek's OIDC helper must not import or load Selltime internals."""
+    source = inspect.getsource(nicegui_oidc)
+
+    assert "selltime" not in source.lower()
