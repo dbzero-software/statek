@@ -127,7 +127,7 @@ def test_quoted_oidc_scope_is_normalized_for_shell_loaded_env(monkeypatch):
         session_file="/tmp/test_statek_nicegui_oidc_sessions",
     )
 
-    assert auth.auth_config.kwargs["scope"] == ["openid", "email"]
+    assert getattr(auth, "auth_config").kwargs["scope"] == ["openid", "email"]
 
 
 def test_access_denied_page_uses_statek_branding():
