@@ -5,7 +5,7 @@
 build>=1.0.0
 
 # app dependencies
-dbzero==0.2.4
+dbzero>=0.3.3
 easyoidc[nicegui]==0.1.12
 boto3==1.42.71
 pydantic==2.12.5
