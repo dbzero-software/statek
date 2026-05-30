@@ -2,13 +2,13 @@
 
 import pytest
 
-from statek.utils import perm_ctx_set, perm_ctx_set_unique, perm_ctx_get
+from statek.utils import perm_ctx_set, perm_ctx_set_unique, perm_ctx_get, _statek_ctx_scope
 
 
 def _run_with_registered_job(job, func):
-    """Run func while a fake current job is visible through _STATEK_CTX."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while a fake current job is visible through Statek context."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 def test_set_and_get():
@@ -85,18 +85,38 @@ def test_get_no_perm_ctx_with_default():
     assert _run_with_registered_job(job, exercise) == "fallback"
 
 
-def test_set_no_context_creates_on_demand():
-    _STATEK_CTX = {"job": _FakeJob()}  # noqa: F841
-    perm_ctx_set(x=10)
-    assert perm_ctx_get("x") == 10
+def test_set_creates_perm_ctx_on_demand():
+    job = _FakeJob()
+    with _statek_ctx_scope({"job": job}):
+        perm_ctx_set(x=10)
+        assert perm_ctx_get("x") == 10
 
 
 def test_set_creates_perm_ctx_in_pyenv_local_state():
     job = _FakeJob()
-    _STATEK_CTX = {"job": job}  # noqa: F841
     assert job.py_env.local_state is None
-    perm_ctx_set(key="value")
+    with _statek_ctx_scope({"job": job}):
+        perm_ctx_set(key="value")
     assert job.py_env.local_state["_PERM_CTX"] == {"key": "value"}
+
+
+def test_set_without_job_context_raises_runtime_error():
+    with pytest.raises(RuntimeError):
+        perm_ctx_set(key="value")
+
+
+def test_get_without_job_context_raises_runtime_error():
+    with pytest.raises(RuntimeError):
+        perm_ctx_get("key")
+
+
+def test_get_without_job_context_returns_default():
+    assert perm_ctx_get("key", "fallback") == "fallback"
+
+
+def test_set_unique_without_job_context_raises_runtime_error():
+    with pytest.raises(RuntimeError):
+        perm_ctx_set_unique("result", "value")
 
 
 def test_set_unique_uses_key_when_available():

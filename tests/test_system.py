@@ -11,7 +11,7 @@ from statek.chat_style import ChatStyle
 from statek.future import get_unpack_size, temporal, FutureResult
 from statek.executors.job import Job
 from statek.task import SubTaskHandler
-from statek.utils import format_callable_decl
+from statek.utils import format_callable_decl, _statek_ctx_scope
 
 class TestDocs:
     """Test cases for docstr function."""
@@ -858,9 +858,9 @@ class TestFindTools:
                 return "high"
 
         job = _FakeJob()
-        _STATEK_CTX = {"job": job}  # noqa: F841
 
-        panic()
+        with _statek_ctx_scope({"job": job}):
+            panic()
 
         captured = capsys.readouterr()
         assert job.calls == 1
@@ -1055,9 +1055,9 @@ class TestToolErrorHandler:
     def test_sync_tool_registers_handler_on_job(self, job_factory):
         """Sync tool with error_handler registers it on the current job with the return value."""
         job = job_factory()
-        _STATEK_CTX = {'job': job}  # noqa: F841  # visible to find_locals via call stack
 
-        result = _sync_tool_with_handler()
+        with _statek_ctx_scope({'job': job}):
+            result = _sync_tool_with_handler()
 
         assert result == "the_result"
         assert len(job.error_handlers) == 1
@@ -1068,9 +1068,9 @@ class TestToolErrorHandler:
     async def test_async_tool_registers_handler_on_job(self, job_factory):
         """Async tool with error_handler registers it on the current job."""
         job = job_factory()
-        _STATEK_CTX = {'job': job}  # noqa: F841  # visible to find_locals via call stack
 
-        result = _async_tool_with_handler()
+        with _statek_ctx_scope({'job': job}):
+            result = _async_tool_with_handler()
 
         assert result == "async_result"
         assert len(job.error_handlers) == 1
@@ -1079,7 +1079,7 @@ class TestToolErrorHandler:
 
     def test_no_job_in_context_does_not_raise(self):
         """Tool with error_handler works normally when no job is available in context."""
-        # No _STATEK_CTX in scope — should return normally without raising
+        # No Statek context in scope — should return normally without raising
         result = _tool_no_ctx()
         assert result == "result"
 
@@ -1130,9 +1130,9 @@ class TestToolTemporalErrorHandler:
     def test_handler_not_registered_before_value_access(self, job_factory):
         """Returning a FutureResult defers registration — job has no handlers yet."""
         job = job_factory()
-        _STATEK_CTX = {'job': job}  # noqa: F841
 
-        future = _temporal_tool()
+        with _statek_ctx_scope({'job': job}):
+            future = _temporal_tool()
 
         assert isinstance(future, FutureResult)
         assert len(job.error_handlers) == 0
@@ -1140,9 +1140,9 @@ class TestToolTemporalErrorHandler:
     def test_handler_registered_on_value_access(self, job_factory):
         """Accessing .value on the FutureResult registers the handler with resolved value."""
         job = job_factory()
-        _STATEK_CTX = {'job': job}  # noqa: F841
 
-        future = _temporal_tool()
+        with _statek_ctx_scope({'job': job}):
+            future = _temporal_tool()
         value = future.value
 
         assert value == "resolved"
@@ -1154,9 +1154,9 @@ class TestToolTemporalErrorHandler:
     async def test_async_temporal_tool_registers_on_value_access(self, job_factory):
         """Async temporal tool also defers registration until .value is accessed."""
         job = job_factory()
-        _STATEK_CTX = {'job': job}  # noqa: F841
 
-        future = _async_temporal_tool()
+        with _statek_ctx_scope({'job': job}):
+            future = _async_temporal_tool()
         assert len(job.error_handlers) == 0
 
         value = future.value
@@ -1168,9 +1168,9 @@ class TestToolTemporalErrorHandler:
     def test_handler_registered_only_once(self, job_factory):
         """Accessing .value a second time does not re-register the handler."""
         job = job_factory()
-        _STATEK_CTX = {'job': job}  # noqa: F841
 
-        future = _temporal_tool()
+        with _statek_ctx_scope({'job': job}):
+            future = _temporal_tool()
         res = future.value  # first access — registers
         res = future.value  # second access — must not add another handler
         assert res == "resolved"

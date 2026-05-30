@@ -34,15 +34,15 @@ from statek.executors.chat_log_item import (
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
-from statek.utils import CodeBlock, CallSpec
+from statek.utils import CodeBlock, CallSpec, _statek_ctx_scope
 from statek.system import find_sub_task_handler
 from statek.task import SubTaskHandler, TaskError
 
 
 def _run_with_current_job(job, func):
-    """Run func while job is visible via _STATEK_CTX."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while job is visible through Statek context."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 def _completed_subtask_handler(job, subtask_id=None, result=None, error=None):

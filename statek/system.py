@@ -11,7 +11,7 @@ import dbzero as db0
 from .chat_style import ChatStyle
 from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
-from .utils import find_locals, get_current_agent_name, get_current_job
+from .utils import find_locals, get_current_agent_name, get_current_job, _statek_ctx_scope
 
 
 _TOOL_REGISTRY: list[Callable] = []
@@ -24,8 +24,13 @@ def inject_context(func, __local_context):
             raise RuntimeError("_local_context is already set")
 
         # defensive copy per invocation
-        kwargs["_local_context"] = copy(__local_context)
+        local_context = copy(__local_context)
+        kwargs["_local_context"] = local_context
 
+        statek_ctx = local_context.get("_STATEK_CTX")
+        if isinstance(statek_ctx, dict):
+            with _statek_ctx_scope(statek_ctx):
+                return func(*args, **kwargs)
         return func(*args, **kwargs)
     return wrapped
 
@@ -714,7 +719,7 @@ def panic(**kwargs):  # pylint: disable=unused-argument
     """
     job = get_current_job()
     if job is None:
-        raise RuntimeError("panic() requires a current job in _STATEK_CTX")
+        raise RuntimeError("panic() requires a current Statek job context")
     job.panic()
     print(
         f"# Difficulty increased to {job.get_current_difficulty()}. "

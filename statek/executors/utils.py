@@ -4,9 +4,10 @@ import inspect
 import traceback
 import asyncio
 import builtins
+import functools
 import re
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Set, Tuple, TYPE_CHECKING, Union
+from typing import Any, Callable, Optional, Sequence, Set, Tuple, TYPE_CHECKING, Union
 from contextlib import contextmanager
 import dbzero as db0
 
@@ -32,7 +33,9 @@ from statek.utils import (
     get_current_job,
     get_current_agent,
     parse_dialog,
-    strip_markup
+    strip_markup,
+    _statek_ctx_for_job,
+    _statek_ctx_scope,
 )
 
 if TYPE_CHECKING:
@@ -237,10 +240,11 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['_wrap_param'] = _wrap_param
     global_context['_fmt_fstring_arg'] = _fmt_print_arg
 
-    statek_ctx = {}
-    statek_ctx['job'] = job    
-    if job.job_def.agent is not None:
-        statek_ctx['agent'] = job.job_def.agent
+    missing_ctx = object()
+    previous_local_statek_ctx = local_context.get('_STATEK_CTX', missing_ctx)
+    previous_global_statek_ctx = global_context.get('_STATEK_CTX', missing_ctx)
+    previous_global_perm_ctx = global_context.get('_PERM_CTX', missing_ctx)
+    statek_ctx = _statek_ctx_for_job(job)
     local_context['_STATEK_CTX'] = statek_ctx
     global_context['_STATEK_CTX'] = statek_ctx
 
@@ -248,17 +252,30 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     if '_PERM_CTX' in local_context:
         global_context['_PERM_CTX'] = local_context['_PERM_CTX']
 
-    try:
-        yield custom_print_fn, custom_exit_fn
-    finally:        
-        # Restore original built-ins
-        builtins.print = original_print
-        builtins.exit = original_exit
+    with _statek_ctx_scope(statek_ctx):
+        try:
+            yield custom_print_fn, custom_exit_fn
+        finally:
+            # Restore original built-ins
+            builtins.print = original_print
+            builtins.exit = original_exit
 
-        # Remove helpers from context
-        for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg', '_STATEK_CTX']:
-            if key in local_context:
-                del local_context[key]
+            # Remove helpers from context
+            for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg']:
+                if key in local_context:
+                    del local_context[key]
+            if previous_local_statek_ctx is missing_ctx:
+                local_context.pop('_STATEK_CTX', None)
+            else:
+                local_context['_STATEK_CTX'] = previous_local_statek_ctx
+            if previous_global_statek_ctx is missing_ctx:
+                global_context.pop('_STATEK_CTX', None)
+            else:
+                global_context['_STATEK_CTX'] = previous_global_statek_ctx
+            if previous_global_perm_ctx is missing_ctx:
+                global_context.pop('_PERM_CTX', None)
+            else:
+                global_context['_PERM_CTX'] = previous_global_perm_ctx
 
 
 def _is_empty_code(code_str: Optional[str]) -> bool:
@@ -782,6 +799,21 @@ async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
                 await result
 
 
+def _with_statek_job_context(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Run an async job function inside ContextVar-backed Statek job context.
+
+    Apply this to async job entrypoints that may be called directly, outside
+    :func:`job_worker`, but still need current job helpers to resolve context.
+    """
+    @functools.wraps(func)
+    async def wrapped(job: Job, *args: Any, **kwargs: Any) -> Any:
+        with _statek_ctx_scope(_statek_ctx_for_job(job)):
+            return await func(job, *args, **kwargs)
+
+    return wrapped
+
+
+@_with_statek_job_context
 async def run_job_step(job: Job, provider: str = None) -> bool:
     """
     Execute a single step of the agentic pipeline.
@@ -904,8 +936,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 # Critical job definition failure — terminate job and record error
                 job.job_def.set_error(e)
                 job.set_status(JobStatus.DONE)
-                # Provide minimal context for error handlers
-                _STATEK_CTX = {'job': job}  # noqa: F841
                 handle_critical_error(e)
                 return True
             # Non-warmup exception: already printed to console by exec_step
@@ -1147,8 +1177,8 @@ def unsuspend_jobs():
 def handle_critical_error(error: Optional[Exception] = None) -> None:
     """Handle a critical job-terminating error by invoking registered error handlers.
 
-    Locates the current job from the execution context (via ``_STATEK_CTX``) and
-    calls :meth:`~statek.executors.job.Job.notify_handlers` so that every registered
+    Locates the current job from the Statek execution context and calls
+    :meth:`~statek.executors.job.Job.notify_handlers` so that every registered
     error handler is invoked with the supplied exception.
 
     If no job is found in the current context the function is a no-op.
@@ -1163,32 +1193,30 @@ def handle_critical_error(error: Optional[Exception] = None) -> None:
 
 async def job_worker(semaphore, job: Job, provider: str = None):
     async with semaphore:
-        _STATEK_CTX = {'job': job}  # noqa: F841 — makes job accessible to handle_critical_error
-        if job.job_def.agent is not None:
-            _STATEK_CTX['agent'] = job.job_def.agent
-        try:
-            # Log which agent is running this job
-            agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
-            statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}", level='debug')
-            await run_job_step(job, provider)
-            # Log cost after each LLM request
-            statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
-                       f"cost: ${job.usage.total_cost or 0.0:.4f}")
-        except LLM_HarnessError as e:
-            error_msg = f"LLM_HarnessError: {e}"
-            statek_log(error_msg, level='debug')
-            job.py_env.exit_status = f"Error: {e}"
-            job.console_append(error_msg, error_message=error_msg)
-            job.set_status(JobStatus.DONE)
-            handle_critical_error(e)
-        except Exception as e:
-            # If job fails, write full stack trace to console and set status to DONE
-            import traceback
-            error_msg = f"Job {db0.uuid(job)} failed with error: {e}\n{traceback.format_exc()}"
-            statek_log(error_msg, level='debug')
-            job.console_append(error_msg, error_message=error_msg)
-            job.set_status(JobStatus.DONE)
-            handle_critical_error(e)
+        with _statek_ctx_scope(_statek_ctx_for_job(job)):
+            try:
+                # Log which agent is running this job
+                agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
+                statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}", level='debug')
+                await run_job_step(job, provider)
+                # Log cost after each LLM request
+                statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
+                           f"cost: ${job.usage.total_cost or 0.0:.4f}")
+            except LLM_HarnessError as e:
+                error_msg = f"LLM_HarnessError: {e}"
+                statek_log(error_msg, level='debug')
+                job.py_env.exit_status = f"Error: {e}"
+                job.console_append(error_msg, error_message=error_msg)
+                job.set_status(JobStatus.DONE)
+                handle_critical_error(e)
+            except Exception as e:
+                # If job fails, write full stack trace to console and set status to DONE
+                import traceback
+                error_msg = f"Job {db0.uuid(job)} failed with error: {e}\n{traceback.format_exc()}"
+                statek_log(error_msg, level='debug')
+                job.console_append(error_msg, error_message=error_msg)
+                job.set_status(JobStatus.DONE)
+                handle_critical_error(e)
 
 async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     start_jobs_func: Callable = None, auto_terminate: bool = False):

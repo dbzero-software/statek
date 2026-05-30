@@ -3,7 +3,13 @@ from typing import Tuple
 import asyncio
 import pytest
 import dbzero as db0
-from statek.utils import find_locals, get_current_agent, get_current_agent_name, get_current_job
+from statek.utils import (
+    find_locals,
+    get_current_agent,
+    get_current_agent_name,
+    get_current_job,
+    _statek_ctx_scope,
+)
 from statek.system import inject_context, tool
 from statek.executors.utils import exec_step, _smart_call
 from statek.executors.job import Job, JobDef, JobStatus
@@ -100,9 +106,9 @@ class _PermCtxRaisesJob:
 
 
 def _run_with_job(job, func):
-    """Run func while _STATEK_CTX exposes a fake current job."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while Statek context exposes a fake current job."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 class TestFindLocals:
@@ -437,6 +443,19 @@ class TestGetCurrentJob:
 
         result = inject_context(fn, {"_STATEK_CTX": ctx})()
         assert result is None
+
+    def test_inject_context_restores_outer_context(self):
+        """inject_context temporarily overrides and then restores current Statek context."""
+        outer_job = object()
+        inner_job = object()
+
+        def fn(**kwargs):  # pylint: disable=unused-argument
+            return get_current_job()
+
+        with _statek_ctx_scope({"job": outer_job}):
+            result = inject_context(fn, {"_STATEK_CTX": {"job": inner_job}})()
+            assert result is inner_job
+            assert get_current_job() is outer_job
 
 
 class TestFindLocalsWithFutures:
