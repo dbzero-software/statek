@@ -7,14 +7,37 @@ import re
 import inspect
 import sys
 from collections import namedtuple
+from contextlib import contextmanager
+from contextvars import ContextVar as _PyContextVar
 from dataclasses import dataclass, is_dataclass, fields as dataclass_fields
 from datetime import datetime
 from decimal import Decimal
-from typing import (Callable, Iterable, List, Dict, Optional, Sequence, Tuple, Type, Any,
-                    get_type_hints, get_origin, get_args, Union, ForwardRef, TYPE_CHECKING)
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    ForwardRef,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    TYPE_CHECKING,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 import dbzero as db0
 
 logger = logging.getLogger(__name__)
+
+_STATEK_CTX_VAR: _PyContextVar[Optional[Dict[str, Any]]] = _PyContextVar(
+    "statek_ctx",
+    default=None,
+)
 
 if TYPE_CHECKING:
     from statek.llm_api import CallParams
@@ -812,35 +835,77 @@ def prompt_append_console(  # pylint: disable=too-many-arguments,too-many-positi
     return result
 
 
-def _get_statek_ctx() -> Optional[dict]:
-    """Locate the _STATEK_CTX dict from the call stack.
+def _statek_ctx_for_job(job: Any) -> Dict[str, Any]:
+    """Build the volatile Statek execution context for a job.
 
     Returns:
-        The _STATEK_CTX dict, or None if not found.
+        Context dictionary containing the job and, when available, its agent.
     """
-    ctx = next(iter(find_locals(var_name='_STATEK_CTX', ext_scan=False)), None)
+    ctx = {"job": job}
+    job_def = getattr(job, "job_def", None)
+    agent = getattr(job_def, "agent", None)
+    if agent is not None:
+        ctx["agent"] = agent
+    return ctx
+
+
+@contextmanager
+def _statek_ctx_scope(ctx: Optional[Dict[str, Any]]) -> Iterator[Optional[Dict[str, Any]]]:
+    """Temporarily bind Statek execution context to this logical execution scope.
+
+    Args:
+        ctx: Context dictionary to make current, or ``None`` to clear context.
+
+    Yields:
+        The context passed in.
+    """
+    token = _STATEK_CTX_VAR.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _STATEK_CTX_VAR.reset(token)
+
+
+def _get_statek_ctx() -> Optional[Dict[str, Any]]:
+    """Return the current volatile Statek execution context, if any.
+
+    Returns:
+        The active context dictionary, or ``None`` if no context is active.
+    """
+    ctx = _STATEK_CTX_VAR.get()
     if not isinstance(ctx, dict):
         return None
     return ctx
 
 
+def _require_statek_job_context() -> Any:
+    """Return the current job or raise when no job context is active."""
+    ctx = _get_statek_ctx()
+    if ctx is None:
+        raise RuntimeError("Statek job context not found")
+    job = ctx.get("job")
+    if job is None:
+        raise RuntimeError("Statek job context not found")
+    return job
+
+
 def statek_ctx_set(**kwargs) -> None:
-    """Set or update variables in the current agent's execution context.
+    """Set or update variables in the current Statek execution context.
 
     Args:
-        **kwargs: key-value pairs to set in _STATEK_CTX.
+        **kwargs: Key-value pairs to set in the current context.
 
     Raises:
-        RuntimeError: if _STATEK_CTX is not found in the call stack.
+        RuntimeError: If no Statek execution context is active.
     """
     ctx = _get_statek_ctx()
     if ctx is None:
-        raise RuntimeError("_STATEK_CTX not found in execution context")
+        raise RuntimeError("Statek execution context not found")
     ctx.update(kwargs)
 
 
 def statek_ctx_get(*key_and_default) -> Any:
-    """Retrieve a variable from the current agent's execution context.
+    """Retrieve a variable from the current Statek execution context.
 
     Accepts one or two positional arguments: the key name, and an optional
     default returned when the key is missing.  Without a default, a missing
@@ -849,7 +914,7 @@ def statek_ctx_get(*key_and_default) -> Any:
 
     Raises:
         KeyError: if the key is not found and no default is provided.
-        RuntimeError: if _STATEK_CTX is not found and no default is provided.
+        RuntimeError: if no Statek execution context is active and no default is provided.
         TypeError: if called with zero or more than two arguments.
     """
     if not key_and_default or len(key_and_default) > 2:
@@ -861,25 +926,24 @@ def statek_ctx_get(*key_and_default) -> Any:
     if ctx is None:
         if has_default:
             return key_and_default[1]
-        raise RuntimeError("_STATEK_CTX not found in execution context")
+        raise RuntimeError("Statek execution context not found")
     return ctx.get(*key_and_default) if has_default else ctx[key_and_default[0]]
 
 
 def perm_ctx_set(**kwargs) -> None:
     """Set or update variables in the persistent execution context.
 
-    If _PERM_CTX already exists in the call stack it is updated directly.
-    Otherwise the function creates _PERM_CTX in the current job's PyEnv local
+    If _PERM_CTX already exists it is updated directly. Otherwise the function
+    creates _PERM_CTX in the current job's PyEnv local
     state so it persists across steps.
 
     Args:
         **kwargs: key-value pairs to set in _PERM_CTX.
 
     Raises:
-        RuntimeError: if neither _PERM_CTX nor _STATEK_CTX with a job is
-            found in the call stack.
+        RuntimeError: if no current Statek job context is active.
     """
-    py_env = _get_statek_ctx()['job'].py_env
+    py_env = _require_statek_job_context().py_env
     if py_env.local_state is None:
         py_env.local_state = {}
     ctx = py_env.local_state.setdefault("_PERM_CTX", {})
@@ -916,13 +980,13 @@ def perm_ctx_set_unique(key: str, value: Any) -> str:
         The variable name assigned in _PERM_CTX.
 
     Raises:
-        RuntimeError: if _STATEK_CTX with a job is not found in the call stack.
+        RuntimeError: if no current Statek job context is active.
     """
     frame = inspect.currentframe()
     caller_frame = frame.f_back if frame is not None else None
     local_names = _collect_aggregated_locals(caller_frame).keys()
 
-    py_env = _get_statek_ctx()['job'].py_env
+    py_env = _require_statek_job_context().py_env
     if py_env.local_state is None:
         py_env.local_state = {}
     ctx = py_env.local_state.setdefault("_PERM_CTX", {})
@@ -950,30 +1014,36 @@ def perm_ctx_get(*key_and_default) -> Any:
         )
     has_default = len(key_and_default) == 2
 
-    py_env = _get_statek_ctx()['job'].py_env
+    job = get_current_job()
+    if job is None:
+        if has_default:
+            return key_and_default[1]
+        raise RuntimeError("Statek job context not found")
+
+    py_env = job.py_env
     ctx = py_env.local_state.get("_PERM_CTX") if py_env.local_state else None
 
     if ctx is None:
         if has_default:
             return key_and_default[1]
-        raise RuntimeError("_PERM_CTX not found in execution context")
+        raise RuntimeError("_PERM_CTX not found in Statek job context")
     return ctx.get(*key_and_default) if has_default else ctx[key_and_default[0]]
 
 
 def get_current_agent():
-    """Retrieve the Agent from the current execution context (_STATEK_CTX).
+    """Retrieve the Agent from the current Statek execution context.
 
     Returns:
-        The Agent object from _STATEK_CTX, or None if not available.
+        The Agent object from the current context, or None if not available.
     """
     return statek_ctx_get('agent', None)
 
 
 def get_current_job():
-    """Retrieve the Job from the current execution context (_STATEK_CTX).
+    """Retrieve the Job from the current Statek execution context.
 
     Returns:
-        The Job object from _STATEK_CTX, or None if not available.
+        The Job object from the current context, or None if not available.
     """
     return statek_ctx_get('job', None)
 

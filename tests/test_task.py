@@ -18,15 +18,16 @@ from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt
+from statek.utils import _statek_ctx_scope
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
 
 
 def _run_with_current_job(job, func):
-    """Run func while job is visible via _STATEK_CTX."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while job is visible through Statek context."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 @db0.memo

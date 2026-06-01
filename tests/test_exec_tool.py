@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from statek.executors.utils import exec_tool
-from statek.utils import CallSpec
+from statek.utils import CallSpec, get_current_job
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
@@ -297,6 +297,12 @@ def _ctx_checker_tool(**kwargs):
     return 'agent' in ctx
 
 
+@tool
+def _current_job_checker_tool(**kwargs):  # pylint: disable=unused-argument
+    """Tool that checks whether framework helpers can resolve the current job."""
+    return get_current_job() is not None
+
+
 class TestExecToolStatekCtx:  # pylint: disable=too-few-public-methods
     """Tests for _STATEK_CTX injection in exec_tool."""
 
@@ -318,6 +324,27 @@ class TestExecToolStatekCtx:  # pylint: disable=too-few-public-methods
         )
 
         result, _ = await exec_tool(_call_spec("_ctx_checker_tool"), job)
+
+        assert result == "True"
+
+    @pytest.mark.asyncio
+    async def test_current_job_available_in_exec_tool(self, db0_fixture):  # pylint: disable=unused-argument
+        """get_current_job resolves through the active Statek context inside tools."""
+        agent_obj = Agent(
+            role="ctx_current_job_tool_test",
+            _system_prompt=make_system_prompt("Test"),
+            _metadata={"MODEL": "test-model"},
+            _tools=[_current_job_checker_tool],
+        )
+        job_def = JobDef(agent=agent_obj, job_params=None, warmup_code=None)
+        job = Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,  # pylint: disable=no-member
+        )
+
+        result, _ = await exec_tool(_call_spec("_current_job_checker_tool"), job)
 
         assert result == "True"
 

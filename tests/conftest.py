@@ -17,6 +17,7 @@ from statek.llm_api import Claude_API, OpenAI_API, OpenRouter_API, VertexAI_API
 from statek.prompt_config import make_system_prompt
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 from statek.settings import LLM_API_Settings
+from statek.utils import _statek_ctx_scope
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
 TEST_DIR = os.path.join(os.path.dirname(__file__))
@@ -295,9 +296,9 @@ class StatekContextJob:
 
 
 def run_with_statek_job(job, func):
-    """Run func while job is registered in _STATEK_CTX on the call stack."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while job is registered in the Statek execution context."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 # Mock tool functions for testing
