@@ -1,6 +1,9 @@
 """Tests for StatekPushQueue singleton."""
 # pylint: disable=no-member,unused-argument,too-few-public-methods
 import dbzero as db0
+from dbzero_modelkit.queues import FiFoQueue
+
+import statek.statek_push_queue as push_queue_module
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent, SupervisedAgent
 from statek.prompt_config import make_system_prompt
@@ -54,6 +57,10 @@ def test_statek_push_queue_is_singleton(db0_fixture):
     q1 = StatekPushQueue()
     q2 = StatekPushQueue()
     assert q1 is q2
+
+
+def test_statek_push_queue_uses_modelkit_fifo_queue():
+    assert push_queue_module.FiFoQueue is FiFoQueue
 
 
 def test_statek_push_queue_can_be_created_as_scoped_singleton(db0_fixture):

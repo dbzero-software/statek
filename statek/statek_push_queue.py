@@ -3,9 +3,9 @@
 from typing import Any, List, Optional, Tuple
 
 import dbzero as db0
+from dbzero_modelkit.queues import FiFoQueue
 
 from statek.agents.agent import SupervisedAgent
-from statek.fifo_queue import FiFoQueue
 from statek.rpc_integration import rpc as db0_rpc
 
 @db0.memo(singleton=True)
