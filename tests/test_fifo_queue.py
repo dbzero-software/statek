@@ -1,7 +1,7 @@
 """Tests for FiFoQueue implementation."""
 # pylint: disable=unused-argument
 import dbzero as db0
-from statek.fifo_queue import FiFoQueue
+from dbzero_modelkit.queues import FiFoQueue
 
 
 def test_fifo_queue_can_be_created(db0_fixture):

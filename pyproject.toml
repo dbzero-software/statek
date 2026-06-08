@@ -22,7 +22,21 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dynamic = ["dependencies"]
+dependencies = [
+    "build>=1.0.0",
+    "dbzero>=0.3.3",
+    "dbzero-modelkit>=0.1.0",
+    "easyoidc[nicegui]==0.1.12",
+    "boto3==1.42.71",
+    "pydantic==2.12.5",
+    "pydantic-settings==2.12.0",
+    "PyJWT==2.10.1",
+    "httpx==0.28.1",
+    "nest_asyncio==1.6.0",
+    "nicegui==2.24.2",
+    "markdown2==2.5.4",
+    "weasyprint==68.1",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -41,9 +55,6 @@ exclude = ["tests*", "experiments*"]
 
 [tool.setuptools.package-data]
 statek = ["*.json"]
-
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
 
 [tool.pylint.messages_control]
 disable = ["C0111", "C0103", "C0302", "R0801", "R0902", "R0903"]
