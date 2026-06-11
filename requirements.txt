@@ -1,7 +1,21 @@
+<<<<<<< HEAD
 # Core runtime dependencies
 dbzero==0.2.4
+=======
+# Core dependencies
+# Add your runtime dependencies here
+
+# Build dependencies
+build>=1.0.0
+
+# app dependencies
+dbzero>=0.3.3
+dbzero-modelkit>=0.1.0
+easyoidc[nicegui]==0.1.12
+>>>>>>> 557cabec7ab32ac42d90808282319f8604e801fb
 boto3==1.42.71
 pydantic==2.12.5
 pydantic-settings==2.12.0
+PyJWT==2.10.1
 httpx==0.28.1
 nest_asyncio==1.6.0

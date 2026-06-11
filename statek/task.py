@@ -1,8 +1,9 @@
 # pylint: disable=no-member
 import ast
+import builtins
 import inspect
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Type, Union
 import dbzero as db0
 from .exceptions import FutureError
 from .future import FutureResult, temporal
@@ -15,6 +16,182 @@ from .pyenv import PyEnv
 from .settings import get_provider_settings as _get_provider_settings
 from .settings import get_statek_settings as _get_statek_settings
 from .utils import get_current_job
+
+
+class _ReferencedLocalsCollector(ast.NodeVisitor):
+    """Collect external local names referenced by a Python AST."""
+
+    def __init__(self):
+        self.builtin_names = set(dir(builtins))
+        self.referenced = []
+        self.seen = set()
+        self.bound = set()
+
+    def add_reference(self, name: str):
+        if name in self.bound or name in self.seen or name in self.builtin_names:
+            return
+        self.seen.add(name)
+        self.referenced.append(name)
+
+    def bind_target(self, target):
+        if isinstance(target, ast.Name):
+            self.bound.add(target.id)
+            return
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                self.bind_target(element)
+            return
+        if isinstance(target, ast.Starred):
+            self.bind_target(target.value)
+
+    def visit_store_target_reads(self, target):
+        if isinstance(target, ast.Name):
+            return
+        if isinstance(target, ast.Attribute):
+            self.visit(target.value)
+            return
+        if isinstance(target, ast.Subscript):
+            self.visit(target.value)
+            self.visit(target.slice)
+            return
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                self.visit_store_target_reads(element)
+            return
+        if isinstance(target, ast.Starred):
+            self.visit_store_target_reads(target.value)
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, ast.Load):
+            self.add_reference(node.id)
+
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Attribute):
+            self.visit(node.func.value)
+        elif not isinstance(node.func, ast.Name):
+            self.visit(node.func)
+        for arg in node.args:
+            self.visit(arg)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+
+    def visit_Assign(self, node):
+        self.visit(node.value)
+        for target in node.targets:
+            self.visit_store_target_reads(target)
+            self.bind_target(target)
+
+    def visit_AnnAssign(self, node):
+        if node.annotation is not None:
+            self.visit(node.annotation)
+        if node.value is not None:
+            self.visit(node.value)
+        self.visit_store_target_reads(node.target)
+        self.bind_target(node.target)
+
+    def visit_AugAssign(self, node):
+        if isinstance(node.target, ast.Name):
+            self.add_reference(node.target.id)
+        else:
+            self.visit(node.target)
+        self.visit(node.value)
+        self.bind_target(node.target)
+
+    def visit_NamedExpr(self, node):
+        self.visit(node.value)
+        self.bind_target(node.target)
+
+    def visit_For(self, node):
+        self.visit(node.iter)
+        self.bind_target(node.target)
+        for child in node.body:
+            self.visit(child)
+        for child in node.orelse:
+            self.visit(child)
+
+    def visit_With(self, node):
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self.bind_target(item.optional_vars)
+        for child in node.body:
+            self.visit(child)
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            self.bound.add(alias.asname or alias.name.split(".", 1)[0])
+
+    def visit_ImportFrom(self, node):
+        for alias in node.names:
+            self.bound.add(alias.asname or alias.name)
+
+    def visit_FunctionDef(self, node):
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self.visit(node.args)
+        for default in node.args.defaults:
+            self.visit(default)
+        for default in node.args.kw_defaults:
+            if default is not None:
+                self.visit(default)
+        if node.returns is not None:
+            self.visit(node.returns)
+        self.bound.add(node.name)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+        self.bound.add(node.name)
+
+    def visit_Lambda(self, node):
+        for default in node.args.defaults:
+            self.visit(default)
+        for default in node.args.kw_defaults:
+            if default is not None:
+                self.visit(default)
+
+    def _visit_comprehension_generators(self, generators):
+        for generator in generators:
+            self.visit(generator.iter)
+            self.bind_target(generator.target)
+            for condition in generator.ifs:
+                self.visit(condition)
+
+    def visit_ListComp(self, node):
+        previous_bound = set(self.bound)
+        self._visit_comprehension_generators(node.generators)
+        self.visit(node.elt)
+        self.bound.clear()
+        self.bound.update(previous_bound)
+
+    visit_SetComp = visit_ListComp
+    visit_GeneratorExp = visit_ListComp
+
+    def visit_DictComp(self, node):
+        previous_bound = set(self.bound)
+        self._visit_comprehension_generators(node.generators)
+        self.visit(node.key)
+        self.visit(node.value)
+        self.bound.clear()
+        self.bound.update(previous_bound)
+
+
+def get_referenced_locals(code: str) -> Iterable[str]:
+    """Return external local names referenced by *code* in appearance order.
+
+    Names bound by the code block itself are not returned. Builtins are also
+    skipped because they do not need to be copied into the execution context.
+    """
+    tree = ast.parse(code)
+    collector = _ReferencedLocalsCollector()
+    collector.visit(tree)
+    return collector.referenced
 
 
 def get_provider_settings(provider=None):

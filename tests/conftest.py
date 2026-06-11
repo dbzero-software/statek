@@ -13,8 +13,11 @@ import dbzero as db0
 
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent, SupervisedAgent
+from statek.llm_api import Claude_API, OpenAI_API, OpenRouter_API, VertexAI_API
 from statek.prompt_config import make_system_prompt
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
+from statek.settings import LLM_API_Settings
+from statek.utils import _statek_ctx_scope
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
 TEST_DIR = os.path.join(os.path.dirname(__file__))
@@ -87,6 +90,46 @@ def temp_dir(test_data_dir):
     # Cleanup after test
     if os.path.exists(temp_path):
         shutil.rmtree(temp_path)
+
+
+@pytest.fixture()
+def openrouter_api():
+    """Return an OpenRouter API test instance."""
+    settings = LLM_API_Settings(
+        api_url="https://openrouter.ai/api/v1/chat/completions",
+        api_key="test-key",
+    )
+    return OpenRouter_API(settings=settings)
+
+
+@pytest.fixture()
+def openai_api():
+    """Return an OpenAI API test instance."""
+    settings = LLM_API_Settings(
+        api_url="https://api.openai.com/v1/chat/completions",
+        api_key="test-key",
+    )
+    return OpenAI_API(settings=settings)
+
+
+@pytest.fixture()
+def vertexai_api():
+    """Return a Vertex AI API test instance."""
+    settings = LLM_API_Settings(
+        api_url="https://aiplatform.googleapis.com/v1",
+        api_key="test-token",
+    )
+    return VertexAI_API(settings=settings, project="p1", location="us-central1")
+
+
+@pytest.fixture()
+def claude_api():
+    """Return a Claude API test instance."""
+    settings = LLM_API_Settings(
+        api_url="https://api.anthropic.com/v1/messages",
+        api_key="test-key",
+    )
+    return Claude_API(settings=settings, use_prompt_caching=False)
 
 
 @pytest.fixture(scope='session')
@@ -253,9 +296,9 @@ class StatekContextJob:
 
 
 def run_with_statek_job(job, func):
-    """Run func while job is registered in _STATEK_CTX on the call stack."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while job is registered in the Statek execution context."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 # Mock tool functions for testing

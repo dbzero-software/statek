@@ -1,11 +1,12 @@
 """Tests for exec_step function."""
-# pylint: disable=too-many-lines
+# pylint: disable=too-many-lines,protected-access
 
 from dataclasses import dataclass
 from datetime import date, datetime
 import pytest
 import dbzero as db0
 
+import statek.executors.utils as executor_utils
 from statek.executors.utils import exec_step
 from statek.future import FutureResult, FutureElement, temporal
 from statek.exceptions import FutureError
@@ -1168,6 +1169,16 @@ class TestExecStepStatekCtx:
         assert job.py_env.local_state.get('_ctx') is not None
 
     @pytest.mark.asyncio
+    async def test_statek_ctx_get_current_job_in_exec_step(self, job_factory):
+        """statek_ctx_get resolves the current job inside executed code."""
+        job = job_factory()
+        await exec_step(
+            'from statek.utils import statek_ctx_get\n_ctx_job = statek_ctx_get("job")',
+            job,
+        )
+        assert job.py_env.local_state.get('_ctx_job') is job
+
+    @pytest.mark.asyncio
     async def test_statek_ctx_agent_is_job_agent(self, job_factory):
         """_STATEK_CTX['agent'] refers to the job's agent."""
         job = job_factory()
@@ -1179,6 +1190,13 @@ class TestExecStepStatekCtx:
         """_STATEK_CTX is not saved to local_state after execution."""
         job = job_factory()
         await exec_step('x = 1', job)
+        assert '_STATEK_CTX' not in job.py_env.local_state
+
+    @pytest.mark.asyncio
+    async def test_statek_ctx_reassignment_not_persisted_after_exec_step(self, job_factory):
+        """Reassigning _STATEK_CTX in executed code remains volatile."""
+        job = job_factory()
+        await exec_step('_STATEK_CTX = {"replacement": True}', job)
         assert '_STATEK_CTX' not in job.py_env.local_state
 
     @pytest.mark.asyncio
@@ -1194,6 +1212,29 @@ class TestExecStepStatekCtx:
         job = job_factory()
         await exec_step('x = 1', job)
         assert '_PERM_CTX' not in job.py_env.local_state
+
+    def test_existing_perm_ctx_does_not_leak_to_executor_globals(self, job_factory):
+        """Temporary global _PERM_CTX injection is restored after execution."""
+        job = job_factory()
+        local_context = {"_PERM_CTX": {"key": "value"}}
+        previous_perm_ctx = {"previous": "value"}
+        global_context = {"_PERM_CTX": previous_perm_ctx}
+
+        with executor_utils._setup_execution_context(job, global_context, local_context):
+            assert global_context["_PERM_CTX"] == {"key": "value"}
+
+        assert global_context["_PERM_CTX"] is previous_perm_ctx
+
+    def test_new_perm_ctx_is_removed_from_executor_globals(self, job_factory):
+        """Temporary global _PERM_CTX injection is removed when newly added."""
+        job = job_factory()
+        local_context = {"_PERM_CTX": {"key": "value"}}
+        global_context = {}
+
+        with executor_utils._setup_execution_context(job, global_context, local_context):
+            assert global_context["_PERM_CTX"] == {"key": "value"}
+
+        assert "_PERM_CTX" not in global_context
 
     @pytest.mark.asyncio
     async def test_exec_step_preserves_job_local_state_added_during_execution(self, job_factory):

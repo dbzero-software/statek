@@ -7,7 +7,11 @@ from statek.utils import block_comment, get_current_agent, _get_class_name
 from statek.system import tool
 from statek.docstring import parse_tool_docstring, format_docstring
 from statek.utils import CodeBlock
-from statek.executors.job import JobDef, parse_warmup_code
+from statek.executors.job import (
+    JobDef,
+    parse_warmup_code,
+    parse_warmup_code_with_metadata,
+)
 from statek.prompt_config import (
     SystemPrompt,
     SystemPromptData,
@@ -393,6 +397,13 @@ class Agent:
 class WarmupDef:
     """Holds warmup code blocks retrieved from configuration files."""
     warmup_code: Optional[Union[str, CodeBlock, Sequence[Union[str, CodeBlock]]]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+    @property
+    def hidden(self) -> bool:
+        """Return True when aggregate warmup metadata explicitly sets hidden=True."""
+        metadata = getattr(self, "metadata", None)
+        return metadata is not None and metadata.get("hidden") is True
 
 
 @db0.memo
@@ -403,7 +414,38 @@ class SupervisedAgent(Agent):
     """
     warmup_def: Optional[WarmupDef] = None
 
-    def update_warmup_def(self, unparsed_warmup_def: str) -> bool:
+    _X__ref_locals: Optional[List[str]] = None
+
+    @property
+    def referenced_locals(self) -> List[str]:
+        """External local names referenced by this agent's warmup definition."""
+        if self._X__ref_locals is not None:
+            return self._X__ref_locals
+
+        if self.warmup_def is None or self.warmup_def.warmup_code is None:
+            self._X__ref_locals = []
+            return self._X__ref_locals
+
+        from statek.task import get_referenced_locals  # pylint: disable=import-outside-toplevel,cyclic-import
+
+        warmup_code = self.warmup_def.warmup_code
+        code_blocks = []
+
+        def _append_code_block(block):
+            code = block.code if isinstance(block, CodeBlock) else block
+            if code:
+                code_blocks.append(code)
+
+        if isinstance(warmup_code, (str, CodeBlock)):
+            _append_code_block(warmup_code)
+        else:
+            for block in warmup_code:
+                _append_code_block(block)
+
+        self._X__ref_locals = list(get_referenced_locals("\n".join(code_blocks)))
+        return self._X__ref_locals
+
+    def update_warmup_def(self, unparsed_warmup_def: Optional[str]) -> bool:
         """Set or update warmup_def only if it has changed.
 
         Parses the input through parse_warmup_code before comparing with the
@@ -415,16 +457,20 @@ class SupervisedAgent(Agent):
         Returns:
             True if warmup_def was updated, False if it was already up to date.
         """
-        new_value = parse_warmup_code(unparsed_warmup_def)
+        new_value, new_metadata = parse_warmup_code_with_metadata(unparsed_warmup_def)
         if new_value is None and self.warmup_def is None:
             return False
         if new_value is None:
             self.warmup_def = None
+            self._X__ref_locals = None
             STATEK_LOGGER.debug("Agent '%s' warmup_def cleared", self.role)
             return True
-        if self.warmup_def is not None and self.warmup_def.warmup_code == new_value:
-            return False
-        self.warmup_def = WarmupDef(warmup_code=new_value)
+        if self.warmup_def is not None:
+            current_metadata = getattr(self.warmup_def, "metadata", None)
+            if self.warmup_def.warmup_code == new_value and current_metadata == new_metadata:
+                return False
+        self.warmup_def = WarmupDef(warmup_code=new_value, metadata=new_metadata)
+        self._X__ref_locals = None
         STATEK_LOGGER.debug("Agent '%s' warmup_def updated", self.role)
         return True
 

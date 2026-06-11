@@ -2,6 +2,7 @@
 
 # pylint: disable=no-member
 
+import json
 import types
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -33,15 +34,15 @@ from statek.executors.chat_log_item import (
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
-from statek.utils import CodeBlock, CallSpec
+from statek.utils import CodeBlock, CallSpec, _statek_ctx_scope
 from statek.system import find_sub_task_handler
 from statek.task import SubTaskHandler, TaskError
 
 
 def _run_with_current_job(job, func):
-    """Run func while job is visible via _STATEK_CTX."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while job is visible through Statek context."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 def _completed_subtask_handler(job, subtask_id=None, result=None, error=None):
@@ -1748,6 +1749,81 @@ class TestJobGetChatHistoryWithWarmup:
         assert last_user.content == "after-first-llm"
         assert "x = 1" not in (last_user.content or "")
 
+    def test_hidden_warmup_excluded_from_next_request_history(self, job_factory):
+        """Hidden warmup code and console output are excluded from LLM-facing history."""
+        hidden = CodeBlock(code="hidden_setup()", metadata={"hidden": True})
+        job = job_factory(warmup_code=[hidden, "visible_setup()"])
+        job.py_env.console = ["hidden output", "visible output"]
+        set_warmup_positions(job, [1, 2])
+
+        history = list(job.get_next_request()["chat_history"])
+        serialized = "\n".join(str(item.content) for item in history)
+
+        assert "hidden_setup" not in serialized
+        assert "hidden output" not in serialized
+        assert "visible_setup" in serialized
+        assert "visible output" in serialized
+
+    def test_hidden_warmup_tool_results_excluded_from_history(self, job_factory):
+        """Hidden warmup tool calls and their results are excluded from chat history."""
+        hidden_call = CallSpec(id="STATEK-001", func_name="hidden_tool", kwargs={})
+        visible_call = CallSpec(id="STATEK-002", func_name="visible_tool", kwargs={})
+        hidden = CodeBlock(
+            code="hidden_tool()",
+            tool_calls=[hidden_call],
+            metadata={"hidden": True},
+        )
+        visible = CodeBlock(code="visible_tool()", tool_calls=[visible_call])
+        job = job_factory(warmup_code=[hidden, visible])
+        hidden_item = WarmupLogItem(console_pos=0, warmup_block_num=0)
+        hidden_item.tool_log = ["hidden result"]
+        visible_item = WarmupLogItem(console_pos=0, warmup_block_num=1)
+        visible_item.tool_log = ["visible result"]
+        job.chat_log.extend([hidden_item, visible_item])
+
+        history = list(job.get_chat_history())
+        serialized = json.dumps([
+            {
+                "content": item.content,
+                "tool_calls": [cs.func_name for cs in item.tool_calls]
+                if isinstance(item.tool_calls, list) else None,
+            }
+            for item in history
+        ])
+
+        assert "hidden_tool" not in serialized
+        assert "hidden result" not in serialized
+        assert "visible_tool" in serialized
+        assert "visible result" in serialized
+
+    def test_preview_request_excludes_hidden_warmup_payload(self, job_factory):
+        """Provider preview payloads do not contain hidden warmup content."""
+        hidden = CodeBlock(code="hidden_setup()", metadata={"hidden": True})
+        job = job_factory(warmup_code=[hidden, "visible_setup()"])
+        job.py_env.console = ["hidden output", "visible output"]
+        set_warmup_positions(job, [1, 2])
+        request = job.get_next_request()
+        history = list(request["chat_history"])
+
+        payload = OpenRouter_API(LLM_API_Settings(
+            api_url="https://openrouter.ai/api/v1/chat/completions",
+            api_key="test-key",
+        )).preview_request(**{**request, "chat_history": history})
+        serialized = json.dumps(payload)
+
+        assert "hidden_setup" not in serialized
+        assert "hidden output" not in serialized
+        assert "visible_setup" in serialized
+        assert "visible output" in serialized
+
+    def test_llm_initial_step_size_excludes_hidden_warmup_text(self, job_factory):
+        """Hidden warmup code is excluded from LLM-facing token estimates."""
+        hidden = CodeBlock(code="h" * 40, metadata={"hidden": True})
+        visible = "v" * 20
+        job = job_factory(warmup_code=[hidden, visible])
+
+        assert job.get_llm_initial_step_size() == ((len("Test agent") + len(visible)) // 4, 0)
+
 
 class TestJobSetStatus:  # pylint: disable=too-few-public-methods
     """Test cases for Job.set_status method."""
@@ -3118,7 +3194,6 @@ class TestGetLlmStepSizes:
 
     def test_code_block_tool_calls_counted_in_output_tokens(self, job_factory):
         """Tool call requests in a CodeBlock response contribute to output tokens."""
-        import json  # pylint: disable=import-outside-toplevel
         job = job_factory()
         cs = CallSpec(id="c1", func_name="my_tool", args=None, kwargs={"x": 1})
         cb = CodeBlock(code="run = True", tool_calls=[cs])

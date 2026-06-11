@@ -18,6 +18,7 @@ from statek.locale import LANGUAGE_HINTS
 from statek.model_pricing import get_model_pricing
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
+from statek.utils import _is_hidden_warmup_block
 from statek.executors.chat_log_item import (
     LLM_LogItem,
     ReminderLogItem,
@@ -398,6 +399,44 @@ class _HistorySection:
     warmup_num: Optional[int] = None
     warmup_total: Optional[int] = None
     turn_num: Optional[int] = None
+    hidden: bool = False
+
+
+def _warmup_section_title(index: int, hidden: bool) -> str:
+    """Return the display title for a warmup block."""
+    title = f'Warmup Code {index}'
+    return f'{title} (Hidden)' if hidden else title
+
+
+def _build_warmup_display_sections(job, blocks: list) -> list[_HistorySection]:
+    """Build display-only warmup sections from raw job warmup blocks."""
+    ranges = _get_warmup_console_ranges(job)
+    warmup_items = _get_warmup_log_items(job)
+    total = len(blocks)
+    sections = []
+    for i, block in enumerate(blocks):
+        hidden = _is_hidden_warmup_block(block)
+        from_pos, to_pos = ranges[i] if i < len(ranges) else (0, 0)
+        section = _HistorySection(
+            kind='assistant',
+            title=_warmup_section_title(i + 1, hidden),
+            content=_get_code_str(block),
+            content_src=ContentSource.SYSTEM,
+            render_as_code=True,
+            tool_data=_get_tool_data_for_block(block, warmup_items.get(i)),
+            warmup_num=i + 1,
+            warmup_total=total,
+            hidden=hidden,
+        )
+        console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
+        if console_out.strip():
+            section.followups.append(_HistoryMessage(
+                title='Console Output',
+                content=console_out,
+                content_src=ContentSource.CONSOLE,
+            ))
+        sections.append(section)
+    return sections
 
 
 @dataclass
@@ -439,18 +478,34 @@ def _build_history_sections(job) -> list[_HistorySection]:
     """Group ``Job.get_chat_history()`` into job-detail display sections."""
     sections: list[_HistorySection] = []
     current: Optional[_HistorySection] = None
-    expected_warmups = len(_get_warmup_blocks(job))
+    warmup_blocks = _get_warmup_blocks(job)
+    expected_warmups = len(warmup_blocks)
+    has_hidden_warmups = any(_is_hidden_warmup_block(block) for block in warmup_blocks)
+    warmup_sections = (
+        _build_warmup_display_sections(job, warmup_blocks)
+        if has_hidden_warmups else []
+    )
+    warmup_sections_inserted = False
     warmup_num = 0
     turn_num = 0
     chat_style = getattr(getattr(job, 'job_def', None), 'chat_style', None)
     is_direct = chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
     reminder_texts = _get_reminder_texts(job)
+    skipping_warmup_history = False
 
     def _flush_current() -> None:
         nonlocal current
         if current is not None:
             sections.append(current)
             current = None
+
+    def _insert_warmup_sections() -> None:
+        nonlocal warmup_sections_inserted
+        if warmup_sections_inserted or not warmup_sections:
+            return
+        _flush_current()
+        sections.extend(warmup_sections)
+        warmup_sections_inserted = True
 
     for item in _get_history_items(job):
         if item.role == ChatRole.SYSTEM:
@@ -475,10 +530,17 @@ def _build_history_sections(job) -> list[_HistorySection]:
             )
             if is_warmup:
                 warmup_num += 1
-                title = f'Warmup Code {warmup_num}'
+                if has_hidden_warmups:
+                    _insert_warmup_sections()
+                    skipping_warmup_history = True
+                    continue
+                title = _warmup_section_title(warmup_num, False)
                 content_src = ContentSource.SYSTEM
                 render_as_code = True
             else:
+                skipping_warmup_history = False
+                if has_hidden_warmups:
+                    _insert_warmup_sections()
                 turn_num += 1
                 title = f'Turn {turn_num}'
                 content_src = item.content_src
@@ -505,6 +567,14 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 turn_num=turn_num - 1 if not is_warmup else None,
             )
             continue
+
+        if (
+            skipping_warmup_history
+            and item.role in (ChatRole.TOOL, ChatRole.USER)
+            and item.content_src == ContentSource.CONSOLE
+        ):
+            continue
+        skipping_warmup_history = False
 
         target = current.followups if current is not None else None
 
@@ -538,6 +608,8 @@ def _build_history_sections(job) -> list[_HistorySection]:
                 )
             )
 
+    if has_hidden_warmups:
+        _insert_warmup_sections()
     _flush_current()
     return sections
 
@@ -1257,6 +1329,8 @@ def _render_history_section(section: _HistorySection, job=None) -> None:
             code_label = f'warmup code {section.warmup_num} / {section.warmup_total}'
         else:
             code_label = 'warmup code'
+        if section.hidden:
+            code_label = f'{code_label} (hidden)'
     else:
         code_label = 'LLM submitted code' if section.render_as_code else 'LLM response'
 
@@ -1308,6 +1382,8 @@ def _render_warmup_section(job, blocks: list, ranges: list[tuple[int, int]]) -> 
         code = _get_code_str(block)
         console_out = _get_console_slice(job.py_env.console, from_pos, to_pos)
         block_label = f'Warmup Code {i + 1} / {len(blocks)}' if len(blocks) > 1 else 'Warmup Code'
+        if _is_hidden_warmup_block(block):
+            block_label = f'{block_label} (Hidden)'
         tool_data = _get_tool_data_for_block(block, warmup_items.get(i))
 
         with ui.column().classes('w-full gap-2'):

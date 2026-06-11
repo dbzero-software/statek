@@ -284,13 +284,12 @@ def test_show_example_syncs_last_example_id_to_current_job(
 ):
     """show_example mirrors last_example_id into the current job's PyEnv context."""
     job = job_factory()
-    _STATEK_CTX = {"job": job}  # noqa: F841
     settings = _settings(
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
     )
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
-        show_example(agent_name="myagent", example_id=0)
+        run_with_statek_job(job, lambda: show_example(agent_name="myagent", example_id=0))
 
     capsys.readouterr()
     assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 0

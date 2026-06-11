@@ -10,6 +10,7 @@ import pytest
 from statek.exceptions import LLM_HarnessError
 from statek.executors.utils import handle_critical_error, job_worker
 from statek.system import error_handler
+from statek.utils import _statek_ctx_scope
 
 
 # Module-level capture list — mutations visible across calls
@@ -26,14 +27,14 @@ class TestHandleCriticalError:
     """Unit tests for handle_critical_error."""
 
     def test_notifies_job_handlers_with_error(self, job_factory):
-        """When _STATEK_CTX is in scope, the registered handler is invoked with the error."""
+        """When Statek context is active, the registered handler is invoked with error."""
         _call_log.clear()
         job = job_factory()
         job.add_error_handler(_capture, "ctx")
-        _STATEK_CTX = {'job': job}  # noqa: F841 — visible to find_locals via call stack
 
         exc = RuntimeError("boom")
-        handle_critical_error(exc)
+        with _statek_ctx_scope({'job': job}):
+            handle_critical_error(exc)
 
         assert len(_call_log) == 1
         assert _call_log[0][1] is exc

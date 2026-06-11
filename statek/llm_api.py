@@ -14,6 +14,7 @@ from .exceptions import InvalidFormat
 from .chat_history import (
     ChatHistoryItem, ChatRole, format_chat_history_item,
 )
+from .llm_tools_scope import LLM_ToolsScope, parse_llm_tools_scope
 
 STATEK_LOGGER = get_statek_logger()
 
@@ -171,26 +172,170 @@ def extract_call_params(tool_call_req: Dict) -> CallParams:
         ) from exc
 
 
+def _tool_name(tool_func: Callable) -> str:
+    """Return the LLM-facing function name for a tool callable."""
+    return getattr(tool_func, "__name__", "")
+
+
+def _dedupe_tools_by_name(tools: Iterable[Callable]) -> List[Callable]:
+    """Deduplicate tools by name while preserving first occurrence."""
+    result = []
+    seen: set[str] = set()
+    for tool_func in tools:
+        name = _tool_name(tool_func)
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append(tool_func)
+    return result
+
+
+def _find_tool_by_name(tools: Iterable[Callable], name: str) -> Optional[Callable]:
+    """Return the first tool with ``name`` from ``tools``."""
+    for tool_func in tools:
+        if _tool_name(tool_func) == name:
+            return tool_func
+    return None
+
+
+def _scope_is_empty(scope: LLM_ToolsScope) -> bool:
+    """Return whether a parsed scope contains no category or explicit lists."""
+    return (
+        scope.category is None
+        and scope.additional_tools is None
+        and scope.removed_tools is None
+    )
+
+
+def _tool_matches_chat_style(tool_func: Callable, chat_style) -> bool:
+    """Return whether a single tool is compatible with the active chat style."""
+    if chat_style is None:
+        return True
+    from .system import select_tools  # pylint: disable=import-outside-toplevel
+    return bool(list(select_tools([tool_func], "ALL", chat_style=chat_style)))
+
+
+def _resolve_explicit_tool(
+    name: str,
+    available_tools: Sequence[Callable],
+    registered_system_tools: Sequence[Callable],
+    chat_style=None,
+) -> Callable:
+    """Resolve one explicit LLM_TOOLS_SCOPE tool name."""
+    tool_func = _find_tool_by_name(available_tools, name)
+    if tool_func is None:
+        tool_func = _find_tool_by_name(registered_system_tools, name)
+    if tool_func is None:
+        raise ValueError(f"LLM_TOOLS_SCOPE references unknown tool: {name!r}")
+    if not _tool_matches_chat_style(tool_func, chat_style):
+        raise ValueError(
+            f"LLM_TOOLS_SCOPE tool {name!r} is not compatible with chat_style "
+            f"{chat_style!r}"
+        )
+    return tool_func
+
+
+def _merge_registered_system_tools(
+    tools: Iterable[Callable],
+    registered_system_tools: Iterable[Callable],
+) -> List[Callable]:
+    """Merge category tools with registered system tools, keeping first names."""
+    return _dedupe_tools_by_name([*tools, *registered_system_tools])
+
+
+def _select_scope_category_tools(
+    scope: LLM_ToolsScope,
+    available_tools: Sequence[Callable],
+    chat_style=None,
+) -> List[Callable]:
+    """Select the category-driven base tools for a parsed scope."""
+    from .system import find_tools, select_tools  # pylint: disable=import-outside-toplevel
+
+    if scope.category is None:
+        return []
+
+    tools = list(select_tools(available_tools, scope.category, chat_style=chat_style))
+    if scope.category in ("SYSTEM", "ALL"):
+        return _merge_registered_system_tools(
+            tools,
+            find_tools("SYSTEM", chat_style=chat_style),
+        )
+    return tools
+
+
+def _apply_explicit_scope_lists(
+    scope: LLM_ToolsScope,
+    selected_tools: Iterable[Callable],
+    available_tools: Sequence[Callable],
+    chat_style=None,
+) -> List[Callable]:
+    """Apply explicit additions and removals to category-selected tools."""
+    if scope.additional_tools is None and scope.removed_tools is None:
+        return _dedupe_tools_by_name(selected_tools)
+
+    from .system import find_tools  # pylint: disable=import-outside-toplevel
+
+    registered_system_tools = list(find_tools("SYSTEM"))
+    tools = list(selected_tools)
+
+    if scope.additional_tools is not None:
+        for name in scope.additional_tools:
+            tools.append(_resolve_explicit_tool(
+                name,
+                available_tools,
+                registered_system_tools,
+                chat_style=chat_style,
+            ))
+
+    tools = _dedupe_tools_by_name(tools)
+    if scope.removed_tools is None:
+        return tools
+
+    candidate_names = {_tool_name(tool_func) for tool_func in tools}
+    removed_names: set[str] = set()
+    for name in scope.removed_tools:
+        tool_func = _resolve_explicit_tool(
+            name,
+            available_tools,
+            registered_system_tools,
+            chat_style=chat_style,
+        )
+        tool_name = _tool_name(tool_func)
+        if tool_name not in candidate_names:
+            raise ValueError(
+                f"LLM_TOOLS_SCOPE removal references unselected tool: {name!r}"
+            )
+        removed_names.add(tool_name)
+
+    return [tool_func for tool_func in tools if _tool_name(tool_func) not in removed_names]
+
+
 def select_request_tools(
     metadata: Optional[Dict[str, str]] = None,
     available_tools: Optional[Sequence[Callable]] = None,
     chat_style=None,
 ) -> Optional[List[Callable]]:
     """Return the tool callables that would be forwarded in an LLM request."""
-    from .system import select_tools, find_tools  # pylint: disable=import-outside-toplevel
-
     tools_scope = metadata.get("LLM_TOOLS_SCOPE") if metadata else None
     if not tools_scope or available_tools is None:
         return None
 
-    tools = list(select_tools(available_tools, tools_scope, chat_style=chat_style))
-    if tools_scope in ("SYSTEM", "ALL", None):
-        existing = {t.__name__ for t in tools}
-        for rt in find_tools("SYSTEM", chat_style=chat_style):
-            if rt.__name__ not in existing:
-                existing.add(rt.__name__)
-                tools.append(rt)
-    return tools
+    scope = parse_llm_tools_scope(tools_scope)
+    if _scope_is_empty(scope):
+        return None
+
+    materialized_tools = list(available_tools)
+    selected_tools = _select_scope_category_tools(
+        scope,
+        materialized_tools,
+        chat_style=chat_style,
+    )
+    return _apply_explicit_scope_lists(
+        scope,
+        selected_tools,
+        materialized_tools,
+        chat_style=chat_style,
+    )
 
 
 class LLM_API(ABC):

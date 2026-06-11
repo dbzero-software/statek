@@ -8,7 +8,7 @@ from statek.task import (
     TaskFutureResult, copy_locals, create_future_task, delegate_task,
     delegate_mute_dialog, delegate_mute_task, start_dialog, submit_new_job,
     submit_new_jobs_batch, create_sub_task, SubTaskHandler, SubTaskState,
-    TaskError, complete_sub_task, create_new_job,
+    TaskError, complete_sub_task, create_new_job, get_referenced_locals,
 )
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobStatus
@@ -18,15 +18,16 @@ from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt
+from statek.utils import _statek_ctx_scope
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
 
 
 def _run_with_current_job(job, func):
-    """Run func while job is visible via _STATEK_CTX."""
-    _STATEK_CTX = {"job": job}  # noqa: F841
-    return func()
+    """Run func while job is visible through Statek context."""
+    with _statek_ctx_scope({"job": job}):
+        return func()
 
 
 @db0.memo
@@ -180,6 +181,81 @@ class TestCopyLocals:
 
         copy_locals(code, dest, scope_locals)
         assert dest == {'x': 1, 'y': 2, 'condition': True}
+
+
+class TestGetReferencedLocals:
+    """Tests for get_referenced_locals function."""
+
+    def test_returns_external_names_in_appearance_order(self):
+        code = (
+            "user = message.sender\n"
+            "print(user)\n"
+            "send(user, channel)\n"
+        )
+
+        assert list(get_referenced_locals(code)) == ["message", "channel"]
+
+    def test_deduplicates_repeated_references(self):
+        code = "result = message.sender + message.body"
+
+        assert list(get_referenced_locals(code)) == ["message"]
+
+    def test_ignores_names_bound_by_assignments(self):
+        code = (
+            "x = a + b\n"
+            "y = x + c\n"
+            "z = y\n"
+        )
+
+        assert list(get_referenced_locals(code)) == ["a", "b", "c"]
+
+    def test_assignment_targets_can_reference_external_objects(self):
+        code = (
+            "obj.value = value\n"
+            "data[key] = obj.value\n"
+        )
+
+        assert list(get_referenced_locals(code)) == ["value", "obj", "data", "key"]
+
+    def test_handles_destructuring_assignments(self):
+        code = (
+            "user, text = message.payload\n"
+            "result = format_message(user, text, locale)\n"
+        )
+
+        assert list(get_referenced_locals(code)) == ["message", "locale"]
+
+    def test_ignores_builtin_names(self):
+        code = "result = len(items) + max(values)"
+
+        assert list(get_referenced_locals(code)) == ["items", "values"]
+
+    def test_ignores_direct_function_callees(self):
+        code = "result = transform(message, locale=locale)"
+
+        assert list(get_referenced_locals(code)) == ["message", "locale"]
+
+    def test_method_call_receivers_are_referenced(self):
+        code = "result = client.transform(message)"
+
+        assert list(get_referenced_locals(code)) == ["client", "message"]
+
+    def test_handles_comprehension_targets_as_local(self):
+        code = "result = [item.value + offset for item in items if item.enabled]"
+
+        assert list(get_referenced_locals(code)) == ["items", "offset"]
+
+    def test_comprehension_targets_do_not_leak_to_following_code(self):
+        code = (
+            "result = [item for item in items]\n"
+            "print(item)\n"
+        )
+
+        assert list(get_referenced_locals(code)) == ["items", "item"]
+
+    def test_syntax_error_is_propagated(self):
+        with pytest.raises(SyntaxError):
+            list(get_referenced_locals("this is not valid python"))
 
 
 class TestDelegateTask:

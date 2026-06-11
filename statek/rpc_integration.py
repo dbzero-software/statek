@@ -3,7 +3,11 @@ import functools
 from typing import Any
 
 
-class _RpcMock:
+class _NoRpcAdapter:
+    @staticmethod
+    def init(*_args, **_kwargs):
+        return None
+
     @staticmethod
     def remote(func=None, **_kwargs):
         if func is None:
@@ -11,7 +15,7 @@ class _RpcMock:
         return func
 
 
-_RPC_MOCK = _RpcMock()
+_NO_RPC_ADAPTER = _NoRpcAdapter()
 
 
 
@@ -24,11 +28,11 @@ def _load_rpc() -> Any:
 
         return db0_rpc
     except ModuleNotFoundError:
-        return _RPC_MOCK
+        return _NO_RPC_ADAPTER
 
 
 rpc = _load_rpc()
 
 
 def has_rpc() -> bool:
-    return rpc() is not _RPC_MOCK
+    return rpc is not _NO_RPC_ADAPTER
