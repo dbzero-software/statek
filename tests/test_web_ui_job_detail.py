@@ -1,23 +1,10 @@
-"""Tests for the web_ui job detail helper functions."""
+"""Tests for the StatekWebUI job detail helper functions."""
 # pylint: disable=unused-argument,no-member
 
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, PropertyMock, patch
-from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
-from statek.chat_style import ChatStyle
-from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
-from statek.pyenv import PyEnv
-from statek.model_pricing import set_model_pricing
-from statek.system import tool, docstr
-from statek.task_difficulty import TaskDifficulty
-from statek.utils import CodeBlock, CallSpec
-from statek.executors.chat_log_item import (
-    LLM_LogItem,
-    ReminderLogItem,
-    ToolError,
-    WarmupLogItem,
-)
+
 from web_ui.pages.job_detail import (
     _get_console_slice,
     _get_warmup_blocks,
@@ -49,6 +36,20 @@ from web_ui.pages.job_detail import (
     _json_viewer_expand_js,
     _json_viewer_collapse_js,
     _get_reported_tools,
+)
+from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
+from statek.chat_style import ChatStyle
+from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
+from statek.pyenv import PyEnv
+from statek.model_pricing import set_model_pricing
+from statek.system import tool, docstr
+from statek.task_difficulty import TaskDifficulty
+from statek.utils import CodeBlock, CallSpec
+from statek.executors.chat_log_item import (
+    LLM_LogItem,
+    ReminderLogItem,
+    ToolError,
+    WarmupLogItem,
 )
 
 # aliases used in _call_build_md helper

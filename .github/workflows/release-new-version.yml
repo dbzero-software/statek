@@ -1,4 +1,4 @@
-name: Release New Version
+name: Release Packages
 
 on:
   workflow_dispatch:
@@ -14,10 +14,11 @@ on:
           - major
 
 jobs:
-  release-new-version:
+  release-packages:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -39,6 +40,8 @@ jobs:
 
           NEW="$MAJOR.$MINOR.$PATCH"
           sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" pyproject.toml
+          sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" web_ui/pyproject.toml
+          sed -i "s/\"statek==$CURRENT\"/\"statek==$NEW\"/" web_ui/pyproject.toml
 
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
 
@@ -46,9 +49,42 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
+          git add pyproject.toml web_ui/pyproject.toml
           git commit -m "ci action: release version ${{ steps.version.outputs.version }}"
           git push origin HEAD
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build and publish tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build packages
+        run: |
+          python -m build --sdist --wheel
+          python -m build web_ui --sdist --wheel
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::874777259004:role/codeartifact-selltime-rw
+          aws-region: eu-central-1
+
+      - name: Login to CodeArtifact
+        run: |
+          aws codeartifact login \
+            --tool twine \
+            --domain "${{ vars.CODEARTIFACT_DOMAIN }}" \
+            --domain-owner "${{ vars.AWS_ACCOUNT_ID }}" \
+            --repository "${{ vars.CODEARTIFACT_REPO }}" \
+            --region eu-central-1
+
+      - name: Publish packages to CodeArtifact
+        run: twine upload --repository codeartifact dist/* web_ui/dist/*
 
       - name: Create GitHub release
         env:

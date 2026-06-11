@@ -1,4 +1,4 @@
-from web_ui.auth import OIDCSettingsBase
+from . import OIDCSettingsBase
 
 
 class StatekUISettings(OIDCSettingsBase):

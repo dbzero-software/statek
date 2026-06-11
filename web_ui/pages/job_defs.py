@@ -6,8 +6,8 @@ from typing import List, Optional
 import dbzero as db0
 
 from statek.executors.job import _get_static_task_difficulty
-from web_ui.nicegui_compat import ui
-from web_ui.model_bindings import get_all_job_defs
+from ..nicegui_compat import ui
+from ..model_bindings import get_all_job_defs
 
 log = logging.getLogger(__name__)
 

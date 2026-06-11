@@ -14,6 +14,3 @@ pydantic-settings==2.12.0
 PyJWT==2.10.1
 httpx==0.28.1
 nest_asyncio==1.6.0
-nicegui==2.24.2
-markdown2==2.5.4
-weasyprint==68.1

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from web_ui.nicegui_compat import ui
+from ..nicegui_compat import ui
 
 
 def _coerce_json_value(value: Any) -> Any:
