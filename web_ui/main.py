@@ -42,9 +42,9 @@ import dbzero as db0
 # CLI
 # ---------------------------------------------------------------------------
 
-ORG_NAME = os.environ.get('STATEK_ORG_NAME', 'Selltime')
-PROJECT_NAME = os.environ.get('STATEK_PROJECT_NAME', 'selltime')
-ENV = os.environ.get('STATEK_ENV', 'dev')
+ORG_NAME = os.environ['STATEK_ORG_NAME']
+PROJECT_NAME = os.environ['STATEK_PROJECT_NAME']
+ENV = os.environ['STATEK_ENV']
 DATA_PREFIX = f"/{ORG_NAME}/{PROJECT_NAME}/{ENV}/data"
 STATEK_PREFIX = f"/{ORG_NAME}/{PROJECT_NAME}/{ENV}/statek"
 
