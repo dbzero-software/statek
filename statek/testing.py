@@ -1,12 +1,9 @@
 """Public testing helpers for Statek execution context setup."""
 
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator, Optional, TypeVar
+from typing import Any, Iterator, Optional
 
 from statek.utils import _statek_ctx_for_job, _statek_ctx_scope
-
-
-T = TypeVar("T")
 
 
 @contextmanager
@@ -26,23 +23,3 @@ def statek_context(job: Optional[Any] = None, agent: Optional[Any] = None) -> It
 
     with _statek_ctx_scope(ctx):
         yield ctx
-
-
-def run_with_context(
-    *,
-    func: Callable[[], T],
-    job: Optional[Any] = None,
-    agent: Optional[Any] = None,
-) -> T:
-    """Run a zero-argument function inside a Statek testing context.
-
-    Args:
-        func: Function to execute while the testing context is active.
-        job: Optional job to expose through Statek current-job helpers.
-        agent: Optional agent override to expose through Statek current-agent helpers.
-
-    Returns:
-        The value returned by ``func``.
-    """
-    with statek_context(job=job, agent=agent):
-        return func()

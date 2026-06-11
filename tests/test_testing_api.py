@@ -2,7 +2,7 @@
 
 import pytest
 
-from statek.testing import run_with_context, statek_context
+from statek.testing import statek_context
 from statek.utils import get_current_agent, get_current_job, perm_ctx_get, perm_ctx_set
 
 
@@ -63,16 +63,6 @@ def test_statek_context_resets_after_exception():
             assert get_current_job() is job
             raise ValueError("boom")
 
-    assert get_current_job() is None
-
-
-def test_run_with_context_returns_result_and_resets():
-    """run_with_context returns the function result and resets context afterward."""
-    job = _FakeJob()
-
-    result = run_with_context(job=job, func=get_current_job)
-
-    assert result is job
     assert get_current_job() is None
 
 
