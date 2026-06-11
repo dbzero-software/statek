@@ -2,7 +2,7 @@
 
 import pytest
 
-from StatekWebUI.components.json_viewer import (
+from web_ui.components.json_viewer import (
     _coerce_json_value,
     _build_json_editor_props,
 )

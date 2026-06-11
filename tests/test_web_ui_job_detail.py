@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, PropertyMock, patch
 
-from StatekWebUI.pages.job_detail import (
+from web_ui.pages.job_detail import (
     _get_console_slice,
     _get_warmup_blocks,
     _get_warmup_console_ranges,
@@ -370,7 +370,7 @@ class TestBuildStepPreviewData:
             },
         }
 
-        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
             preview = _build_step_preview_data(job, 2)
 
         job.get_request_data.assert_called_once_with(2)
@@ -400,7 +400,7 @@ class TestBuildStepPreviewData:
         mock_api = MagicMock()
         mock_api.preview_request.return_value = {'model': 'test-model'}
 
-        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
             preview = _build_step_preview_data(job, 0)
 
         mock_get.assert_called_once_with(provider_name=None)
@@ -413,7 +413,7 @@ class TestBuildStepPreviewData:
         mock_api = MagicMock()
         mock_api.preview_request.return_value = {'model': 'openai/gpt-5.4'}
 
-        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
             preview = _build_step_preview_data(job, 0)
 
         mock_get.assert_called_once_with(provider_name='openrouter')
@@ -438,7 +438,7 @@ class TestBuildStepPreviewData:
             'messages': [_FakeHistoryItem()],
         }
 
-        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api):
+        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api):
             preview = _build_step_preview_data(job, 0)
 
         assert preview['messages'][0]['__type__'] == '_FakeHistoryItem'

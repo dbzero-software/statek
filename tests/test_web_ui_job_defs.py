@@ -1,6 +1,6 @@
 """Tests for the StatekWebUI job definitions page helper functions."""
 
-from StatekWebUI.pages.job_defs import (
+from web_ui.pages.job_defs import (
     _paginate, _job_def_has_errors, _job_def_get_errors, _format_traceback,
     _get_job_def_system_prompt,
 )
