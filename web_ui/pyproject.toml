@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "statek==0.1.6",
+    "statek==0.1.9",
     "nicegui==2.24.2",
     "markdown2==2.5.4",
     "weasyprint==68.1",
