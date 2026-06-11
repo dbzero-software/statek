@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "StatekWebUI"
-version = "0.1.6"
+version = "0.1.9"
 description = "NiceGUI web UI for Statek"
 readme = {text = "NiceGUI web UI for Statek", content-type = "text/plain"}
 requires-python = ">=3.8"
