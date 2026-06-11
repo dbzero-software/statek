@@ -3,14 +3,14 @@
 import json
 from typing import List
 
-from statek.agents.agent import Agent
-from statek.prompt_config import make_system_prompt
 from StatekWebUI.pages.agents import (
     _format_warmup_code,
     _get_agent_system_prompt,
     _get_tool_info,
     _get_tool_signature,
 )
+from statek.agents.agent import Agent
+from statek.prompt_config import make_system_prompt
 
 
 class _FakeCodeBlock:  # pylint: disable=too-few-public-methods
