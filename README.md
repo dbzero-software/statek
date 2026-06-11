@@ -48,8 +48,8 @@ Build source distribution:
 Or manually:
 
 ```bash
-python -m build --sdist
-python -m build --wheel
+python -m build --sdist --wheel
+python -m build web_ui --sdist --wheel
 ```
 
 ### Running Tests
@@ -88,14 +88,10 @@ The project uses GitHub Actions for CI:
 
 ### Deployment
 
-Deployment to the custom PyPI repository is triggered on version tags:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The package will be automatically built and published to the configured repository.
+Deployment to the custom PyPI repository is handled by the `Release Packages`
+GitHub Actions workflow. Run it manually with a `patch`, `minor`, or `major`
+version bump. The workflow updates both package versions, publishes `statek`
+and `StatekWebUI`, and creates the GitHub release.
 
 ## Project Structure
 
@@ -107,7 +103,8 @@ statek/
 ├── statek/               # Main package code
 ├── tests/                # Test files
 ├── Dockerfile            # Docker build configuration
-├── pyproject.toml        # Package configuration
+├── pyproject.toml        # Core package configuration
+├── web_ui/pyproject.toml # Web UI package configuration
 ├── requirements.txt      # Runtime dependencies
 ├── requirements-dev.txt  # Development dependencies
 └── README.md            # This file

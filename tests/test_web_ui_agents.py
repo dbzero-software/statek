@@ -1,11 +1,11 @@
-"""Tests for the web_ui agents page helper functions."""
+"""Tests for the StatekWebUI agents page helper functions."""
 
 import json
 from typing import List
 
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
-from web_ui.pages.agents import (
+from StatekWebUI.pages.agents import (
     _format_warmup_code,
     _get_agent_system_prompt,
     _get_tool_info,

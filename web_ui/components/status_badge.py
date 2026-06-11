@@ -1,6 +1,6 @@
 """Reusable UI components for the Statek web UI."""
 
-from web_ui.nicegui_compat import ui
+from ..nicegui_compat import ui
 
 _STATUS_COLORS = {
     'READY':      ('bg-blue-100',   'text-blue-800'),

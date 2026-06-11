@@ -14,7 +14,13 @@ def _read_lines(path: str) -> list[str]:
     ]
 
 
-def test_ui_requirements_delegate_to_runtime_requirements():
+def test_ui_requirements_include_core_and_ui_runtime_requirements():
     requirements = _read_lines('requirements-ui.txt')
 
-    assert requirements == ['-r requirements.txt']
+    assert requirements == [
+        '-r requirements.txt',
+        'nicegui==2.24.2',
+        'markdown2==2.5.4',
+        'weasyprint==68.1',
+        'PyJWT==2.10.1',
+    ]

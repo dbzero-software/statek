@@ -8,8 +8,8 @@ import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
-from web_ui.nicegui_compat import ui
-from web_ui.model_bindings import get_all_agents
+from ..nicegui_compat import ui
+from ..model_bindings import get_all_agents
 
 
 def _format_warmup_code(warmup_code) -> Optional[str]:

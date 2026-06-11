@@ -25,9 +25,9 @@ from statek.executors.chat_log_item import (
     WarmupLogItem,
 )
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
-from web_ui.nicegui_compat import ui
-from web_ui.components.json_viewer import create_json_viewer
-from web_ui.components.status_badge import create_status_badge
+from ..nicegui_compat import ui
+from ..components.json_viewer import create_json_viewer
+from ..components.status_badge import create_status_badge
 
 
 # ---------------------------------------------------------------------------

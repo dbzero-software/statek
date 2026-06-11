@@ -36,12 +36,13 @@ jobs:
     
     - name: Build package
       run: |
-        python -m build --sdist
-        python -m build --wheel
+        python -m build --sdist --wheel
+        python -m build web_ui --sdist --wheel
     
-    - name: Install package
+    - name: Install packages
       run: |
         pip install dist/*.whl
+        pip install web_ui/dist/*.whl
     
     - name: Run tests
       run: |

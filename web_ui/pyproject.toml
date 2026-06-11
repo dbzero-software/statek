@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "StatekWebUI"
+version = "0.1.6"
+description = "NiceGUI web UI for Statek"
+readme = {text = "NiceGUI web UI for Statek", content-type = "text/plain"}
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "statek==0.1.6",
+    "nicegui==2.24.2",
+    "markdown2==2.5.4",
+    "weasyprint==68.1",
+    "PyJWT==2.10.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/statek"
+Repository = "https://github.com/yourusername/statek"
+
+[tool.setuptools]
+packages = [
+    "StatekWebUI",
+    "StatekWebUI.auth",
+    "StatekWebUI.components",
+    "StatekWebUI.pages",
+]
+
+[tool.setuptools.package-dir]
+StatekWebUI = "."

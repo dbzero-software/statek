@@ -15,7 +15,7 @@ ENV_FILE="$PROJECT_ROOT/.env_statek"
 
 stop_service() {
     echo "Stopping Statek Dashboard..."
-    pkill -f "python3 -m web_ui.main" 2>/dev/null || true
+    pkill -f "python3 -m StatekWebUI.main" 2>/dev/null || true
     echo "Stopped."
 }
 
@@ -48,7 +48,7 @@ if [ -n "${STATEK_OPEN_PREFIXES:-}" ]; then
 fi
 
 echo "Starting Statek Dashboard..."
-python3 -m web_ui.main \
+python3 -m StatekWebUI.main \
     --host "${STATEK_UI_HOST:-0.0.0.0}" \
     --port "${STATEK_UI_PORT:-8765}" \
     --db0-path /selltime_data/ \

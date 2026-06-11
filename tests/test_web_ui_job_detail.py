@@ -1,4 +1,4 @@
-"""Tests for the web_ui job detail helper functions."""
+"""Tests for the StatekWebUI job detail helper functions."""
 # pylint: disable=unused-argument,no-member
 
 from datetime import datetime
@@ -18,7 +18,7 @@ from statek.executors.chat_log_item import (
     ToolError,
     WarmupLogItem,
 )
-from web_ui.pages.job_detail import (
+from StatekWebUI.pages.job_detail import (
     _get_console_slice,
     _get_warmup_blocks,
     _get_warmup_console_ranges,
@@ -369,7 +369,7 @@ class TestBuildStepPreviewData:
             },
         }
 
-        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
             preview = _build_step_preview_data(job, 2)
 
         job.get_request_data.assert_called_once_with(2)
@@ -399,7 +399,7 @@ class TestBuildStepPreviewData:
         mock_api = MagicMock()
         mock_api.preview_request.return_value = {'model': 'test-model'}
 
-        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
             preview = _build_step_preview_data(job, 0)
 
         mock_get.assert_called_once_with(provider_name=None)
@@ -412,7 +412,7 @@ class TestBuildStepPreviewData:
         mock_api = MagicMock()
         mock_api.preview_request.return_value = {'model': 'openai/gpt-5.4'}
 
-        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
+        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api) as mock_get:
             preview = _build_step_preview_data(job, 0)
 
         mock_get.assert_called_once_with(provider_name='openrouter')
@@ -437,7 +437,7 @@ class TestBuildStepPreviewData:
             'messages': [_FakeHistoryItem()],
         }
 
-        with patch('web_ui.pages.job_detail.LLM_API.get', return_value=mock_api):
+        with patch('StatekWebUI.pages.job_detail.LLM_API.get', return_value=mock_api):
             preview = _build_step_preview_data(job, 0)
 
         assert preview['messages'][0]['__type__'] == '_FakeHistoryItem'

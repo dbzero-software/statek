@@ -33,7 +33,7 @@ for _ext_path in _EXTERNAL_PATHS.split(':'):
         sys.path.insert(0, _ext_path)
         log.debug('Added external path to sys.path: %s', _ext_path)
 
-from web_ui.nicegui_compat import app, ui
+from .nicegui_compat import app, ui
 import dbzero as db0
 
 
@@ -41,9 +41,9 @@ import dbzero as db0
 # CLI
 # ---------------------------------------------------------------------------
 
-ORG_NAME = os.environ['STATEK_ORG_NAME']
-PROJECT_NAME = os.environ['STATEK_PROJECT_NAME']
-ENV = os.environ['STATEK_ENV']
+ORG_NAME = os.environ.get('STATEK_ORG_NAME', 'Selltime')
+PROJECT_NAME = os.environ.get('STATEK_PROJECT_NAME', 'selltime')
+ENV = os.environ.get('STATEK_ENV', 'dev')
 DATA_PREFIX = f"/{ORG_NAME}/{PROJECT_NAME}/{ENV}/data"
 STATEK_PREFIX = f"/{ORG_NAME}/{PROJECT_NAME}/{ENV}/statek"
 
@@ -88,8 +88,8 @@ for _mod_name in _args.imports:
 # Authentication (OIDC / Cognito — super-admin only)
 # ---------------------------------------------------------------------------
 
-from web_ui.auth import setup_oidc_auth  # noqa: E402
-from web_ui.auth.settings import StatekUISettings  # noqa: E402
+from .auth import setup_oidc_auth  # noqa: E402
+from .auth.settings import StatekUISettings  # noqa: E402
 
 _auth_settings = StatekUISettings()
 
@@ -228,16 +228,16 @@ code, .q-badge, pre {
 # Page imports (after db0 is configured at module level)
 # ---------------------------------------------------------------------------
 
-from web_ui.pages.agents import create_agents_page      # noqa: E402
-from web_ui.pages.job_defs import create_job_defs_page  # noqa: E402
-from web_ui.pages.jobs import create_jobs_page          # noqa: E402
+from .pages.agents import create_agents_page      # noqa: E402
+from .pages.job_defs import create_job_defs_page  # noqa: E402
+from .pages.jobs import create_jobs_page          # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Navigation structure
 #
 # Adding a future page:
-#   1. Create web_ui/pages/<name>.py with a create_<name>_page() function
+#   1. Create pages/<name>.py with a create_<name>_page() function
 #   2. Import it above
 #   3. Add a _NAV_ITEMS entry with the route, label, icon, and builder
 #   4. Register the builder in _SUB_PAGE_ROUTES
