@@ -1,7 +1,5 @@
 """Tests for Statek NiceGUI OIDC helpers."""
 
-import asyncio
-from contextvars import ContextVar
 import sys
 import types
 
@@ -12,10 +10,10 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from StatekWebUI.auth.nicegui_oidc import (
     OIDCSettingsBase,
-    _call_with_rpc_auth_token,
-    _set_rpc_auth_token_provider,
     setup_oidc_auth,
 )
+
+_DEFAULT_TOKEN = object()
 
 
 class _FakeOIDCConfig:
@@ -59,20 +57,18 @@ class _FakeNiceGUIOIDClient:
     def _get_current_token(self) -> dict[str, str] | None:
         return self.current_token
 
-
-class _AuthClient:
-    """Minimal auth client with an access token."""
-
-    def _get_current_token(self) -> dict[str, str]:
-        return {"access_token": "rpc-token"}
+    def is_authenticated(self) -> bool:
+        return self.current_token is not None
 
 
 def _id_token(groups: list[str]) -> str:
     return pyjwt.encode({"cognito:groups": groups}, key="", algorithm="none")
 
 
-def _install_fake_easyoidc(monkeypatch, current_token: dict[str, str] | None = None) -> None:
-    _FakeNiceGUIOIDClient.current_token = current_token or {"access_token": "rpc-token"}
+def _install_fake_easyoidc(monkeypatch, current_token: object = _DEFAULT_TOKEN) -> None:
+    if current_token is _DEFAULT_TOKEN:
+        current_token = {"access_token": "rpc-token"}
+    _FakeNiceGUIOIDClient.current_token = current_token
 
     easyoidc_module = types.ModuleType("EasyOIDC")
     easyoidc_module.Config = _FakeOIDCConfig
@@ -169,6 +165,31 @@ def test_access_denied_page_uses_statek_branding(monkeypatch):
     assert "selltime" not in response.text.lower()
 
 
+def test_unauthenticated_request_reaches_oidc_redirect_layer(monkeypatch):
+    """Super-admin authorization must not replace login redirects with a 403 page."""
+    _install_fake_easyoidc(monkeypatch, current_token=None)
+
+    app = FastAPI()
+    setup_oidc_auth(
+        nicegui_app=app,
+        settings=OIDCSettingsBase(),
+        skip_auth=False,
+        impersonate=None,
+        session_file="/tmp/test_statek_nicegui_oidc_sessions",
+    )
+    app.add_middleware(SessionMiddleware, secret_key="test-secret")
+
+    @app.get("/secure")
+    async def secure():
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.get("/secure")
+
+    assert response.status_code == 200
+    assert "Access blocked" not in response.text
+
+
 def test_super_admin_user_can_access_dashboard(monkeypatch):
     """Users in the required Cognito group can access dashboard routes."""
     _install_fake_easyoidc(
@@ -257,36 +278,3 @@ def test_super_admin_check_does_not_block_nicegui_internal_routes(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-
-
-def test_call_with_rpc_auth_token_sets_and_resets_context():
-    """HTTP middleware should expose the current access token to dbzero RPC calls."""
-    rpc_auth_token_var: ContextVar[str | None] = ContextVar(
-        "test_rpc_auth_token",
-        default=None,
-    )
-    rpc_auth_token_var.set("previous-token")
-    seen_tokens = []
-
-    async def call_next(_request):
-        seen_tokens.append(rpc_auth_token_var.get())
-        return "response"
-
-    response = asyncio.run(
-        _call_with_rpc_auth_token(rpc_auth_token_var, _AuthClient(), object(), call_next)
-    )
-
-    assert response == "response"
-    assert seen_tokens == ["rpc-token"]
-    assert rpc_auth_token_var.get() == "previous-token"
-
-
-def test_rpc_auth_token_provider_supplies_callback_context_token():
-    """NiceGUI callback contexts can resolve a current token outside HTTP middleware."""
-    rpc_auth_token_var: ContextVar[object] = ContextVar("test_rpc_auth_token", default=None)
-
-    _set_rpc_auth_token_provider(rpc_auth_token_var, _AuthClient())
-
-    token_provider = rpc_auth_token_var.get()
-    assert callable(token_provider)
-    assert token_provider() == "rpc-token"
