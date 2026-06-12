@@ -97,44 +97,12 @@ from .auth.settings import StatekUISettings  # noqa: E402
 
 _auth_settings = StatekUISettings()
 
-
-def _check_super_admin(auth_client, request) -> bool:
-    """Allow access only to users whose Cognito ID token contains the super-admin group.
-
-    When auth is skipped (dev mode), access is always granted.
-    """
-    if auth_client is None:
-        return True  # auth disabled (--dangerously-skip-auth)
-
-    # EasyOIDC stores the ID token; decode it to read the ``cognito:groups`` claim.
-    import jwt as pyjwt  # pylint: disable=import-outside-toplevel
-    id_token = auth_client._get_current_token()  # pylint: disable=protected-access
-    if id_token is None:
-        return False
-
-    raw_id = id_token.get('id_token')
-    if not raw_id:
-        return False
-
-    try:
-        # Decode without verification — the OIDC middleware already validated the token.
-        claims = pyjwt.decode(raw_id, options={"verify_signature": False})
-    except Exception:
-        log.warning("Failed to decode ID token for super-admin check", exc_info=True)
-        return False
-
-    groups = claims.get('cognito:groups', [])
-    required = _auth_settings.required_cognito_group
-    return required in groups
-
-
 _oidc_client = setup_oidc_auth(
     nicegui_app=app,
     settings=_auth_settings,
     skip_auth=_args.dangerously_skip_auth,
     impersonate=_args.impersonate,
     session_file='/tmp/statek_webui_sessions',
-    access_check=_check_super_admin,
     rpc_auth_token_var=_rpc_auth_token_var,
 )
 

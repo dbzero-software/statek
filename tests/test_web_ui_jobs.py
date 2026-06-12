@@ -1,6 +1,6 @@
 """Tests for the StatekWebUI jobs page helper functions."""
 
-from web_ui.pages.jobs import (
+from StatekWebUI.pages.jobs import (
     _job_agent_role,
     _job_model,
     _job_status_str,
