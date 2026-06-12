@@ -1065,31 +1065,38 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     return False
 
 
-def process_push_notifications(step_size=100, max_count=500, prefix: Optional[Union[str, int]] = None):
-    """Process pending push notifications from StatekPushQueues on all open prefixes.
+def process_push_notifications(
+    step_size: int = 100,
+    max_count: int = 500,
+    *,
+    queue_prefixes: Sequence[Union[str, int]],
+    job_prefix: Optional[Union[str, int]] = None,
+):
+    """Process pending push notifications from configured StatekPushQueues.
 
-    Finds all StatekPushQueue instances across open prefixes and delivers push
+    Finds StatekPushQueue instances on explicit queue prefixes and delivers push
     messages to the target jobs by calling job.push_user_message. Jobs that have
     been deleted are silently ignored.
 
     Args:
         step_size: Number of notifications to retrieve per batch.
         max_count: Maximum total notifications to process in this call.
-        prefix: Optional prefix name or UUID to limit processing to.
+        queue_prefixes: Prefix names or UUIDs where StatekPushQueue may exist.
+        job_prefix: Optional job prefix name or UUID to filter queued job messages.
     """
     processed = 0
 
-    for queue_prefix in db0.get_prefixes():
+    for queue_prefix in queue_prefixes:
         if processed >= max_count:
             break
-        queue = db0.find_singleton(StatekPushQueue, queue_prefix.name)
+        queue = db0.find_singleton(StatekPushQueue, queue_prefix)
         if queue is None:
             continue
         while processed < max_count:
             batch_size = min(step_size, max_count - processed)
             if queue.is_empty():
                 break
-            items = queue.pop_from_job_console(batch_size, prefix=prefix)
+            items = queue.pop_from_job_console(batch_size, prefix=job_prefix)
             if not items:
                 break
             for job_uuid, message in items:
@@ -1103,11 +1110,21 @@ def process_push_notifications(step_size=100, max_count=500, prefix: Optional[Un
                 processed += 1
 
 
-def process_agent_events(agents: Optional[Set['Agent']] = None, max_count=100):
+def process_agent_events(
+    agents: Optional[Set['Agent']] = None,
+    max_count: int = 100,
+    *,
+    queue_prefixes: Sequence[Union[str, int]],
+):
     """Create jobs for queued events addressed to supervised agents.
 
     Each agent warmup must reference exactly one external local. The event is
     injected into the new job under that local name.
+
+    Args:
+        agents: Optional set of agents to process events for.
+        max_count: Maximum number of events to process.
+        queue_prefixes: Prefix names or UUIDs where StatekPushQueue may exist.
     """
     from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
     from statek.task import create_new_job  # pylint: disable=import-outside-toplevel,cyclic-import
@@ -1116,8 +1133,8 @@ def process_agent_events(agents: Optional[Set['Agent']] = None, max_count=100):
         return
 
     queues = []
-    for queue_prefix in db0.get_prefixes():
-        queue = db0.find_singleton(StatekPushQueue, queue_prefix.name)
+    for queue_prefix in queue_prefixes:
+        queue = db0.find_singleton(StatekPushQueue, queue_prefix)
         if queue is not None:
             queues.append(queue)
     if not queues:
@@ -1219,7 +1236,8 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 handle_critical_error(e)
 
 async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
-    start_jobs_func: Callable = None, auto_terminate: bool = False):
+    *, queue_prefixes: Sequence[Union[str, int]], start_jobs_func: Callable = None,
+    auto_terminate: bool = False):
     """
     Main loop responsible for processing registered jobs pending execution.
     
@@ -1229,6 +1247,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     Args:
         max_concurrency: the execution concurrency level
         provider: the LLM API provider (or None for default)
+        queue_prefixes: Prefix names or UUIDs where StatekPushQueue may exist
         start_jobs_func: optional callable for starting new jobs
         auto_terminate: flag indicating if the loop should be terminated once all jobs 
                        have been completed; this flag is most useful for testing
@@ -1239,9 +1258,12 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     while True:
         unsuspend_jobs()
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=queue_prefixes)
 
-        process_agent_events(max_count=max(0, max_concurrency - len(pending_tasks)))
+        process_agent_events(
+            max_count=max(0, max_concurrency - len(pending_tasks)),
+            queue_prefixes=queue_prefixes,
+        )
 
         if start_jobs_func is not None:
             available_capacity = max_concurrency - len(pending_tasks)
@@ -1412,7 +1434,9 @@ class AgentLoopDef:
 
 async def run_agentic_loop(agent: 'Agent',
                            warmup_code: Union[str, Sequence[str]],
-                           task_queue_size_func: Callable, max_concurrency: int = 100,
+                           task_queue_size_func: Callable,
+                           queue_prefixes: Sequence[Union[str, int]],
+                           max_concurrency: int = 100,
                            provider: str = None, auto_terminate: bool = False):
     """
     Helper function to start listening on arriving new tasks (e.g incoming user messages)
@@ -1428,6 +1452,7 @@ async def run_agentic_loop(agent: 'Agent',
                     (e.g. "user, message = fetch_next_message()")
         task_queue_size_func: a function for calculating the number of queued tasks 
                               (e.g. incoming messages) awaiting processing
+        queue_prefixes: Prefix names or UUIDs where StatekPushQueue may exist
         max_concurrency: maximum number of concurrent jobs (default: 100)
         provider: the default LLM provider (or None for default)
         auto_terminate: flag indicating if the loop should be terminated once all jobs 
@@ -1470,6 +1495,7 @@ async def run_agentic_loop(agent: 'Agent',
     await run_jobs_loop(
         max_concurrency=max_concurrency,
         provider=provider,
+        queue_prefixes=queue_prefixes,
         start_jobs_func=start_jobs_func,
         auto_terminate=auto_terminate
     )
@@ -1477,6 +1503,7 @@ async def run_agentic_loop(agent: 'Agent',
 
 async def run_agentic_fleet(
     agent_loop_defs: Sequence[AgentLoopDef],
+    queue_prefixes: Sequence[Union[str, int]],
     max_concurrency: int = 100,
     provider: str = None,
     auto_terminate: bool = False,
@@ -1489,6 +1516,7 @@ async def run_agentic_fleet(
 
     Args:
         agent_loop_defs: sequence of AgentLoopDef instances defining agents to run
+        queue_prefixes: Prefix names or UUIDs where StatekPushQueue may exist
         max_concurrency: maximum number of concurrent jobs (default: 100)
         provider: the default LLM provider (or None for default)
         auto_terminate: flag indicating if the loop should be terminated once all jobs
@@ -1527,6 +1555,7 @@ async def run_agentic_fleet(
     await run_jobs_loop(
         max_concurrency=max_concurrency,
         provider=provider,
+        queue_prefixes=queue_prefixes,
         start_jobs_func=combined_start_jobs_func,
         auto_terminate=auto_terminate,
     )
