@@ -7,9 +7,10 @@ import types
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import jwt as pyjwt
 from starlette.middleware.sessions import SessionMiddleware
 
-from web_ui.auth.nicegui_oidc import (
+from StatekWebUI.auth.nicegui_oidc import (
     OIDCSettingsBase,
     _call_with_rpc_auth_token,
     _set_rpc_auth_token_provider,
@@ -39,6 +40,8 @@ class _FakeSessionHandler:
 class _FakeNiceGUIOIDClient:
     """Minimal NiceGUIOIDClient replacement used by middleware tests."""
 
+    current_token: dict[str, str] | None = {"access_token": "rpc-token"}
+
     def __init__(
         self,
         nicegui_app: FastAPI,
@@ -53,11 +56,8 @@ class _FakeNiceGUIOIDClient:
     def _logout(self) -> None:
         self.logout_count += 1
 
-    def _get_current_token(self) -> dict[str, str]:
-        return {"access_token": "rpc-token"}
-
-    def is_authenticated(self) -> bool:
-        return False
+    def _get_current_token(self) -> dict[str, str] | None:
+        return self.current_token
 
 
 class _AuthClient:
@@ -67,7 +67,13 @@ class _AuthClient:
         return {"access_token": "rpc-token"}
 
 
-def _install_fake_easyoidc(monkeypatch) -> None:
+def _id_token(groups: list[str]) -> str:
+    return pyjwt.encode({"cognito:groups": groups}, key="", algorithm="none")
+
+
+def _install_fake_easyoidc(monkeypatch, current_token: dict[str, str] | None = None) -> None:
+    _FakeNiceGUIOIDClient.current_token = current_token or {"access_token": "rpc-token"}
+
     easyoidc_module = types.ModuleType("EasyOIDC")
     easyoidc_module.Config = _FakeOIDCConfig
     easyoidc_module.SessionHandler = _FakeSessionHandler
@@ -130,16 +136,20 @@ def test_quoted_oidc_scope_is_normalized_for_shell_loaded_env(monkeypatch):
     assert getattr(auth, "auth_config").kwargs["scope"] == ["openid", "email"]
 
 
-def test_access_denied_page_uses_statek_branding():
+def test_access_denied_page_uses_statek_branding(monkeypatch):
     """Authorization denials render a Statek-owned 403 screen."""
+    _install_fake_easyoidc(
+        monkeypatch,
+        current_token={"access_token": "rpc-token", "id_token": _id_token(["reader"])},
+    )
+
     app = FastAPI()
     setup_oidc_auth(
         nicegui_app=app,
         settings=OIDCSettingsBase(),
-        skip_auth=True,
+        skip_auth=False,
         impersonate=None,
         session_file="/tmp/test_statek_nicegui_oidc_sessions",
-        access_check=lambda auth, _request: False,
     )
     app.add_middleware(SessionMiddleware, secret_key="test-secret")
 
@@ -159,16 +169,82 @@ def test_access_denied_page_uses_statek_branding():
     assert "selltime" not in response.text.lower()
 
 
-def test_access_check_does_not_block_nicegui_internal_routes():
-    """NiceGUI websocket and asset routes must stay reachable after page authorization."""
+def test_super_admin_user_can_access_dashboard(monkeypatch):
+    """Users in the required Cognito group can access dashboard routes."""
+    _install_fake_easyoidc(
+        monkeypatch,
+        current_token={
+            "access_token": "rpc-token",
+            "id_token": _id_token(["super-admin"]),
+        },
+    )
+
     app = FastAPI()
     setup_oidc_auth(
         nicegui_app=app,
         settings=OIDCSettingsBase(),
-        skip_auth=True,
+        skip_auth=False,
         impersonate=None,
         session_file="/tmp/test_statek_nicegui_oidc_sessions",
-        access_check=lambda auth, _request: False,
+    )
+    app.add_middleware(SessionMiddleware, secret_key="test-secret")
+
+    @app.get("/secure")
+    async def secure():
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.get("/secure")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_configured_cognito_group_can_access_dashboard(monkeypatch):
+    """REQUIRED_COGNITO_GROUP controls the single dashboard authorization rule."""
+    _install_fake_easyoidc(
+        monkeypatch,
+        current_token={
+            "access_token": "rpc-token",
+            "id_token": _id_token(["ops-admin"]),
+        },
+    )
+
+    app = FastAPI()
+    setup_oidc_auth(
+        nicegui_app=app,
+        settings=OIDCSettingsBase(required_cognito_group="ops-admin"),
+        skip_auth=False,
+        impersonate=None,
+        session_file="/tmp/test_statek_nicegui_oidc_sessions",
+    )
+    app.add_middleware(SessionMiddleware, secret_key="test-secret")
+
+    @app.get("/secure")
+    async def secure():
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.get("/secure")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_super_admin_check_does_not_block_nicegui_internal_routes(monkeypatch):
+    """NiceGUI websocket and asset routes must stay reachable after page authorization."""
+    _install_fake_easyoidc(
+        monkeypatch,
+        current_token={"access_token": "rpc-token", "id_token": _id_token(["reader"])},
+    )
+
+    app = FastAPI()
+    setup_oidc_auth(
+        nicegui_app=app,
+        settings=OIDCSettingsBase(),
+        skip_auth=False,
+        impersonate=None,
+        session_file="/tmp/test_statek_nicegui_oidc_sessions",
     )
     app.add_middleware(SessionMiddleware, secret_key="test-secret")
 

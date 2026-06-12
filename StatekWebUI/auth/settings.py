@@ -47,7 +47,4 @@ class StatekUISettings(OIDCSettingsBase):
     (default: ``super-admin``).
     """
 
-    # Cognito group required for access (checked via ID token ``cognito:groups`` claim)
-    required_cognito_group: str = "super-admin"
-
     model_config = {"env_file": [".env_statek", ".env_local_statek"], "extra": "ignore"}

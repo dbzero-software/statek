@@ -49,7 +49,7 @@ Or manually:
 
 ```bash
 python -m build --sdist --wheel
-python -m build web_ui --sdist --wheel
+python -m build StatekWebUI --sdist --wheel
 ```
 
 ### Running Tests
@@ -104,7 +104,7 @@ statek/
 ├── tests/                # Test files
 ├── Dockerfile            # Docker build configuration
 ├── pyproject.toml        # Core package configuration
-├── web_ui/pyproject.toml # Web UI package configuration
+├── StatekWebUI/pyproject.toml # Web UI package configuration
 ├── requirements.txt      # Runtime dependencies
 ├── requirements-dev.txt  # Development dependencies
 └── README.md            # This file

@@ -3,7 +3,7 @@
 import json
 from typing import List
 
-from web_ui.pages.agents import (
+from StatekWebUI.pages.agents import (
     _format_warmup_code,
     _get_agent_system_prompt,
     _get_tool_info,

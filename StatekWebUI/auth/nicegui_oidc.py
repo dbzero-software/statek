@@ -8,6 +8,7 @@ import logging
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote as url_quote, urlparse
 
+import jwt as pyjwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse
@@ -22,7 +23,6 @@ _ACCESS_CHECK_BYPASS_PREFIXES = ("/_nicegui", "/static/")
 _BRAND_PRIMARY = "#5c6bc0"
 _BRAND_SECONDARY = "#26a69a"
 
-AccessCheck = Callable[[Any | None, Request], bool]
 CallNext = Callable[[Request], Awaitable[Any]]
 
 
@@ -38,6 +38,7 @@ class OIDCSettingsBase(MultiSourceBaseSettings):
         oidc_scope: Space-separated OIDC scopes requested by the UI.
         oidc_logout_url: Provider logout endpoint.
         cookie_secret_key: Secret used by the web session middleware.
+        required_cognito_group: Cognito group required for dashboard access.
     """
 
     oidc_well_known_url: str = ""
@@ -48,6 +49,7 @@ class OIDCSettingsBase(MultiSourceBaseSettings):
     oidc_scope: str = "openid email"
     oidc_logout_url: str = ""
     cookie_secret_key: str = ""
+    required_cognito_group: str = "super-admin"
 
 
 def _get_rpc_access_token(auth_client: Any | None) -> str | None:
@@ -236,13 +238,34 @@ def _should_skip_access_check(path: str) -> bool:
     return path in _ACCESS_CHECK_BYPASS_PATHS or path.startswith(_ACCESS_CHECK_BYPASS_PREFIXES)
 
 
+def _is_super_admin(auth_client: Any | None, required_group: str) -> bool:
+    """Return whether the current ID token belongs to a super-admin user."""
+    if auth_client is None:
+        return True
+
+    token = auth_client._get_current_token()  # pylint: disable=protected-access
+    if token is None:
+        return False
+
+    raw_id_token = token.get("id_token")
+    if not raw_id_token:
+        return False
+
+    try:
+        claims = pyjwt.decode(raw_id_token, options={"verify_signature": False})
+    except Exception:  # pylint: disable=broad-exception-caught
+        log.warning("Failed to decode ID token for super-admin check", exc_info=True)
+        return False
+
+    return required_group in claims.get("cognito:groups", [])
+
+
 def setup_oidc_auth(
     nicegui_app: Any,
     settings: OIDCSettingsBase,
     skip_auth: bool,
     impersonate: str | None,
     session_file: str,
-    access_check: AccessCheck | None = None,
     rpc_auth_token_var: ContextVar[Any] | None = None,
 ) -> Any | None:
     """Set up OIDC authentication for the Statek NiceGUI application.
@@ -253,7 +276,6 @@ def setup_oidc_auth(
         skip_auth: When True, no OIDC flow is set up.
         impersonate: Accepted for CLI compatibility; Statek does not resolve app users.
         session_file: Path prefix for shelve session storage.
-        access_check: Optional callback used to authorize authenticated requests.
         rpc_auth_token_var: Optional ContextVar populated for dbzero RPC calls.
 
     Returns:
@@ -353,23 +375,24 @@ def setup_oidc_auth(
 
             return await call_next(request)
 
-    class AccessCheckMiddleware(BaseHTTPMiddleware):
-        """Deny access when the configured authorization callback rejects a request."""
+    class SuperAdminMiddleware(BaseHTTPMiddleware):
+        """Deny access unless the current user is in the Cognito super-admin group."""
 
         async def dispatch(self, request: Request, call_next: CallNext) -> Any:
-            if not _should_skip_access_check(request.url.path):
-                is_authenticated = auth is None or (auth and auth.is_authenticated())
-                if is_authenticated and access_check is not None and not access_check(auth, request):
-                    return HTMLResponse(
-                        _render_auth_status_page(
-                            title="Statek - access blocked",
-                            heading="Access blocked",
-                            message="You do not have permission to access this Statek dashboard.",
-                            action_href="/signout",
-                            action_label="Sign out",
-                        ),
-                        status_code=403,
-                    )
+            if (
+                not _should_skip_access_check(request.url.path)
+                and not _is_super_admin(auth, settings.required_cognito_group)
+            ):
+                return HTMLResponse(
+                    _render_auth_status_page(
+                        title="Statek - access blocked",
+                        heading="Access blocked",
+                        message="You do not have permission to access this Statek dashboard.",
+                        action_href="/signout",
+                        action_label="Sign out",
+                    ),
+                    status_code=403,
+                )
 
             return await call_next(request)
 
@@ -386,8 +409,7 @@ def setup_oidc_auth(
 
     if auth is not None:
         nicegui_app.add_middleware(OAuthCallbackErrorMiddleware)
-    if access_check is not None:
-        nicegui_app.add_middleware(AccessCheckMiddleware)
+        nicegui_app.add_middleware(SuperAdminMiddleware)
     if rpc_auth_token_var is not None:
         nicegui_app.add_middleware(RpcAuthTokenMiddleware)
 
