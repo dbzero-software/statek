@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextvars import ContextVar
 from html import escape as html_escape
 import logging
 from typing import Any, Awaitable, Callable
@@ -50,40 +49,6 @@ class OIDCSettingsBase(MultiSourceBaseSettings):
     oidc_logout_url: str = ""
     cookie_secret_key: str = ""
     required_cognito_group: str = "super-admin"
-
-
-def _get_rpc_access_token(auth_client: Any | None) -> str | None:
-    """Return the current OAuth access token for dbzero RPC authorization."""
-    if auth_client is None:
-        return None
-
-    token = auth_client._get_current_token()  # pylint: disable=protected-access
-    return token.get("access_token") if token is not None else None
-
-
-async def _call_with_rpc_auth_token(
-    rpc_auth_token_var: ContextVar[Any],
-    auth_client: Any | None,
-    request: Request,
-    call_next: CallNext,
-) -> Any:
-    """Run an HTTP request with the current OAuth token in the RPC context."""
-    context_token = rpc_auth_token_var.set(_get_rpc_access_token(auth_client))
-    try:
-        return await call_next(request)
-    finally:
-        rpc_auth_token_var.reset(context_token)
-
-
-def _set_rpc_auth_token_provider(
-    rpc_auth_token_var: ContextVar[Any] | None,
-    auth_client: Any | None,
-) -> Any | None:
-    """Set a lazy token provider for NiceGUI callback contexts outside middleware."""
-    if rpc_auth_token_var is None or auth_client is None:
-        return None
-
-    return rpc_auth_token_var.set(lambda: _get_rpc_access_token(auth_client))
 
 
 def _render_auth_status_page(
@@ -260,13 +225,17 @@ def _is_super_admin(auth_client: Any | None, required_group: str) -> bool:
     return required_group in claims.get("cognito:groups", [])
 
 
+def _is_authenticated(auth_client: Any | None) -> bool:
+    """Return whether OIDC already has an authenticated user session."""
+    return auth_client is None or bool(auth_client.is_authenticated())
+
+
 def setup_oidc_auth(
     nicegui_app: Any,
     settings: OIDCSettingsBase,
     skip_auth: bool,
     impersonate: str | None,
     session_file: str,
-    rpc_auth_token_var: ContextVar[Any] | None = None,
 ) -> Any | None:
     """Set up OIDC authentication for the Statek NiceGUI application.
 
@@ -276,7 +245,6 @@ def setup_oidc_auth(
         skip_auth: When True, no OIDC flow is set up.
         impersonate: Accepted for CLI compatibility; Statek does not resolve app users.
         session_file: Path prefix for shelve session storage.
-        rpc_auth_token_var: Optional ContextVar populated for dbzero RPC calls.
 
     Returns:
         The OIDC client instance, or None when authentication is disabled.
@@ -352,8 +320,6 @@ def setup_oidc_auth(
             session_storage=session_storage,
         )
 
-    _set_rpc_auth_token_provider(rpc_auth_token_var, auth)
-
     class OAuthCallbackErrorMiddleware(BaseHTTPMiddleware):
         """Return an error page when the OIDC provider redirects with an error."""
 
@@ -379,10 +345,10 @@ def setup_oidc_auth(
         """Deny access unless the current user is in the Cognito super-admin group."""
 
         async def dispatch(self, request: Request, call_next: CallNext) -> Any:
-            if (
-                not _should_skip_access_check(request.url.path)
-                and not _is_super_admin(auth, settings.required_cognito_group)
-            ):
+            if _should_skip_access_check(request.url.path) or not _is_authenticated(auth):
+                return await call_next(request)
+
+            if not _is_super_admin(auth, settings.required_cognito_group):
                 return HTMLResponse(
                     _render_auth_status_page(
                         title="Statek - access blocked",
@@ -396,21 +362,8 @@ def setup_oidc_auth(
 
             return await call_next(request)
 
-    class RpcAuthTokenMiddleware(BaseHTTPMiddleware):
-        """Populate the dbzero RPC bearer token context for each HTTP request."""
-
-        async def dispatch(self, request: Request, call_next: CallNext) -> Any:
-            return await _call_with_rpc_auth_token(
-                rpc_auth_token_var,
-                auth,
-                request,
-                call_next,
-            )
-
     if auth is not None:
         nicegui_app.add_middleware(OAuthCallbackErrorMiddleware)
         nicegui_app.add_middleware(SuperAdminMiddleware)
-    if rpc_auth_token_var is not None:
-        nicegui_app.add_middleware(RpcAuthTokenMiddleware)
 
     return auth
