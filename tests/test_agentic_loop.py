@@ -224,6 +224,7 @@ class TestRunAgenticLoop:
             agent=agent,
             warmup_code=None,
             task_queue_size_func=lambda: 0,
+            queue_prefixes=[db0.get_current_prefix().name],
             auto_terminate=True,
         )
 

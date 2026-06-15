@@ -8,6 +8,10 @@ from statek.statek_push_queue import StatekPushQueue
 from statek.executors.utils import process_push_notifications
 
 
+def _current_queue_prefixes():
+    return [db0.get_current_prefix().name]
+
+
 def _make_started_job():
     agent = Agent(
         role="test",
@@ -33,11 +37,11 @@ class TestProcessPushNotifications:
 
     def test_no_queue_does_nothing(self, db0_fixture):
         # No StatekPushQueue created — should not raise
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
     def test_empty_queue_does_nothing(self, db0_fixture):
         StatekPushQueue()
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
     def test_processes_single_notification(self, db0_fixture):
         job = _make_started_job()
@@ -45,7 +49,7 @@ class TestProcessPushNotifications:
         queue = StatekPushQueue()
         queue.push_to_job_console(job_uuid=job_uuid, message="hello")
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
         assert job.py_env.push_log is not None
         assert job.py_env.push_log[0] == "hello"
@@ -57,7 +61,7 @@ class TestProcessPushNotifications:
         message = _QueuedMessage("object")
         queue.push_to_job_console(job_uuid=job_uuid, message=message)
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
         assert job.py_env.push_log is not None
         assert job.py_env.push_log[0] == "hello-from-object"
@@ -75,7 +79,7 @@ class TestProcessPushNotifications:
         message = _QueuedMessage("object")
         queue.push_to_job_console(job_uuid=job_uuid, message=message)
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
         assert job.py_env.push_log is not None
         assert job.py_env.push_log[0] == "adapted-object"
@@ -87,7 +91,7 @@ class TestProcessPushNotifications:
         queue = StatekPushQueue()
         queue.push_to_job_console(job_uuid=job_uuid, message="hello")
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
         assert job.py_env.push_log[0] == "hello"
         assert job.contains_ext_ref("hello") is False
@@ -98,7 +102,7 @@ class TestProcessPushNotifications:
         queue = StatekPushQueue()
         queue.push_to_job_console(job_uuid=job_uuid, message="hello")
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
         remaining = queue.pop_from_job_console(10)
         assert remaining == []
@@ -110,7 +114,7 @@ class TestProcessPushNotifications:
         queue.push_to_job_console(job_uuid=job_uuid, message="msg1")
         queue.push_to_job_console(job_uuid=job_uuid, message="msg2")
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
         assert job.py_env.push_log is not None
         val = job.py_env.push_log[0]
@@ -127,7 +131,7 @@ class TestProcessPushNotifications:
         queue.push_to_job_console(job_uuid=job1_uuid, message="for-job1")
         queue.push_to_job_console(job_uuid=job2_uuid, message="for-job2")
 
-        process_push_notifications()
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
         assert job1.py_env.push_log[0] == "for-job1"
         assert job2.py_env.push_log[0] == "for-job2"
@@ -145,7 +149,7 @@ class TestProcessPushNotifications:
         queue.push_to_job_console(job_uuid=job_a_uuid, message="for-a")
         queue.push_to_job_console(job_uuid=job_b_uuid, message="for-b")
 
-        process_push_notifications(prefix=prefix_a.uuid)
+        process_push_notifications(queue_prefixes=[prefix_a.name], job_prefix=prefix_a.uuid)
 
         assert job_a.py_env.push_log[0] == "for-a"
         assert job_b.py_env.push_log is None
@@ -159,7 +163,11 @@ class TestProcessPushNotifications:
         for i in range(10):
             queue.push_to_job_console(job_uuid=job_uuid, message=f"msg{i}")
 
-        process_push_notifications(step_size=3, max_count=5)
+        process_push_notifications(
+            step_size=3,
+            max_count=5,
+            queue_prefixes=_current_queue_prefixes(),
+        )
 
         remaining = queue.pop_from_job_console(100)
         assert len(remaining) == 5
@@ -179,6 +187,28 @@ class TestProcessPushNotifications:
 
         try:
             # Should not propagate the exception
-            process_push_notifications()
+            process_push_notifications(queue_prefixes=_current_queue_prefixes())
         finally:
             job.__class__.push_user_message = original
+
+    def test_uses_only_configured_queue_prefixes(self, db0_fixture, monkeypatch):
+        queue_prefix = db0.get_current_prefix().name
+        job = _make_started_job()
+        job_uuid = db0.uuid(job)
+        queue = StatekPushQueue()
+        queue.push_to_job_console(job_uuid=job_uuid, message="hello")
+        db0.open("unrelated-prefix", "rw")
+        observed_prefixes = []
+        original_find_singleton = db0.find_singleton
+
+        def recording_find_singleton(cls, prefix=None):
+            if cls is StatekPushQueue:
+                observed_prefixes.append(prefix)
+            return original_find_singleton(cls, prefix)
+
+        monkeypatch.setattr(db0, "find_singleton", recording_find_singleton)
+
+        process_push_notifications(queue_prefixes=[queue_prefix])
+
+        assert observed_prefixes == [queue_prefix]
+        assert job.py_env.push_log[0] == "hello"

@@ -10,6 +10,10 @@ from statek.executors.job import Job, JobDef
 from statek.executors.utils import AgentLoopDef, run_agentic_fleet, find_existing_job_def
 
 
+def _current_queue_prefixes():
+    return [db0.get_current_prefix().name]
+
+
 def _make_supervised_agent(role="fleet_agent"):
     return SupervisedAgent(
         role=role,
@@ -66,7 +70,12 @@ class TestRunAgenticFleet:
             task_queue_size_func=lambda: 0,
         )
 
-        await run_agentic_fleet([loop_def], max_concurrency=1, auto_terminate=True)
+        await run_agentic_fleet(
+            [loop_def],
+            max_concurrency=1,
+            queue_prefixes=_current_queue_prefixes(),
+            auto_terminate=True,
+        )
 
         # No jobs should have been created
         jobs = list(db0.find(Job, db0.as_tag(agent)))
@@ -83,7 +92,11 @@ class TestRunAgenticFleet:
             AgentLoopDef(agent=agent_b, warmup_code=None, task_queue_size_func=lambda: 0),
         ]
 
-        await run_agentic_fleet(loop_defs, auto_terminate=True)
+        await run_agentic_fleet(
+            loop_defs,
+            queue_prefixes=_current_queue_prefixes(),
+            auto_terminate=True,
+        )
 
         assert find_existing_job_def(agent_a, None) is not None
         assert find_existing_job_def(agent_b, None) is not None
@@ -98,7 +111,11 @@ class TestRunAgenticFleet:
             task_queue_size_func=lambda: 0,
         )
 
-        await run_agentic_fleet([loop_def], auto_terminate=True)
+        await run_agentic_fleet(
+            [loop_def],
+            queue_prefixes=_current_queue_prefixes(),
+            auto_terminate=True,
+        )
 
         job_def = find_existing_job_def(agent, None)
         assert job_def is not None
@@ -125,7 +142,12 @@ class TestRunAgenticFleet:
             AgentLoopDef(agent=agent_b, warmup_code=None, task_queue_size_func=queue_b),
         ]
 
-        await run_agentic_fleet(loop_defs, max_concurrency=10, auto_terminate=True)
+        await run_agentic_fleet(
+            loop_defs,
+            max_concurrency=10,
+            queue_prefixes=_current_queue_prefixes(),
+            auto_terminate=True,
+        )
 
         # Both queue funcs should have been called at least once
         assert "a" in calls
@@ -142,12 +164,20 @@ class TestRunAgenticFleet:
         )
 
         # Run once to create the job_def
-        await run_agentic_fleet([loop_def], auto_terminate=True)
+        await run_agentic_fleet(
+            [loop_def],
+            queue_prefixes=_current_queue_prefixes(),
+            auto_terminate=True,
+        )
         job_def_first = find_existing_job_def(agent, "x = 1")
         assert job_def_first is not None
 
         # Run again — should reuse, not create a new one
-        await run_agentic_fleet([loop_def], auto_terminate=True)
+        await run_agentic_fleet(
+            [loop_def],
+            queue_prefixes=_current_queue_prefixes(),
+            auto_terminate=True,
+        )
         job_def_second = find_existing_job_def(agent, "x = 1")
         assert job_def_second is job_def_first
 
