@@ -5,6 +5,7 @@ import pytest
 import dbzero as db0
 
 from statek.executors.utils import exec_step
+from statek.system import tool
 
 
 DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
@@ -17,6 +18,12 @@ class _LLMReprObject:  # pylint: disable=too-few-public-methods
 
     def __llm_repr__(self):
         return f"custom:{self.name}"
+
+
+@tool(system=True, hidden=True)
+def hidden_runtime_system_tool(**kwargs) -> str:  # pylint: disable=unused-argument
+    """Return a marker value from a hidden system tool."""
+    return "hidden-runtime-ok"
 
 
 class TestExecStepPrint:
@@ -39,6 +46,15 @@ class TestExecStepPrint:
         job.py_env.local_state = {'obj': _LLMReprObject(name="test")}
         await exec_step('print(obj)', job)
         assert job.py_env.console[0] == "custom:test"
+
+    @pytest.mark.asyncio
+    async def test_hidden_system_tool_executes_from_runtime_context(self, job_factory):
+        """Hidden registered system tools remain callable through exec_step."""
+        job = self._make_job(job_factory)
+
+        await exec_step('result = hidden_runtime_system_tool()', job)
+
+        assert job.py_env.local_state['result'] == "hidden-runtime-ok"
 
 
 class TestExecStepFStringFormatting:

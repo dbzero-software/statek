@@ -240,10 +240,11 @@ def _run_coroutine_result(result: Any) -> Any:
     return asyncio.get_running_loop().run_until_complete(result)
 
 
-def _register_wrapper(wrapper: Callable, system: bool, target) -> Callable:
+def _register_wrapper(wrapper: Callable, system: bool, target, hidden: bool = False) -> Callable:
     """Register an LLM-facing callable and annotate its scope metadata."""
     wrapper.tool_system = system
     wrapper.tool_target = target
+    wrapper.tool_hidden = hidden
     _TOOL_REGISTRY.append(wrapper)
     return wrapper
 
@@ -261,7 +262,9 @@ def _bind_error_handler_result(result: Any, handler: Optional[Callable]) -> None
         job.add_error_handler(handler, result)
 
 
-def tool(f=None, *, system: bool = False, target=None, error_handler=None): # pylint: disable=W0621
+# pylint: disable=redefined-outer-name
+def tool(f=None, *, system: bool = False, target=None, error_handler=None,
+         hidden: bool = False):
     """Marks a function as a tool for LLM agent.
 
     Can be used as ``@tool`` or ``@tool(system=True)``.
@@ -280,6 +283,9 @@ def tool(f=None, *, system: bool = False, target=None, error_handler=None): # py
             registered on the current job (via ``job.add_error_handler``) with
             the tool's return value as context, just before the value is
             returned to the caller.
+        hidden: When True, the tool remains callable internally but is excluded
+            from LLM-facing tool discovery, prompt tool placeholders, and formal
+            provider tool payloads.
     """
 
     def _decorate(func):
@@ -302,7 +308,7 @@ def tool(f=None, *, system: bool = False, target=None, error_handler=None): # py
             _bind_error_handler_result(result, error_handler)
             return result
 
-        return _register_wrapper(wrapper, system, target)
+        return _register_wrapper(wrapper, system, target, hidden)
 
     if f is None:
         # Called as @tool() or @tool(system=True)
@@ -504,8 +510,14 @@ def _matches_chat_style(tool_func: Callable, chat_style) -> bool:
     return target == chat_style
 
 
+def _is_hidden_tool(tool_func: Callable) -> bool:
+    """Return whether a tool is hidden from LLM-facing discovery."""
+    return bool(getattr(tool_func, "tool_hidden", False))
+
+
 def find_tools(scope: Optional[str] = None,
-               chat_style=None) -> Iterable[Callable]:
+               chat_style=None,
+               include_hidden: bool = False) -> Iterable[Callable]:
     """Returns registered tools, optionally filtered by scope and chat style.
 
     Args:
@@ -516,6 +528,9 @@ def find_tools(scope: Optional[str] = None,
         chat_style: Optional target chat style.  When provided, only tools
             whose ``tool_target`` is ``None`` (universal) or includes
             *chat_style* are returned.
+        include_hidden: When True, include tools decorated with
+            ``@tool(hidden=True)``. Hidden tools are excluded by default because
+            this function is normally used for LLM-facing discovery.
 
     Returns:
         An iterable of tool callables matching the requested scope.
@@ -528,6 +543,8 @@ def find_tools(scope: Optional[str] = None,
         result = list(_TOOL_REGISTRY)
     if chat_style is not None:
         result = [t for t in result if _matches_chat_style(t, chat_style)]
+    if not include_hidden:
+        result = [t for t in result if not _is_hidden_tool(t)]
     # Deduplicate by name, keeping the first occurrence
     seen: set[str] = set()
     deduped = []
@@ -567,6 +584,7 @@ def select_tools(tools: Iterable[Callable], scope: str,
         result = list(tools)
     if chat_style is not None:
         result = [t for t in result if _matches_chat_style(t, chat_style)]
+    result = [t for t in result if not _is_hidden_tool(t)]
     return result
 
 

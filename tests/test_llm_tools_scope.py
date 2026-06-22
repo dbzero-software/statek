@@ -42,6 +42,28 @@ def llm_scope_system_tool(value: str, **kwargs) -> str:
     return value
 
 
+@tool(hidden=True)
+def llm_scope_hidden_app_tool(value: str, **kwargs) -> str:
+    """Return a hidden application-scoped value.
+
+    Args:
+        value: Value to return.
+    """
+    del kwargs
+    return value
+
+
+@tool(system=True, hidden=True)
+def llm_scope_hidden_system_tool(value: str, **kwargs) -> str:
+    """Return a hidden system-scoped value.
+
+    Args:
+        value: Value to return.
+    """
+    del kwargs
+    return value
+
+
 @tool(target={ChatStyle.DIRECT})  # pylint: disable=no-member
 def llm_scope_direct_app_tool(value: str, **kwargs) -> str:
     """Return a direct-only application-scoped value.
@@ -196,6 +218,37 @@ def test_select_all_scope_with_explicit_removal():
     assert "llm_scope_system_tool" in names
 
 
+def test_select_all_scope_excludes_hidden_tools():
+    """ALL scope excludes hidden tools from LLM-facing selection."""
+    selected = select_request_tools(
+        metadata={"LLM_TOOLS_SCOPE": "ALL"},
+        available_tools=[llm_scope_app_tool, llm_scope_hidden_app_tool],
+    )
+
+    names = _tool_names(selected)
+    assert "llm_scope_app_tool" in names
+    assert "llm_scope_hidden_app_tool" not in names
+    assert "llm_scope_hidden_system_tool" not in names
+
+
+def test_select_explicit_hidden_app_addition_raises():
+    """Explicit additions cannot surface hidden application tools by name."""
+    with pytest.raises(ValueError, match="unknown tool"):
+        select_request_tools(
+            metadata={"LLM_TOOLS_SCOPE": "+llm_scope_hidden_app_tool"},
+            available_tools=[llm_scope_hidden_app_tool],
+        )
+
+
+def test_select_explicit_hidden_system_addition_raises():
+    """Explicit additions cannot surface hidden registered system tools by name."""
+    with pytest.raises(ValueError, match="unknown tool"):
+        select_request_tools(
+            metadata={"LLM_TOOLS_SCOPE": "+llm_scope_hidden_system_tool"},
+            available_tools=[],
+        )
+
+
 def test_select_additions_only_reports_only_added_tool():
     """No-category explicit additions start from an empty base."""
     selected = select_request_tools(
@@ -321,6 +374,20 @@ def test_openrouter_preview_uses_explicit_scope_tools(openrouter_api):
 
     names = [entry["function"]["name"] for entry in payload["tools"]]
     assert names == ["llm_scope_system_tool"]
+
+
+def test_openrouter_preview_excludes_hidden_tools(openrouter_api):
+    """OpenRouter preview does not include hidden tools in the provider payload."""
+    payload = openrouter_api.preview_request(
+        model="gpt-4o",
+        metadata={"LLM_TOOLS_SCOPE": "ALL"},
+        available_tools=[llm_scope_app_tool, llm_scope_hidden_app_tool],
+    )
+
+    names = [entry["function"]["name"] for entry in payload["tools"]]
+    assert "llm_scope_app_tool" in names
+    assert "llm_scope_hidden_app_tool" not in names
+    assert "llm_scope_hidden_system_tool" not in names
 
 
 def test_vertexai_preview_uses_explicit_scope_tools(vertexai_api):

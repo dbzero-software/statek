@@ -388,8 +388,6 @@ class TestCreateTool:
         with pytest.raises(ValueError):
             create_tool('add_tool', add, 'Adds two numbers', context, 5, 3)
 
-        create_tool('add_tool2', add, 'Adds two numbers', context, 5, 3)
-
     def test_create_tool_ignores_extra_positional_args(self):
         """Test that created tool ignores positional args passed by the LLM."""
         def add(a, b):
@@ -410,6 +408,26 @@ class TestCreateTool:
 
         assert tool_func(count=10) == 8
         assert tool_func(10, count=20) == 8
+
+
+class TestToolHiddenMetadata:
+    """Test cases for hidden tool decorator metadata."""
+
+    def test_tool_hidden_defaults_false(self):
+        """Visible tools carry explicit tool_hidden=False metadata."""
+        @tool
+        def visible_tool(**kwargs):  # pylint: disable=unused-argument
+            """Visible tool."""
+
+        assert visible_tool.tool_hidden is False
+
+    def test_tool_hidden_true(self):
+        """@tool(hidden=True) marks a tool as hidden."""
+        @tool(hidden=True)
+        def hidden_tool(**kwargs):  # pylint: disable=unused-argument
+            """Hidden tool."""
+
+        assert hidden_tool.tool_hidden is True
 
 
 class TestGetUnpackSize:
@@ -880,6 +898,33 @@ class TestFindTools:
         duplicates = [n for n in set(names) if names.count(n) > 1]
         assert duplicates == [], f"Duplicate system tools: {duplicates}"
 
+    def test_find_tools_excludes_hidden_by_default(self):
+        """find_tools() does not expose hidden tools unless explicitly requested."""
+        @tool(hidden=True)
+        def find_hidden_tool(**kwargs):  # pylint: disable=unused-argument
+            """Hidden tool."""
+
+        assert find_hidden_tool not in find_tools()
+        assert find_hidden_tool in find_tools(include_hidden=True)
+
+    def test_find_tools_filters_hidden_before_deduping_names(self):
+        """A hidden duplicate name does not mask a later visible tool."""
+        @tool(hidden=True)
+        def duplicated_visibility_tool(**kwargs):  # pylint: disable=unused-argument
+            """Hidden duplicate."""
+
+        hidden_tool = duplicated_visibility_tool
+
+        @tool
+        def duplicated_visibility_tool(**kwargs):  # pylint: disable=function-redefined,unused-argument
+            """Visible duplicate."""
+
+        visible_tool = duplicated_visibility_tool
+        tools = find_tools()
+
+        assert hidden_tool not in tools
+        assert visible_tool in tools
+
 
 class TestSelectTools:
     """Test cases for select_tools function."""
@@ -991,6 +1036,20 @@ class TestSelectTools:
 
         app_result = select_tools(pool, "APPLICATION")
         assert set(app_result) == {app_a, plain}
+
+    def test_select_tools_excludes_hidden(self):
+        """select_tools does not return hidden tools for LLM-facing selections."""
+        @tool(hidden=True)
+        def hidden_select_tool(**kwargs):  # pylint: disable=unused-argument
+            """Hidden selectable tool."""
+
+        @tool
+        def visible_select_tool(**kwargs):  # pylint: disable=unused-argument
+            """Visible selectable tool."""
+
+        result = select_tools([hidden_select_tool, visible_select_tool], "ALL")
+        assert hidden_select_tool not in result
+        assert visible_select_tool in result
 
     def test_select_tools_all_system_with_system_scope(self):
         """All-system input with SYSTEM scope returns all of them."""

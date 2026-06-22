@@ -278,13 +278,19 @@ class Agent:
             return format_docstring(parsed, brief=brief, py_syntax=py_syntax,
                                     agent=agent_name)
 
-        formatted = [inner_format_tool(fn) for fn in self._tools]
+        formatted = [
+            inner_format_tool(fn)
+            for fn in self._tools
+            if not getattr(fn, "tool_hidden", False)
+        ]
         # also process tools specified by name
         if self._tools_by_name:
             for tool_name in self._tools_by_name:
                 fn = self.context.get(tool_name)
                 if fn is None:
                     raise ValueError(f'Missing tool defined by name "{tool_name}"')
+                if getattr(fn, "tool_hidden", False):
+                    continue
                 formatted.append(inner_format_tool(fn))
 
         return '\n\n'.join(formatted)
