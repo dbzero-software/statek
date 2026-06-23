@@ -61,11 +61,21 @@ class _MirrorDict(dict):
     comprehensions can see.
     """
 
-    def __init__(self, *args, target=None, **kwargs):
+    def __init__(self, *args, target=None, fallback=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._target = target
+        self._fallback = fallback
+
+    def __missing__(self, key):
+        if self._fallback is None:
+            raise KeyError(key)
+        return self._fallback[key]
 
     def __setitem__(self, key, value):
+        if self._fallback is not None:
+            ensure_writable = getattr(self._fallback, "ensure_writable", None)
+            if ensure_writable is not None:
+                ensure_writable(key)
         super().__setitem__(key, value)
         if self._target is not None:
             self._target[key] = value
@@ -400,7 +410,11 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                 code_obj = compile(wrapper, filename="<string>", mode="exec")
 
                 global_context.update(local_context)
-                sync_local = _MirrorDict(local_context, target=global_context)
+                sync_local = _MirrorDict(
+                    local_context,
+                    target=global_context,
+                    fallback=local_context,
+                )
 
                 if is_expression:
                     result = eval(
@@ -473,17 +487,19 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
         global_context = {key: value for key, value in job.py_env.global_state.items()}
     if local_context is None:
         local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
-    initial_context = dict(local_context)
+    from statek.shared_context import ContextFallbackProxy  # pylint: disable=import-outside-toplevel
+    local_context = ContextFallbackProxy(
+        local_context,
+        shared_context=job._get_shared_context(),  # pylint: disable=protected-access
+    )
 
     try:
-        from statek.shared_context import _feed_shared_context  # pylint: disable=import-outside-toplevel
-        with _feed_shared_context(code_str, job, local_context, global_context):
-            _exec_code_body(
-                code_str, job, global_context, local_context,
-                output_fn=lambda s: job.console_append(s),
-                error_fn=lambda msg: job.console_append(msg, error_message=msg),
-                instr_num=instr_num,
-            )
+        _exec_code_body(
+            code_str, job, global_context, local_context,
+            output_fn=lambda s: job.console_append(s),
+            error_fn=lambda msg: job.console_append(msg, error_message=msg),
+            instr_num=instr_num,
+        )
     finally:
         if job.py_env.local_state is None:
             job.py_env.local_state = {}        

@@ -17,7 +17,7 @@ from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
 from .system import (tool, subtask, docstr, get_any, get_all, error_handler,
                      is_valid_error_handler, docs_style, find_sub_task_handler)
-from .shared_context import init_shared_context, shared_context_set_var
+from .shared_context import init_shared_context, print_locals, shared_context_set_var
 from .utils import (statek_print, format_default_llm_repr,
                     get_current_agent, get_current_agent_name, get_current_job)
 from .task import (
@@ -74,6 +74,7 @@ __all__ = [
     "create_sub_task",
     "find_sub_task_handler",
     "init_shared_context",
+    "print_locals",
     "shared_context_set_var",
     "statek_print",
     "format_default_llm_repr",
