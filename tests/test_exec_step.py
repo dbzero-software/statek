@@ -14,6 +14,60 @@ from statek.system import tool
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef, JobStatus
+from statek.shared_context import (
+    ContextCategoryDict,
+    init_shared_context,
+    shared_context_set_var,
+)
+from statek.utils import _statek_ctx_scope
+
+
+class TestExecStepSharedContext:
+    """Shared context variables participate in exec_step name resolution."""
+
+    @staticmethod
+    def _initialize(job):
+        category = ContextCategoryDict().get("PREFERENCE")
+        with _statek_ctx_scope({"job": job}):
+            init_shared_context("user")
+            shared_context_set_var(
+                category, "tone", "concise", "Preferred response tone"
+            )
+
+    @pytest.mark.asyncio
+    async def test_resolves_shared_variable_without_persisting_it_as_local(
+        self, job_factory
+    ):
+        job = job_factory()
+        self._initialize(job)
+
+        await exec_step("result = tone", job)
+
+        assert job.py_env.local_state["result"] == "concise"
+        assert "tone" not in job.py_env.local_state
+        assert not hasattr(executor_utils, "tone")
+
+    @pytest.mark.asyncio
+    async def test_true_local_shadows_shared_variable(self, job_factory):
+        job = job_factory()
+        self._initialize(job)
+        job.py_env.local_state["tone"] = "local"
+
+        await exec_step("result = tone\ntone = 'changed'", job)
+
+        assert job.py_env.local_state["result"] == "local"
+        assert job.py_env.local_state["tone"] == "changed"
+
+    @pytest.mark.asyncio
+    async def test_rejects_assignment_to_resolved_shared_variable(self, job_factory):
+        job = job_factory()
+        self._initialize(job)
+
+        with pytest.raises(PermissionError, match="tone"):
+            await exec_step("tone = 'detailed'", job)
+
+        assert "tone" not in job.py_env.local_state
+        assert job._get_shared_context().get_var("tone").value == "concise"
 
 
 @db0.memo

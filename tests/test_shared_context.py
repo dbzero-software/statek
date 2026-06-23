@@ -1,13 +1,280 @@
 """Tests for shared context data structures."""
 
+# pylint: disable=no-member,protected-access
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import dbzero as db0
 
-from statek.shared_context import ContextVar, SharedContext, SharedContextProxy
+from statek.shared_context import (
+    ContextCategory,
+    ContextCategoryDict,
+    ContextVar,
+    SharedContext,
+    SharedContextProxy,
+    _feed_shared_context,
+    init_shared_context,
+    shared_context_set_var,
+)
+from statek.utils import _statek_ctx_scope
 
 
 pytestmark = pytest.mark.usefixtures("db0_fixture")
+
+
+def test_context_category_dict_has_default_categories():
+    """The shared category dictionary is initialized with canonical defaults."""
+    categories = ContextCategoryDict()
+
+    assert set(categories.categories) == {"PREFERENCE", "ENTITY", "VOCABULARY"}
+    assert categories.get("PREFERENCE").name == "PREFERENCE"
+
+
+def test_context_category_dict_is_singleton_and_lookup_is_case_insensitive():
+    """All callers share one dictionary and legacy lowercase names resolve."""
+    first = ContextCategoryDict()
+    second = ContextCategoryDict()
+
+    assert first is second
+    assert first.get("preference") is first.get("PREFERENCE")
+    assert first.get("unknown") is None
+
+
+def test_context_category_accepts_prefix():
+    """Context categories can be persisted in an explicitly selected prefix."""
+    category = ContextCategory(name="CUSTOM", prefix="category-prefix")
+
+    assert db0.get_prefix_of(category).name == "category-prefix"
+    assert category.name == "CUSTOM"
+
+
+def test_context_category_dict_accepts_prefix_as_scoped_singleton():
+    """Each explicit prefix owns an independent category dictionary singleton."""
+    categories = ContextCategoryDict(prefix="categories-prefix")
+
+    assert db0.get_prefix_of(categories).name == "categories-prefix"
+    assert ContextCategoryDict(prefix="categories-prefix") is categories
+    assert db0.find_singleton(
+        ContextCategoryDict, prefix="categories-prefix"
+    ) is categories
+    assert all(
+        db0.get_prefix_of(category).name == "categories-prefix"
+        for category in categories.categories.values()
+    )
+
+    positional = ContextCategoryDict("positional-prefix")
+    assert db0.get_prefix_of(positional).name == "positional-prefix"
+
+
+def test_context_category_dict_preserves_custom_categories_with_prefix():
+    """A caller-provided mapping remains supported alongside prefix selection."""
+    custom = ContextCategory(name="CUSTOM", prefix="custom-prefix")
+
+    categories = ContextCategoryDict(
+        categories={"CUSTOM": custom},
+        prefix="custom-prefix",
+    )
+
+    assert categories.categories == {"CUSTOM": custom}
+    assert categories.get("CUSTOM") is custom
+
+
+def test_set_var_ignores_unknown_category():
+    """Variables outside the shared category dictionary are not stored."""
+    context = SharedContext()
+
+    context.set_var("unknown", "key", "value", "description")
+
+    assert "key" not in context
+    assert context.get_var("key") is None
+
+
+def test_init_shared_context_is_hidden_system_tool():
+    """Context initialization executes internally without LLM exposure."""
+    assert init_shared_context.tool_system is True
+    assert init_shared_context.tool_hidden is True
+
+
+def test_init_shared_context_requires_current_job():
+    """Initialization cannot bind a context without an active job."""
+    with pytest.raises(RuntimeError, match="current job"):
+        init_shared_context("user")
+
+
+def test_init_shared_context_reuses_exact_binding_across_jobs(job_factory):
+    """Jobs initialized with the same specifiers share one persisted context."""
+    first_job = job_factory()
+    second_job = job_factory()
+
+    with _statek_ctx_scope({"job": first_job}):
+        init_shared_context("user")
+    with _statek_ctx_scope({"job": second_job}):
+        init_shared_context("user")
+
+    assert first_job._get_shared_context() is second_job._get_shared_context()
+
+
+def test_init_shared_context_merges_subset_contexts(job_factory):
+    """A narrower binding inherits broader contexts for reads."""
+    broad_job = job_factory()
+    narrow_job = job_factory()
+    with _statek_ctx_scope({"job": broad_job}):
+        init_shared_context("user")
+    broad_job._get_shared_context().set_var(
+        "preference", "tone", "concise", "Preferred tone"
+    )
+
+    with _statek_ctx_scope({"job": narrow_job}):
+        init_shared_context("department", "user")
+
+    active = narrow_job._get_shared_context()
+    assert isinstance(active, SharedContextProxy)
+    assert active.get_var("tone").value == "concise"
+
+
+def test_init_shared_context_binding_is_order_independent(job_factory):
+    """Specifier order and duplicates do not alter exact binding identity."""
+    first_job = job_factory()
+    second_job = job_factory()
+    with _statek_ctx_scope({"job": first_job}):
+        init_shared_context("user", "department", "user")
+    with _statek_ctx_scope({"job": second_job}):
+        init_shared_context("department", "user")
+
+    first_job._get_shared_context().set_var(
+        "entity", "client", "Acme", "Current client"
+    )
+    assert second_job._get_shared_context().get_var("client").value == "Acme"
+
+
+def test_init_shared_context_accepts_memo_specifiers(job_factory):
+    """Persistent memo objects can identify a shared context."""
+    job = job_factory()
+    specifier = ContextCategoryDict().get("ENTITY")
+
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context(specifier)
+
+    assert isinstance(job._get_shared_context(), SharedContext)
+
+
+def test_init_shared_context_rejects_invalid_specifiers(job_factory):
+    """Only strings and dbzero memo objects can identify contexts."""
+    job = job_factory()
+
+    with _statek_ctx_scope({"job": job}):
+        with pytest.raises(TypeError, match="specifier"):
+            init_shared_context(123)
+
+
+def test_init_shared_context_read_only_rejects_writes(job_factory):
+    """Read-only initialization exposes context values but rejects mutation."""
+    job = job_factory()
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user", read_only=True)
+
+    active = job._get_shared_context()
+    assert isinstance(active, SharedContextProxy)
+    with pytest.raises(PermissionError, match="read-only"):
+        active.set_var("preference", "tone", "concise", "Preferred tone")
+
+
+def test_shared_context_set_var_is_visible_system_tool():
+    """Agents can discover the shared-context write utility."""
+    assert shared_context_set_var.tool_system is True
+    assert shared_context_set_var.tool_hidden is False
+
+
+def test_shared_context_set_var_forwards_to_current_job_context(job_factory):
+    """The utility stores a variable in the initialized active context."""
+    job = job_factory()
+    category = ContextCategoryDict().get("PREFERENCE")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(category, "tone", "concise", "Preferred tone")
+
+    var = job._get_shared_context().get_var("tone")
+    assert var is not None
+    assert var.value == "concise"
+
+
+def test_shared_context_set_var_without_job_is_noop():
+    """The utility does nothing when called outside a job."""
+    category = ContextCategoryDict().get("PREFERENCE")
+
+    assert shared_context_set_var(
+        category, "tone", "concise", "Preferred tone"
+    ) is None
+
+
+def test_shared_context_set_var_without_initialized_context_is_noop(job_factory):
+    """The utility does nothing until shared context has been initialized."""
+    job = job_factory()
+    category = ContextCategoryDict().get("PREFERENCE")
+
+    with _statek_ctx_scope({"job": job}):
+        assert shared_context_set_var(
+            category, "tone", "concise", "Preferred tone"
+        ) is None
+
+
+def test_feed_shared_context_injects_referenced_variable_temporarily(job_factory):
+    """Referenced shared values are available only for the execution scope."""
+    job = job_factory()
+    category = ContextCategoryDict().get("PREFERENCE")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(category, "tone", "concise", "Preferred tone")
+
+    local_context = {}
+    with _feed_shared_context("print(tone)", job, local_context):
+        assert local_context["tone"] == "concise"
+    assert "tone" not in local_context
+
+
+def test_feed_shared_context_prefers_true_local_variable(job_factory):
+    """An existing local shadows a shared variable and remains writable."""
+    job = job_factory()
+    category = ContextCategoryDict().get("PREFERENCE")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(category, "tone", "concise", "Preferred tone")
+
+    local_context = {"tone": "local"}
+    with _feed_shared_context("tone = 'changed'", job, local_context):
+        local_context["tone"] = "changed"
+    assert local_context["tone"] == "changed"
+
+
+def test_feed_shared_context_rejects_write_to_injected_variable(job_factory):
+    """Writing a resolved shared variable raises and removes the injected value."""
+    job = job_factory()
+    category = ContextCategoryDict().get("PREFERENCE")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(category, "tone", "concise", "Preferred tone")
+
+    local_context = {}
+    with pytest.raises(PermissionError, match="tone"):
+        with _feed_shared_context("tone = 'detailed'", job, local_context):
+            local_context["tone"] = "detailed"
+    assert "tone" not in local_context
+
+
+def test_feed_shared_context_ignores_variable_with_removed_category(job_factory):
+    """Only variables whose category remains registered are recognized."""
+    job = job_factory()
+    categories = ContextCategoryDict()
+    category = categories.get("PREFERENCE")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(category, "tone", "concise", "Preferred tone")
+    del categories.categories["PREFERENCE"]
+
+    local_context = {}
+    with _feed_shared_context("tone", job, local_context):
+        assert "tone" not in local_context
 
 
 def test_context_var_defaults_created_at_and_use_count():

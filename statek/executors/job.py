@@ -497,6 +497,8 @@ class Job:
         self.__ext_ref = None
         # Subtask notifications received while the current chat item is active.
         self.__pending_chat_log: List[SubTaskLogItem] = []
+        # Shared context is bound explicitly by the init_shared_context tool.
+        self.__shared_context = None
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
@@ -511,6 +513,14 @@ class Job:
     def model(self) -> Optional[str]:
         """Return the frozen model stored on the job definition."""
         return self.job_def.model if self.job_def is not None else None
+
+    def _set_shared_context(self, context: Any) -> None:
+        """Bind an active shared context to this job."""
+        self.__shared_context = context
+
+    def _get_shared_context(self) -> Any:
+        """Return this job's active shared context, if initialized."""
+        return self.__shared_context
 
     def find_locals(self, var_type: Optional[Type] = None,
                     var_name: Optional[str] = None,
