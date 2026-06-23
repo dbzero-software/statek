@@ -177,6 +177,11 @@ def _tool_name(tool_func: Callable) -> str:
     return getattr(tool_func, "__name__", "")
 
 
+def _tool_is_hidden(tool_func: Callable) -> bool:
+    """Return whether a tool is hidden from LLM-facing request selection."""
+    return bool(getattr(tool_func, "tool_hidden", False))
+
+
 def _dedupe_tools_by_name(tools: Iterable[Callable]) -> List[Callable]:
     """Deduplicate tools by name while preserving first occurrence."""
     result = []
@@ -324,7 +329,10 @@ def select_request_tools(
     if _scope_is_empty(scope):
         return None
 
-    materialized_tools = list(available_tools)
+    materialized_tools = [
+        tool_func for tool_func in available_tools
+        if not _tool_is_hidden(tool_func)
+    ]
     selected_tools = _select_scope_category_tools(
         scope,
         materialized_tools,

@@ -9,6 +9,7 @@ import pytest
 from statek.agents.agent import Agent, SupervisedAgent, WarmupDef, update_warmup_defs
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import SystemPrompt, make_system_prompt, parse_system_prompt
+from statek.system import tool
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock
 from tests.conftest import clock, docstr, exit_tool
@@ -18,12 +19,22 @@ def _internal_tool(**kwargs):  # pylint: disable=unused-argument
     """An internal tool that should not appear in the system prompt."""
 
 
+@tool(hidden=True)
+def hidden_agent_tool(value: str = "ok", **kwargs) -> str:  # pylint: disable=unused-argument
+    """A hidden tool that should not appear in the system prompt.
+
+    Args:
+        value: Value to return.
+    """
+    return value
+
+
 def _system_prompt(agent, task_difficulty=TaskDifficulty.medium, **kwargs):
     """Format an agent prompt with the default test difficulty."""
     return agent.system_prompt(task_difficulty=task_difficulty, **kwargs)
 
 
-class TestAgent:
+class TestAgent:  # pylint: disable=too-many-public-methods
     """Test cases for Agent class."""
 
     def test_system_prompt_formatting_single_tool(self, db0_fixture):  # pylint: disable=unused-argument
@@ -139,6 +150,46 @@ class TestAgent:
         )
 
         assert _internal_tool in agent.all_tools
+
+    def test_hidden_tool_excluded_from_system_prompt(self, db0_fixture):  # pylint: disable=unused-argument
+        """Hidden tools are not reported in the default tools placeholder."""
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("{tools}"),
+            _tools=[hidden_agent_tool],
+        )
+
+        assert "hidden_agent_tool" not in _system_prompt(agent)
+
+    def test_hidden_tool_excluded_from_brief_tools(self, db0_fixture):  # pylint: disable=unused-argument
+        """Hidden tools are not reported in the brief tools placeholder."""
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("{brief_tools}"),
+            _tools=[hidden_agent_tool],
+        )
+
+        assert "hidden_agent_tool" not in _system_prompt(agent)
+
+    def test_hidden_tool_excluded_from_detailed_tools(self, db0_fixture):  # pylint: disable=unused-argument
+        """Hidden tools are not reported in the detailed tools placeholder."""
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("{detailed_tools}"),
+            _tools=[hidden_agent_tool],
+        )
+
+        assert "hidden_agent_tool" not in _system_prompt(agent)
+
+    def test_hidden_tool_included_in_all_tools(self, db0_fixture):  # pylint: disable=unused-argument
+        """Hidden tools remain available for execution setup."""
+        agent = Agent(
+            role="test",
+            _system_prompt=make_system_prompt("{tools}"),
+            _tools=[hidden_agent_tool],
+        )
+
+        assert hidden_agent_tool in agent.all_tools
 
     def test_python_cli_in_system_registry(self, db0_fixture):  # pylint: disable=unused-argument
         """python_cli is a global system tool available via find_tools."""
