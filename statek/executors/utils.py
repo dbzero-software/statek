@@ -476,12 +476,14 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
     initial_context = dict(local_context)
 
     try:
-        _exec_code_body(
-            code_str, job, global_context, local_context,
-            output_fn=lambda s: job.console_append(s),
-            error_fn=lambda msg: job.console_append(msg, error_message=msg),
-            instr_num=instr_num,
-        )
+        from statek.shared_context import _feed_shared_context  # pylint: disable=import-outside-toplevel
+        with _feed_shared_context(code_str, job, local_context, global_context):
+            _exec_code_body(
+                code_str, job, global_context, local_context,
+                output_fn=lambda s: job.console_append(s),
+                error_fn=lambda msg: job.console_append(msg, error_message=msg),
+                instr_num=instr_num,
+            )
     finally:
         if job.py_env.local_state is None:
             job.py_env.local_state = {}        
