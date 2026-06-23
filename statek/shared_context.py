@@ -15,29 +15,37 @@ from .utils import get_current_job
 
 
 @db0.memo
-@dataclass
+@dataclass(init=False)
 class ContextCategory:
     """A category accepted for variables in shared contexts."""
 
-    name: str
+    def __init__(self, name: str, prefix=None):
+        db0.set_prefix(self, prefix)
+        self.name = name
 
 
-def _default_context_categories() -> Dict[str, ContextCategory]:
+def _default_context_categories(prefix=None) -> Dict[str, ContextCategory]:
     """Create the initial canonical category mapping."""
     return {
-        name: ContextCategory(name=name)
+        name: ContextCategory(name=name, prefix=prefix)
         for name in ("PREFERENCE", "ENTITY", "VOCABULARY")
     }
 
 
 @db0.memo(singleton=True)
-@dataclass
 class ContextCategoryDict:
     """Process-wide registry of accepted shared-context categories."""
 
-    categories: Dict[str, ContextCategory] = field(
-        default_factory=_default_context_categories
-    )
+    def __init__(
+        self,
+        prefix=None,
+        categories: Optional[Dict[str, ContextCategory]] = None,
+    ):
+        db0.set_prefix(self, prefix)
+        self.categories = (
+            categories if categories is not None
+            else _default_context_categories(prefix=prefix)
+        )
 
     def get(self, name: str) -> Optional[ContextCategory]:
         """Return a registered category, accepting names case-insensitively."""

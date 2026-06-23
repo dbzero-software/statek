@@ -1,10 +1,11 @@
 """Tests for shared context data structures."""
 
-# pylint: disable=protected-access
+# pylint: disable=no-member,protected-access
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import dbzero as db0
 
 from statek.shared_context import (
     ContextCategory,
@@ -27,7 +28,7 @@ def test_context_category_dict_has_default_categories():
     categories = ContextCategoryDict()
 
     assert set(categories.categories) == {"PREFERENCE", "ENTITY", "VOCABULARY"}
-    assert categories.get("PREFERENCE") == ContextCategory(name="PREFERENCE")
+    assert categories.get("PREFERENCE").name == "PREFERENCE"
 
 
 def test_context_category_dict_is_singleton_and_lookup_is_case_insensitive():
@@ -38,6 +39,45 @@ def test_context_category_dict_is_singleton_and_lookup_is_case_insensitive():
     assert first is second
     assert first.get("preference") is first.get("PREFERENCE")
     assert first.get("unknown") is None
+
+
+def test_context_category_accepts_prefix():
+    """Context categories can be persisted in an explicitly selected prefix."""
+    category = ContextCategory(name="CUSTOM", prefix="category-prefix")
+
+    assert db0.get_prefix_of(category).name == "category-prefix"
+    assert category.name == "CUSTOM"
+
+
+def test_context_category_dict_accepts_prefix_as_scoped_singleton():
+    """Each explicit prefix owns an independent category dictionary singleton."""
+    categories = ContextCategoryDict(prefix="categories-prefix")
+
+    assert db0.get_prefix_of(categories).name == "categories-prefix"
+    assert ContextCategoryDict(prefix="categories-prefix") is categories
+    assert db0.find_singleton(
+        ContextCategoryDict, prefix="categories-prefix"
+    ) is categories
+    assert all(
+        db0.get_prefix_of(category).name == "categories-prefix"
+        for category in categories.categories.values()
+    )
+
+    positional = ContextCategoryDict("positional-prefix")
+    assert db0.get_prefix_of(positional).name == "positional-prefix"
+
+
+def test_context_category_dict_preserves_custom_categories_with_prefix():
+    """A caller-provided mapping remains supported alongside prefix selection."""
+    custom = ContextCategory(name="CUSTOM", prefix="custom-prefix")
+
+    categories = ContextCategoryDict(
+        categories={"CUSTOM": custom},
+        prefix="custom-prefix",
+    )
+
+    assert categories.categories == {"CUSTOM": custom}
+    assert categories.get("CUSTOM") is custom
 
 
 def test_set_var_ignores_unknown_category():
