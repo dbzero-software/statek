@@ -10,6 +10,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -22,6 +25,21 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::874777259004:role/codeartifact-selltime-rw
+        aws-region: eu-central-1
+
+    - name: Login to CodeArtifact for pip
+      run: |
+        aws codeartifact login \
+          --tool pip \
+          --domain "${{ vars.CODEARTIFACT_DOMAIN }}" \
+          --domain-owner "${{ vars.AWS_ACCOUNT_ID }}" \
+          --repository "${{ vars.CODEARTIFACT_REPO }}" \
+          --region eu-central-1
     
     - name: Install build dependencies
       run: |
