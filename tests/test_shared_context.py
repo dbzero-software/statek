@@ -91,6 +91,16 @@ def test_set_var_ignores_unknown_category():
     assert context.get_var("key") is None
 
 
+def test_shared_context_accepts_prefix():
+    """Shared contexts can be persisted in an explicitly selected prefix."""
+    context = SharedContext(prefix="context-prefix")
+
+    assert db0.get_prefix_of(context).name == "context-prefix"
+
+    positional = SharedContext("positional-context-prefix")
+    assert db0.get_prefix_of(positional).name == "positional-context-prefix"
+
+
 def test_shared_context_selects_variables_by_category():
     """Select returns only variables belonging to the requested category."""
     context = SharedContext()
