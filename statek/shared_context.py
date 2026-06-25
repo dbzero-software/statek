@@ -71,12 +71,21 @@ def _category_name(category: Any) -> Optional[str]:
 
 
 @db0.memo
-@dataclass
+@dataclass(init=False)
 class SharedContext:
     """Named shared context variables available to future job integrations."""
 
     __context_vars: Dict[str, ContextVar] = field(default_factory=dict)
     _binding_keys: Tuple[str, ...] = field(default_factory=tuple)
+
+    def __init__(
+        self,
+        prefix=None,
+        _binding_keys: Tuple[str, ...] = (),
+    ):
+        db0.set_prefix(self, prefix)
+        self.__context_vars = {}
+        self._binding_keys = _binding_keys
 
     def set_var(self, category: Any, key: str, value: Any, description: str) -> None:
         """Store or replace a named context variable.

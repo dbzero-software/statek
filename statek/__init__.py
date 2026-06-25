@@ -2,6 +2,14 @@
 
 from typing import Optional
 
+try:
+    import dbzero  # noqa: F401
+except ImportError as exc:
+    raise ImportError(
+        "statek requires dbzero. Install it with `pip install statek[dbzero]` "
+        "or install dbzero-pro with `pip install statek[dbzero-pro]`."
+    ) from exc
+
 from .settings import LLM_API_Settings, StatekSettings, get_statek_settings
 from .multi_source_settings import (
     AwsSecretsManagerSource,
