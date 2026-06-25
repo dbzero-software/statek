@@ -23,18 +23,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "build>=1.0.0",
     "dbzero-modelkit>=0.1.0",
-    "easyoidc[nicegui]==0.1.12",
     "boto3==1.42.71",
     "pydantic==2.12.5",
     "pydantic-settings==2.12.0",
-    "PyJWT==2.10.1",
     "httpx==0.28.1",
     "nest_asyncio==1.6.0",
-    "nicegui==2.24.2",
-    "markdown2==2.5.4",
-    "weasyprint==68.1",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +41,7 @@ dbzero-pro = [
 dev = [
     "pytest>=7.0",
     "pylint>=3.0",
+    "build>=1.0.0",
 ]
 
 [project.urls]

@@ -1,4 +1,3 @@
-prune StatekWebUI
 prune tests
 prune experiments
 global-exclude __pycache__
