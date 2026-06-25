@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "statek"
 version = "0.0.1"
-description = "Template package for Statek."
+description = ""
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
