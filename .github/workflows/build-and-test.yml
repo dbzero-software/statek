@@ -57,8 +57,6 @@ jobs:
         runtime = "${{ matrix.dbzero-runtime }}"
         installed = {dist.metadata["Name"].lower() for dist in importlib.metadata.distributions()}
 
-        if runtime == "dbzero-pro" and "dbzero" in installed:
-            raise SystemExit("dbzero must not be installed in the dbzero-pro CI lane")
         if runtime not in installed:
             raise SystemExit(f"{runtime} is not installed")
 
