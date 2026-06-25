@@ -2,94 +2,36 @@ name: Release Packages
 
 on:
   workflow_dispatch:
-    inputs:
-      bump:
-        description: Version component for the new release
-        required: true
-        default: patch
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
 
 jobs:
-  release-packages:
+  publish-template:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/statek
     permissions:
-      contents: write
+      contents: read
       id-token: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Prepare new version
-        id: version
-        run: |
-          CURRENT=$(grep -m1 '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-
-          case "${{ inputs.bump }}" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH + 1)) ;;
-          esac
-
-          NEW="$MAJOR.$MINOR.$PATCH"
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" pyproject.toml
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" StatekWebUI/pyproject.toml
-          sed -i "s/\"statek==$CURRENT\"/\"statek==$NEW\"/" StatekWebUI/pyproject.toml
-
-          echo "version=$NEW" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and push
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml StatekWebUI/pyproject.toml
-          git commit -m "ci action: release version ${{ steps.version.outputs.version }}"
-          git push origin HEAD
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install build and publish tools
+      - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install build twine
+          pip install build
 
-      - name: Build packages
+      - name: Build template statek package
         run: |
-          python -m build --sdist --wheel
-          python -m build StatekWebUI --sdist --wheel
+          python -m build StatekTemplate --sdist --wheel
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Publish template statek package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          role-to-assume: arn:aws:iam::874777259004:role/codeartifact-selltime-rw
-          aws-region: eu-central-1
-
-      - name: Login to CodeArtifact
-        run: |
-          aws codeartifact login \
-            --tool twine \
-            --domain "${{ vars.CODEARTIFACT_DOMAIN }}" \
-            --domain-owner "${{ vars.AWS_ACCOUNT_ID }}" \
-            --repository "${{ vars.CODEARTIFACT_REPO }}" \
-            --region eu-central-1
-
-      - name: Publish packages to CodeArtifact
-        run: twine upload --repository codeartifact dist/* StatekWebUI/dist/*
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
-            --title "${{ steps.version.outputs.version }}" \
-            --generate-notes
+          packages-dir: StatekTemplate/dist/
