@@ -2,11 +2,9 @@
 
 # pylint: disable=no-member,protected-access
 
-import ast
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import dbzero as db0
 
@@ -66,13 +64,28 @@ class ContextVar:
     use_count: int = 0
 
 
+def _category_name(category: Any) -> Optional[str]:
+    """Return a normalized category name when one can be resolved."""
+    name = category.name if isinstance(category, ContextCategory) else category
+    return name.upper() if isinstance(name, str) else None
+
+
 @db0.memo
-@dataclass
+@dataclass(init=False)
 class SharedContext:
     """Named shared context variables available to future job integrations."""
 
     __context_vars: Dict[str, ContextVar] = field(default_factory=dict)
     _binding_keys: Tuple[str, ...] = field(default_factory=tuple)
+
+    def __init__(
+        self,
+        prefix=None,
+        _binding_keys: Tuple[str, ...] = (),
+    ):
+        db0.set_prefix(self, prefix)
+        self.__context_vars = {}
+        self._binding_keys = _binding_keys
 
     def set_var(self, category: Any, key: str, value: Any, description: str) -> None:
         """Store or replace a named context variable.
@@ -112,6 +125,34 @@ class SharedContext:
     def _peek_var(self, key: str) -> Optional[ContextVar]:
         """Return a stored context variable without incrementing usage."""
         return self.__context_vars.get(key)
+
+    def _items(self) -> Tuple[Tuple[str, ContextVar], ...]:
+        """Return named variables without changing usage counters."""
+        return tuple(self.__context_vars.items())
+
+    def select(
+        self,
+        category: ContextCategory,
+        filter: Optional[Callable[[ContextVar], bool]] = None,  # pylint: disable=redefined-builtin
+    ) -> Iterable[ContextVar]:
+        """Iterate variables in *category* that satisfy an optional predicate."""
+        for _, var in self._select_items(category, filter):
+            yield var
+
+    def _select_items(
+        self,
+        category: ContextCategory,
+        filter: Optional[Callable[[ContextVar], bool]] = None,  # pylint: disable=redefined-builtin
+    ) -> Iterable[Tuple[str, ContextVar]]:
+        """Iterate named variables selected by category and predicate."""
+        category_name = _category_name(category)
+        for key, var in self.__context_vars.items():
+            if _category_name(var.category) != category_name:
+                continue
+            if filter is not None and not filter(var):
+                continue
+            var.use_count += 1
+            yield key, var
 
     def __contains__(self, key: str) -> bool:
         """Return whether *key* exists in the shared context."""
@@ -168,6 +209,37 @@ class SharedContextProxy:
             context._peek_var(key) is not None  # pylint: disable=protected-access
             for context in self.__contexts()
         )
+
+    def select(
+        self,
+        category: ContextCategory,
+        filter: Optional[Callable[[ContextVar], bool]] = None,  # pylint: disable=redefined-builtin
+    ) -> Iterable[ContextVar]:
+        """Iterate newest resolvable variables in the requested category."""
+        for _, var in self._select_items(category, filter):
+            yield var
+
+    def _select_items(
+        self,
+        category: ContextCategory,
+        filter: Optional[Callable[[ContextVar], bool]] = None,  # pylint: disable=redefined-builtin
+    ) -> Iterable[Tuple[str, ContextVar]]:
+        """Iterate newest named variables selected by category and predicate."""
+        latest_by_key: Dict[str, ContextVar] = {}
+        for context in self.__contexts():
+            for key, var in context._items():
+                latest = latest_by_key.get(key)
+                if latest is None or var.created_at > latest.created_at:
+                    latest_by_key[key] = var
+
+        category_name = _category_name(category)
+        for key, var in latest_by_key.items():
+            if _category_name(var.category) != category_name:
+                continue
+            if filter is not None and not filter(var):
+                continue
+            var.use_count += 1
+            yield key, var
 
 
 def _binding_key(specifier: Any) -> str:
@@ -257,83 +329,101 @@ def shared_context_set_var(
         context.set_var(category, key, value, description)
 
 
-def _referenced_names(code: str) -> Tuple[str, ...]:
-    """Return names loaded, assigned, or deleted by an execution step."""
-    tree = ast.parse(code)
-    return tuple({node.id for node in ast.walk(tree) if isinstance(node, ast.Name)})
+@tool(system=True)
+def print_locals(category: str, *args, **kwargs) -> None:
+    """Print shared-context variables, optionally filtered by value type.
+
+    Args:
+        category: Registered context-category name.
+        args: Optional types; values matching any requested type are included.
+    """
+    del kwargs  # Framework-managed execution context arguments.
+    resolved_category = ContextCategoryDict().get(category)
+    if resolved_category is None:
+        raise ValueError(f"Unknown context category: {category}")
+    if any(not isinstance(value_type, type) for value_type in args):
+        raise TypeError("print_locals positional filters must be types")
+
+    header = f"Locals from the category: {resolved_category.name}"
+    if args:
+        type_names = ", ".join(value_type.__name__ for value_type in args)
+        header += f", type: {type_names}"
+    print(header)
+
+    job = get_current_job()
+    if job is None:
+        return
+    context = job._get_shared_context()
+    if context is None:
+        return
+    predicate = (lambda var: isinstance(var.value, args)) if args else None
+    for name, var in context._select_items(resolved_category, predicate):
+        suffix = f": {var.description}" if var.description else ""
+        print(f"{name}  # {resolved_category.name}{suffix}")
 
 
 def _context_var_has_registered_category(var: ContextVar) -> bool:
     """Return whether *var* belongs to a currently registered category."""
-    category = var.category
-    name = category.name if isinstance(category, ContextCategory) else category
+    name = _category_name(var.category)
     return ContextCategoryDict().get(name) is not None
 
 
-def _changed_from_injected(original: Any, current: Any) -> bool:
-    """Return whether an injected value was reassigned during execution."""
-    if original is current:
-        return False
-    try:
-        return original != current
-    except Exception:  # pylint: disable=broad-except
-        return True
+class ContextFallbackProxy(dict):
+    """Local namespace with lazy shared-context fallback for missing names."""
 
+    _NOT_RESOLVED = object()
 
-@contextmanager
-def _feed_shared_context(
-    code: str,
-    job: Any,
-    local_context: Dict[str, Any],
-    global_context: Optional[Dict[str, Any]] = None,
-):
-    """Temporarily expose referenced shared variables to an execution step."""
-    context = job._get_shared_context()
-    if context is None:
-        yield
-        return
+    def __init__(self, local_context: Dict[str, Any], shared_context=None):
+        super().__init__(local_context)
+        self.__shared_context = shared_context
+        self.__resolved: Dict[str, Optional[ContextVar]] = {}
 
-    injected = {}
-    for name in _referenced_names(code):
-        if name in local_context:
-            continue
-        var = context.get_var(name)
-        if var is not None and _context_var_has_registered_category(var):
-            injected[name] = var.value
-            local_context[name] = var.value
+    def __resolve(self, key: str) -> Optional[ContextVar]:
+        cached = self.__resolved.get(key, self._NOT_RESOLVED)
+        if cached is not self._NOT_RESOLVED:
+            return cached
+        var = None
+        if self.__shared_context is not None:
+            candidate = self.__shared_context.get_var(key)
+            if candidate is not None and _context_var_has_registered_category(candidate):
+                var = candidate
+        self.__resolved[key] = var
+        return var
 
-    missing = object()
-    global_originals = {
-        name: global_context.get(name, missing) for name in injected
-    } if global_context is not None else {}
+    def __missing__(self, key: str) -> Any:
+        var = self.__resolve(key)
+        if var is None:
+            raise KeyError(key)
+        return var.value
 
-    def cleanup() -> None:
-        for name in injected:
-            local_context.pop(name, None)
-        if global_context is not None:
-            for name, original in global_originals.items():
-                if original is missing:
-                    global_context.pop(name, None)
-                else:
-                    global_context[name] = original
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.ensure_writable(key)
+        super().__setitem__(key, value)
 
-    try:
-        yield
-    except BaseException:
-        cleanup()
-        raise
-    changed = [
-        name for name, original in injected.items()
-        if name not in local_context
-        or _changed_from_injected(original, local_context[name])
-    ]
-    cleanup()
-    if changed:
-        names = ", ".join(sorted(changed))
-        raise PermissionError(
-            f"Shared context variable(s) are read-only: {names}. "
-            "Use shared_context_set_var to update shared context."
-        )
+    def update(self, *args, **kwargs) -> None:
+        """Add locals after validating every key against shared context."""
+        incoming = dict(*args, **kwargs)
+        for key in incoming:
+            self.ensure_writable(key)
+        super().update(incoming)
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        """Set a default only when it cannot shadow a shared variable."""
+        if key not in self:
+            self.ensure_writable(key)
+        return super().setdefault(key, default)
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+    def ensure_writable(self, key: str) -> None:
+        """Raise when *key* resolves to a protected shared variable."""
+        if key not in self and self.__resolve(key) is not None:
+            raise PermissionError(
+                f"Shared context variable is read-only: {key}. "
+                "Use shared_context_set_var to update shared context."
+            )
 
 
 __all__ = [
@@ -341,7 +431,9 @@ __all__ = [
     "ContextCategoryDict",
     "ContextVar",
     "SharedContext",
+    "ContextFallbackProxy",
     "SharedContextProxy",
     "init_shared_context",
+    "print_locals",
     "shared_context_set_var",
 ]

@@ -12,9 +12,10 @@ from statek.shared_context import (
     ContextCategoryDict,
     ContextVar,
     SharedContext,
+    ContextFallbackProxy,
     SharedContextProxy,
-    _feed_shared_context,
     init_shared_context,
+    print_locals,
     shared_context_set_var,
 )
 from statek.utils import _statek_ctx_scope
@@ -88,6 +89,61 @@ def test_set_var_ignores_unknown_category():
 
     assert "key" not in context
     assert context.get_var("key") is None
+
+
+def test_shared_context_accepts_prefix():
+    """Shared contexts can be persisted in an explicitly selected prefix."""
+    context = SharedContext(prefix="context-prefix")
+
+    assert db0.get_prefix_of(context).name == "context-prefix"
+
+    positional = SharedContext("positional-context-prefix")
+    assert db0.get_prefix_of(positional).name == "positional-context-prefix"
+
+
+def test_shared_context_selects_variables_by_category():
+    """Select returns only variables belonging to the requested category."""
+    context = SharedContext()
+    context.set_var("preference", "tone", "concise", "Preferred tone")
+    context.set_var("entity", "client", "Acme", "Current client")
+    category = ContextCategoryDict().get("PREFERENCE")
+
+    selected = list(context.select(category))
+
+    assert [var.value for var in selected] == ["concise"]
+    assert selected[0].use_count == 1
+
+
+def test_shared_context_select_applies_optional_filter():
+    """Select applies a ContextVar predicate after category matching."""
+    context = SharedContext()
+    context.set_var("preference", "tone", "concise", "Preferred tone")
+    context.set_var("preference", "language", "Polish", "Preferred language")
+    category = ContextCategoryDict().get("PREFERENCE")
+
+    selected = list(context.select(category, filter=lambda var: var.value == "Polish"))
+
+    assert [var.value for var in selected] == ["Polish"]
+    assert context._peek_var("tone").use_count == 0
+
+
+def test_shared_context_proxy_select_resolves_latest_duplicate_key():
+    """Proxy selection returns one newest resolvable variable per key."""
+    older_time = datetime.now(timezone.utc)
+    newer_time = older_time + timedelta(seconds=1)
+    writable = SharedContext()
+    readable = SharedContext()
+    older = _store_var_at(writable, "tone", "concise", older_time)
+    newer = _store_var_at(readable, "tone", "detailed", newer_time)
+    writable.set_var("preference", "language", "Polish", "Preferred language")
+    proxy = SharedContextProxy(writable=writable, readables=readable)
+    category = ContextCategoryDict().get("PREFERENCE")
+
+    selected = list(proxy.select(category))
+
+    assert {var.value for var in selected} == {"detailed", "Polish"}
+    assert newer.use_count == 1
+    assert older.use_count == 0
 
 
 def test_init_shared_context_is_hidden_system_tool():
@@ -186,6 +242,47 @@ def test_shared_context_set_var_is_visible_system_tool():
     assert shared_context_set_var.tool_hidden is False
 
 
+def test_print_locals_is_visible_system_tool():
+    """Agents can discover the shared-context inspection tool."""
+    assert print_locals.tool_system is True
+    assert print_locals.tool_hidden is False
+
+
+def test_print_locals_prints_shared_context_variables(job_factory, capsys):
+    """The tool prints matching variables from the job's shared context."""
+    job = job_factory()
+    preference = ContextCategoryDict().get("PREFERENCE")
+    entity = ContextCategoryDict().get("ENTITY")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(
+            preference, "colors", "blue", "preferred calendar palette"
+        )
+        shared_context_set_var(entity, "client", "Acme", "current client")
+        print_locals("PREFERENCE")
+
+    assert capsys.readouterr().out == (
+        "Locals from the category: PREFERENCE\n"
+        "colors  # PREFERENCE: preferred calendar palette\n"
+    )
+
+
+def test_print_locals_filters_shared_values_by_any_type(job_factory, capsys):
+    """Positional type filters use any-of matching on shared values."""
+    job = job_factory()
+    entity = ContextCategoryDict().get("ENTITY")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(entity, "count", 42, "numeric entity")
+        shared_context_set_var(entity, "client", "Acme", "named entity")
+        print_locals("ENTITY", int)
+
+    assert capsys.readouterr().out == (
+        "Locals from the category: ENTITY, type: int\n"
+        "count  # ENTITY: numeric entity\n"
+    )
+
+
 def test_shared_context_set_var_forwards_to_current_job_context(job_factory):
     """The utility stores a variable in the initialized active context."""
     job = job_factory()
@@ -219,21 +316,20 @@ def test_shared_context_set_var_without_initialized_context_is_noop(job_factory)
         ) is None
 
 
-def test_feed_shared_context_injects_referenced_variable_temporarily(job_factory):
-    """Referenced shared values are available only for the execution scope."""
+def test_shared_context_local_context_resolves_missing_variable(job_factory):
+    """Missing local names resolve lazily without becoming local entries."""
     job = job_factory()
     category = ContextCategoryDict().get("PREFERENCE")
     with _statek_ctx_scope({"job": job}):
         init_shared_context("user")
         shared_context_set_var(category, "tone", "concise", "Preferred tone")
 
-    local_context = {}
-    with _feed_shared_context("print(tone)", job, local_context):
-        assert local_context["tone"] == "concise"
+    local_context = ContextFallbackProxy({}, job._get_shared_context())
+    assert local_context["tone"] == "concise"
     assert "tone" not in local_context
 
 
-def test_feed_shared_context_prefers_true_local_variable(job_factory):
+def test_shared_context_local_context_prefers_true_local_variable(job_factory):
     """An existing local shadows a shared variable and remains writable."""
     job = job_factory()
     category = ContextCategoryDict().get("PREFERENCE")
@@ -241,28 +337,50 @@ def test_feed_shared_context_prefers_true_local_variable(job_factory):
         init_shared_context("user")
         shared_context_set_var(category, "tone", "concise", "Preferred tone")
 
-    local_context = {"tone": "local"}
-    with _feed_shared_context("tone = 'changed'", job, local_context):
-        local_context["tone"] = "changed"
+    local_context = ContextFallbackProxy(
+        {"tone": "local"}, job._get_shared_context()
+    )
+    local_context["tone"] = "changed"
     assert local_context["tone"] == "changed"
 
 
-def test_feed_shared_context_rejects_write_to_injected_variable(job_factory):
-    """Writing a resolved shared variable raises and removes the injected value."""
+def test_shared_context_local_context_rejects_shared_variable_write(job_factory):
+    """Writing a fallback-resolved shared variable raises PermissionError."""
     job = job_factory()
     category = ContextCategoryDict().get("PREFERENCE")
     with _statek_ctx_scope({"job": job}):
         init_shared_context("user")
         shared_context_set_var(category, "tone", "concise", "Preferred tone")
 
-    local_context = {}
+    local_context = ContextFallbackProxy({}, job._get_shared_context())
     with pytest.raises(PermissionError, match="tone"):
-        with _feed_shared_context("tone = 'detailed'", job, local_context):
-            local_context["tone"] = "detailed"
+        local_context["tone"] = "detailed"
     assert "tone" not in local_context
 
 
-def test_feed_shared_context_ignores_variable_with_removed_category(job_factory):
+@pytest.mark.parametrize("operation", ["update", "setdefault", "ior"])
+def test_shared_context_local_context_blocks_all_add_paths(job_factory, operation):
+    """Dict mutation helpers cannot bypass shared-name collision protection."""
+    job = job_factory()
+    category = ContextCategoryDict().get("PREFERENCE")
+    with _statek_ctx_scope({"job": job}):
+        init_shared_context("user")
+        shared_context_set_var(category, "tone", "concise", "Preferred tone")
+
+    local_context = ContextFallbackProxy({}, job._get_shared_context())
+    with pytest.raises(PermissionError, match="tone"):
+        if operation == "update":
+            local_context.update({"safe": 1, "tone": "detailed"})
+        elif operation == "setdefault":
+            local_context.setdefault("tone", "detailed")
+        else:
+            local_context |= {"tone": "detailed"}
+
+    assert "tone" not in local_context
+    assert "safe" not in local_context
+
+
+def test_shared_context_local_context_ignores_removed_category(job_factory):
     """Only variables whose category remains registered are recognized."""
     job = job_factory()
     categories = ContextCategoryDict()
@@ -272,9 +390,9 @@ def test_feed_shared_context_ignores_variable_with_removed_category(job_factory)
         shared_context_set_var(category, "tone", "concise", "Preferred tone")
     del categories.categories["PREFERENCE"]
 
-    local_context = {}
-    with _feed_shared_context("tone", job, local_context):
-        assert "tone" not in local_context
+    local_context = ContextFallbackProxy({}, job._get_shared_context())
+    with pytest.raises(KeyError, match="tone"):
+        _ = local_context["tone"]
 
 
 def test_context_var_defaults_created_at_and_use_count():
