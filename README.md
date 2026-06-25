@@ -12,6 +12,12 @@ cd statek
 pip install -e .
 ```
 
+## License
+
+Statek is licensed under the Apache License, Version 2.0. See `LICENSE` for
+the full license text and `THIRD_PARTY_NOTICES.md` for third-party dependency
+attributions.
+
 ## Development
 
 ### Setup Development Environment
