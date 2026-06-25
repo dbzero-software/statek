@@ -12,7 +12,6 @@ except ImportError as exc:
 
 from .settings import LLM_API_Settings, StatekSettings, get_statek_settings
 from .multi_source_settings import (
-    AwsSecretsManagerSource,
     MultiSourceBaseSettings,
     SettingValuesSource,
 )
@@ -57,7 +56,6 @@ __all__ = [
     "init",
     "LLM_API_Settings",
     "StatekSettings",
-    "AwsSecretsManagerSource",
     "MultiSourceBaseSettings",
     "SettingValuesSource",
     "PromptDef",

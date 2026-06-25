@@ -24,7 +24,6 @@ classifiers = [
 ]
 dependencies = [
     "dbzero-modelkit>=0.1.0",
-    "boto3==1.42.71",
     "pydantic==2.12.5",
     "pydantic-settings==2.12.0",
     "httpx==0.28.1",

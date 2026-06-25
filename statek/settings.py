@@ -8,25 +8,10 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from statek.chat_style import ChatStyle  # noqa: F401  # re-exported for backward compatibility
 from statek.multi_source_settings import (
-    AwsSecretsManagerSource,
     MultiSourceBaseSettings,
-    SettingValuesSource,
 )
 from statek.prompt_config import PromptDef, load_prompt_files
 from statek.docstring import ACL_Item, Statek_ACL
-
-AWS_SECRETS_MANAGER_SETTINGS_SECRET_ID = "AWS_SECRETS_MANAGER_SETTINGS_SECRET_ID"
-
-
-def get_settings_sources() -> list[SettingValuesSource]:
-    """
-    Build settings sources enabled for this process.
-    """
-    secret_id = os.getenv(AWS_SECRETS_MANAGER_SETTINGS_SECRET_ID)
-    if not secret_id:
-        return []
-
-    return [AwsSecretsManagerSource(secret_id)]
 
 
 class LLM_API_Settings(BaseSettings):
@@ -289,13 +274,13 @@ class StatekSettings(MultiSourceBaseSettings):
 @lru_cache()
 def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Settings]:
     """Get LLM_API_Settings for a specific provider or the default provider."""
-    settings = StatekSettings(sources=get_settings_sources())
+    settings = StatekSettings()
     return settings.get_provider_settings(provider)
 
 @lru_cache()
 def get_statek_settings() -> StatekSettings:
     """Get the cached StatekSettings instance."""
-    return StatekSettings(sources=get_settings_sources())
+    return StatekSettings()
 
 
 def get_prompt_def(name: str) -> Optional[PromptDef]:
