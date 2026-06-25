@@ -1,14 +1,23 @@
+# Copyright 2026 Statek authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Multi-source Pydantic settings support."""
 
-import json
-import logging
 from abc import ABC, abstractmethod
 from typing import Any, Iterable
 
-from botocore.exceptions import BotoCoreError, ClientError
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-log = logging.getLogger(__name__)
 
 
 class SettingValuesSource(ABC):
@@ -31,79 +40,6 @@ class SettingValuesSource(ABC):
         Return value for a field, or None when value is not available.
         """
         raise NotImplementedError
-
-
-class AwsSecretsManagerSource(SettingValuesSource):
-    """
-    Configuration source that loads JSON settings from AWS Secrets Manager.
-    """
-
-    def __init__(
-        self,
-        secret_id: str,
-        source_fields: Iterable[str] | None = None,
-        *,
-        client: Any | None = None,
-    ) -> None:
-        super().__init__(source_fields=source_fields)
-        self.secret_id = secret_id
-        self._client = client
-        self._values: dict[str, Any] | None = None
-
-    def _get_client(self):
-        if self._client is None:
-            import boto3  # pylint: disable=import-outside-toplevel
-
-            self._client = boto3.client("secretsmanager")
-
-        return self._client
-
-    def _load_values(self) -> dict[str, Any]:
-        if self._values is not None:
-            return self._values
-
-        self._values = {}
-
-        try:
-            response = self._get_client().get_secret_value(SecretId=self.secret_id)
-        except (BotoCoreError, ClientError) as error:
-            log.error("Failed to load AWS Secrets Manager secret %s: %s", self.secret_id, error)
-            return self._values
-
-        secret_string = response.get("SecretString")
-        if not secret_string:
-            log.error("AWS Secrets Manager secret %s does not contain SecretString", self.secret_id)
-            return self._values
-
-        try:
-            values = json.loads(secret_string)
-        except json.JSONDecodeError as error:
-            log.error("AWS Secrets Manager secret %s is not valid JSON: %s", self.secret_id, error)
-            return self._values
-
-        if not isinstance(values, dict):
-            log.error("AWS Secrets Manager secret %s JSON must be an object", self.secret_id)
-            return self._values
-
-        if self.source_fields is None:
-            self._values = values
-        else:
-            self._values = {
-                field_name: values[field_name]
-                for field_name in self.source_fields
-                if field_name in values
-            }
-
-        return self._values
-
-    def get_value(self, field_name: str) -> Any | None:
-        """
-        Load a field value from AWS Secrets Manager.
-        """
-        if not self._should_check_field(field_name):
-            return None
-
-        return self._load_values().get(field_name)
 
 
 class MultiSourceBaseSettings(BaseSettings):

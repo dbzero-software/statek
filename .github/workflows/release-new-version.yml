@@ -40,8 +40,6 @@ jobs:
 
           NEW="$MAJOR.$MINOR.$PATCH"
           sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" pyproject.toml
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" StatekWebUI/pyproject.toml
-          sed -i "s/\"statek==$CURRENT\"/\"statek==$NEW\"/" StatekWebUI/pyproject.toml
 
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
 
@@ -49,7 +47,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml StatekWebUI/pyproject.toml
+          git add pyproject.toml
           git commit -m "ci action: release version ${{ steps.version.outputs.version }}"
           git push origin HEAD
 
@@ -66,7 +64,6 @@ jobs:
       - name: Build packages
         run: |
           python -m build --sdist --wheel
-          python -m build StatekWebUI --sdist --wheel
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -83,8 +80,8 @@ jobs:
             --repository "${{ vars.CODEARTIFACT_REPO }}" \
             --region eu-central-1
 
-      - name: Publish packages to CodeArtifact
-        run: twine upload --repository codeartifact dist/* StatekWebUI/dist/*
+      - name: Publish package to CodeArtifact
+        run: twine upload --repository codeartifact dist/*
 
       - name: Create GitHub release
         env:
