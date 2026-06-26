@@ -37,7 +37,7 @@ from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
-from statek.settings import get_statek_settings, get_statek_logger, statek_log, ChatStyle
+from statek.settings import get_statek_settings, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.utils import (
     CodeBlock,
@@ -55,7 +55,6 @@ from statek.utils import (
 if TYPE_CHECKING:
     from statek.agents.agent import Agent
 
-STATEK_LOGGER = get_statek_logger()
 MARKDOWN_MEDIA_LINK_PATTERN = re.compile(r'!?\[[^\]]*\]\([^\s)]+(?:\s+"[^"]*")?\)')
 
 
@@ -494,7 +493,6 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
         Console outputs (print results) are appended to _X_console
         local_state might be updated by the program
     """
-    statek_log(f"Executing code step (instr_num={instr_num}):\n{code_str}", level='debug')
     if job.py_env.global_state is None:
         global_context = globals()
     else:
@@ -677,13 +675,6 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         *error_message* is ``None`` on success or the formatted exception
         string on failure.
     """
-    STATEK_LOGGER.debug(
-        "exec_tool: %s args=%r kwargs=%r",
-        call_spec.func_name,
-        list(call_spec.args) if call_spec.args else [],
-        dict(call_spec.kwargs) if call_spec.kwargs else {},
-    )
-
     private_console = []
 
     def _private_print(*args, sep=' ', end='\n', **kwargs):
@@ -730,11 +721,6 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         try:
             args = list(call_spec.args) if call_spec.args else []
             kwargs = dict(call_spec.kwargs) if call_spec.kwargs else {}
-            if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
-                call_repr = ", ".join(
-                    [repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()]
-                )
-                STATEK_LOGGER.debug("exec_tool calling: %s(%s)", call_spec.func_name, call_repr)
             result = func(*args, **kwargs)
             if asyncio.iscoroutine(result):
                 result = await result
@@ -1213,8 +1199,6 @@ def unsuspend_jobs():
     """
     # Find all suspended jobs
     suspended_jobs = db0.find(Job, JobStatus.SUSPENDED)
-    if len(suspended_jobs) != 0:
-        statek_log(f"Found {len(suspended_jobs)} suspended jobs", level='debug')
     for job in suspended_jobs:
         # Check if the job has an awaited_result and if its condition is satisfied
         condition_met = job.awaited_result.check_condition()
@@ -1246,14 +1230,14 @@ async def job_worker(semaphore, job: Job, provider: str = None):
             try:
                 # Log which agent is running this job
                 agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
-                statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}", level='debug')
+                statek_log(f"Agent '{agent_name}' running job {db0.uuid(job)}", level='info')
                 await run_job_step(job, provider)
                 # Log cost after each LLM request
                 statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
-                           f"cost: ${job.usage.total_cost or 0.0:.4f}")
+                           f"cost: ${job.usage.total_cost or 0.0:.4f}", level='info')
             except LLM_HarnessError as e:
                 error_msg = f"LLM_HarnessError: {e}"
-                statek_log(error_msg, level='debug')
+                statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"
                 job.console_append(error_msg, error_message=error_msg)
                 job.set_status(JobStatus.DONE)
@@ -1262,7 +1246,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 # If job fails, write full stack trace to console and set status to DONE
                 import traceback
                 error_msg = f"Job {db0.uuid(job)} failed with error: {e}\n{traceback.format_exc()}"
-                statek_log(error_msg, level='debug')
+                statek_log(error_msg, level='error')
                 job.console_append(error_msg, error_message=error_msg)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)
@@ -1335,7 +1319,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
                 await asyncio.sleep(0.5)
                 active_jobs = list(db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED, JobStatus.SUSPENDED]))
                 if not active_jobs and not pending_tasks:
-                    statek_log("Auto-terminate: all jobs completed, exiting loop", level='debug')
+                    statek_log("Auto-terminate: all jobs completed, exiting loop", level='info')
                     break
     return
 
@@ -1406,12 +1390,14 @@ def _make_start_jobs_func(agent, job_def, task_queue_size_func, provider):
         if jobs_to_create <= 0:
             return
 
-        statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='debug')
-        import logging
-        print(f"Creating {jobs_to_create} new jobs for agent {agent.role}")
+        statek_log(f"Creating {jobs_to_create} new jobs for agent {agent.role}", level='info')
         try:
             for i in range(jobs_to_create):
-                print(f"Creating job {i+1}/{jobs_to_create} for agent {agent.role} with model {job_def.model}", flush=True)
+                statek_log(
+                    f"Creating job {i+1}/{jobs_to_create} for agent {agent.role} "
+                    f"with model {job_def.model}",
+                    level='info',
+                )
                 Job(
                     job_def=job_def,
                     job_status=JobStatus.READY,
@@ -1419,9 +1405,7 @@ def _make_start_jobs_func(agent, job_def, task_queue_size_func, provider):
                 )
         except Exception as e:
             # If job creation fails, set the error on the job definition to trigger the circuit breaker
-            import logging
-            print(f"Error creating jobs for agent '{agent.role}': {e}")
-            statek_log(f"Error creating jobs for agent '{agent.role}': {e}", level='debug')
+            statek_log(f"Error creating jobs for agent '{agent.role}': {e}", level='error')
             raise
 
     return start_jobs_func
@@ -1502,7 +1486,7 @@ async def run_agentic_loop(agent: 'Agent',
             return len(db0.find(Message, MessageStatus.PENDING))
         ```
     """
-    statek_log("Starting agentic loop...", level='debug')
+    statek_log("Starting agentic loop...", level='info')
 
     # Reuse an existing matching job definition or create a new one
     model_family, model_to_use = _resolve_job_def_model(agent, provider)
@@ -1554,7 +1538,7 @@ async def run_agentic_fleet(
         auto_terminate: flag indicating if the loop should be terminated once all jobs
                         have been completed; this flag is most useful for testing
     """
-    statek_log("Starting agentic fleet...", level='debug')
+    statek_log("Starting agentic fleet...", level='info')
 
     start_jobs_funcs = []
     for loop_def in agent_loop_defs:

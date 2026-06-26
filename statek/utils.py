@@ -15,8 +15,6 @@
 """Utility functions for statek package."""  # pylint: disable=too-many-lines
 
 import ast
-import difflib
-import logging
 import re
 import inspect
 import sys
@@ -45,8 +43,6 @@ from typing import (
     get_type_hints,
 )
 import dbzero as db0
-
-logger = logging.getLogger(__name__)
 
 _STATEK_CTX_VAR: _PyContextVar[Optional[Dict[str, Any]]] = _PyContextVar(
     "statek_ctx",
@@ -1149,19 +1145,6 @@ def _yield_matching_local(value, var_type, var_name, future_type):
         yield value
 
 
-def _log_find_locals_miss(var_name: str, local_context: Dict[str, Any]) -> None:
-    """Log available local names when debug logging is enabled."""
-    available = list(local_context.keys())
-    close = difflib.get_close_matches(var_name, available, n=3, cutoff=0.5)
-    logger.debug(
-        "find_locals: variable %r not found. "
-        "Available: %s. Closest matches: %s",
-        var_name,
-        available,
-        close if close else "(none)",
-    )
-
-
 def _find_locals_in_context(
     local_context: Optional[Dict[str, Any]],
     var_type: Optional[Type] = None,
@@ -1202,9 +1185,6 @@ def _find_locals_in_context(
             if yielded:
                 found = True
                 yield from yielded
-
-    if var_name is not None and not found and logger.isEnabledFor(logging.DEBUG):
-        _log_find_locals_miss(var_name, aggregated_locals)
 
 
 def find_locals(var_type: Optional[Type] = None,

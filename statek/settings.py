@@ -85,8 +85,8 @@ class StatekSettings(MultiSourceBaseSettings):
     xml_box_console: Optional[str] = None
     """The boxing XML tag for code examples"""
     xml_box_example: Optional[str] = None
-    """Log level for statek logger (DEBUG, INFO, WARNING, ERROR, CRITICAL)"""
-    log_level: str = "WARNING"
+    """Log level for statek logger (INFO, WARNING, ERROR, CRITICAL)"""
+    log_level: str = "ERROR"
     """The default ACL mode string: GRANT or DENY (loaded from STATEK_DEFAULT_ACL)"""
     default_acl_str: str = "DENY"
     """Host for the STATEK RPC server"""
@@ -310,16 +310,22 @@ def get_prompt_def(name: str) -> Optional[PromptDef]:
     return settings.get_prompt_def(name)
 
 
-def set_log_level(log_level: str = "WARNING") -> None:
+def set_log_level(log_level: str = "ERROR") -> None:
     """Set the log level for STATEK routines.
 
     Enables or disables logs from run_agentic_loop and other STATEK routines.
 
     Args:
-        log_level: One of NOTSET, DEBUG, INFO, WARNING, ERROR or CRITICAL.
-                   Defaults to WARNING.
+        log_level: One of INFO, WARNING, ERROR or CRITICAL.
+                   Defaults to ERROR.
     """
-    numeric_level = getattr(logging, log_level.upper(), logging.WARNING)
+    supported_levels = {
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    numeric_level = supported_levels.get(log_level.upper(), logging.ERROR)
 
     logger = logging.getLogger('statek')
     logger.setLevel(numeric_level)
@@ -355,7 +361,7 @@ def statek_log(message: str, level: str = 'info') -> None:
 
     Args:
         message: The message to log
-        level: The log level (info, debug, warning, error, critical). Defaults to 'info'.
+        level: The log level (info, warning, error, critical). Defaults to 'info'.
     """
     logger = get_statek_logger()
     log_func = getattr(logger, level.lower(), logger.info)

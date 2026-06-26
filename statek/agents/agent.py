@@ -33,10 +33,7 @@ from statek.prompt_config import (
     format_system_prompt,
     make_system_prompt,
 )
-from statek.settings import get_statek_logger
 from statek.task_difficulty import TaskDifficulty
-
-STATEK_LOGGER = get_statek_logger()
 
 
 @tool(system=True)
@@ -52,7 +49,6 @@ def list_of_examples(start_index: int = 0, limit: int = 10, **kwargs):  # pylint
     from statek.agents.list_of_examples import list_of_examples as _impl  # pylint: disable=import-outside-toplevel
     agent = get_current_agent()
     agent_name = agent.role if agent else None
-    STATEK_LOGGER.debug("list_of_examples invoked for agent: %s", agent_name)
     _impl(agent_name, start_index, limit)
 
 
@@ -73,7 +69,6 @@ def list_of_documents(topic=None, start_index: int = 0, limit: int = 25, **kwarg
     agent = get_current_agent()
     agent_name = agent.role if agent else None
     documents_dir = get_statek_settings().documents_dir
-    STATEK_LOGGER.debug("list_of_documents invoked for agent: %s", agent_name)
     _impl(agent_name, documents_dir, topic=topic, start_index=start_index, limit=limit)
 
 
@@ -94,7 +89,6 @@ def show_document(key, topic=None, start_from: int = 0, limit: int = 50, **kwarg
     agent = get_current_agent()
     agent_name = agent.role if agent else None
     documents_dir = get_statek_settings().documents_dir
-    STATEK_LOGGER.debug("show_document invoked for agent: %s", agent_name)
     _impl(agent_name, documents_dir, key=key, topic=topic, start_from=start_from, limit=limit)
 
 
@@ -177,7 +171,6 @@ class Agent:
         if self._system_prompt is not None and compare_prompts(self._system_prompt, new_prompt):
             return False
         self._system_prompt = make_system_prompt(new_prompt)
-        STATEK_LOGGER.debug("Agent '%s' system prompt updated", self.role)
         return True
 
     def update_metadata(self, new_metadata: Dict[str, str]) -> bool:
@@ -192,7 +185,6 @@ class Agent:
         if self._metadata == new_metadata:
             return False
         self._metadata = dict(new_metadata)
-        STATEK_LOGGER.debug("Agent '%s' metadata updated: %s", self.role, self._metadata)
         return True
 
     @property
@@ -212,7 +204,6 @@ class Agent:
         if self._description == new_description:
             return False
         self._description = new_description
-        STATEK_LOGGER.debug("Agent '%s' description updated", self.role)
         return True
 
     def _expand_tool_placeholders(self, text: str) -> Optional[str]:
@@ -483,7 +474,6 @@ class SupervisedAgent(Agent):
         if new_value is None:
             self.warmup_def = None
             self._X__ref_locals = None
-            STATEK_LOGGER.debug("Agent '%s' warmup_def cleared", self.role)
             return True
         if self.warmup_def is not None:
             current_metadata = getattr(self.warmup_def, "metadata", None)
@@ -491,7 +481,6 @@ class SupervisedAgent(Agent):
                 return False
         self.warmup_def = WarmupDef(warmup_code=new_value, metadata=new_metadata)
         self._X__ref_locals = None
-        STATEK_LOGGER.debug("Agent '%s' warmup_def updated", self.role)
         return True
 
     def create_job_def(

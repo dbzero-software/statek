@@ -22,15 +22,12 @@ documents directory. The base directory is read from StatekSettings.documents_di
 
 # pylint: disable=unused-argument
 
-import logging
 from typing import Optional, Union
 
 from statek.document import load_documents, find_topic, find_document
 from statek.settings import get_statek_settings
 from statek.system import tool
 from statek.utils import perm_ctx_set, perm_ctx_get
-
-log = logging.getLogger('statek')
 
 
 def _get_documents_dir() -> Optional[str]:
