@@ -2,7 +2,7 @@
 # Add your runtime dependencies here
 
 # app dependencies
-dbzero-modelkit>=0.1.0
+dbzero-modelkit>=1.2.0
 pydantic==2.12.5
 pydantic-settings==2.12.0
 httpx==0.28.1

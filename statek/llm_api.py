@@ -23,15 +23,12 @@ from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, An
 import json
 import httpx
 
-from .settings import LLM_API_Settings, get_provider_settings, get_statek_logger
+from .settings import LLM_API_Settings, get_provider_settings
 from .exceptions import InvalidFormat
 from .chat_history import (
     ChatHistoryItem, ChatRole, format_chat_history_item,
 )
 from .llm_tools_scope import LLM_ToolsScope, parse_llm_tools_scope
-
-STATEK_LOGGER = get_statek_logger()
-
 
 def _func_name_from_tool_calls(tool_calls) -> str:
     """Return the function name from a single CallSpec or the first item of a list."""
@@ -468,13 +465,6 @@ class LLM_API(ABC):
         Returns:
             LLM_Response containing the response text, stats, and call requests.
         """
-        STATEK_LOGGER.debug("%s metadata: %s", self.__class__.__name__, metadata)
-        STATEK_LOGGER.debug(
-            "%s available_tools: %s",
-            self.__class__.__name__,
-            [t.__name__ for t in available_tools] if available_tools else None
-        )
-
         request_kwargs = self._prepare_request_kwargs(
             system_prompt=system_prompt,
             model=model,
@@ -487,13 +477,6 @@ class LLM_API(ABC):
         )
 
         response = await self._process_request(**request_kwargs)
-        STATEK_LOGGER.debug("%s response: %s", self.__class__.__name__, response.text)
-        if response.call_requests:
-            STATEK_LOGGER.debug(
-                "%s call_requests: %s",
-                self.__class__.__name__,
-                [cp.name for cp in response.call_requests]
-            )
         return response
 
     @abstractmethod
@@ -724,8 +707,6 @@ class OpenRouter_API(LLM_API):
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
         total_bytes_sent = len(payload_bytes)
-        if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
-            STATEK_LOGGER.debug("OpenRouter payload: %s", json.dumps(payload, indent=2))
 
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -741,7 +722,6 @@ class OpenRouter_API(LLM_API):
 
             # Parse the response
             data = response.json()
-            STATEK_LOGGER.debug("OpenRouter response: %s", json.dumps(data))
 
             # Extract the response text
             # OpenRouter follows OpenAI's response format
@@ -994,8 +974,6 @@ class VertexAI_API(LLM_API):
 
         payload_bytes = json.dumps(payload).encode('utf-8')
         total_bytes_sent = len(payload_bytes)
-        if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
-            STATEK_LOGGER.debug("VertexAI payload: %s", json.dumps(payload, indent=2))
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -1006,7 +984,6 @@ class VertexAI_API(LLM_API):
             response.raise_for_status()
             total_bytes_received = len(response.content)
             data = response.json()
-            STATEK_LOGGER.debug("VertexAI response: %s", json.dumps(data))
 
             response_text, call_requests = self._parse_response(data)
             if self.response_format and response_text:
@@ -1307,8 +1284,6 @@ class ClaudeAI_API(LLM_API):
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
         total_bytes_sent = len(payload_bytes)
-        if STATEK_LOGGER.isEnabledFor(10):  # logging.DEBUG
-            STATEK_LOGGER.debug("Claude payload: %s", json.dumps(payload, indent=2))
 
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -1324,7 +1299,6 @@ class ClaudeAI_API(LLM_API):
 
             # Parse the response
             data = response.json()
-            STATEK_LOGGER.debug("Claude response: %s", json.dumps(data))
 
             # Extract text and tool_use blocks from Claude's content array
             content_blocks = data.get("content", [])

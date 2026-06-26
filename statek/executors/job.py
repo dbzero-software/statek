@@ -67,7 +67,7 @@ from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.model_pricing import get_model_pricing
-from statek.settings import get_statek_settings, ChatStyle, statek_log
+from statek.settings import get_statek_settings, ChatStyle
 from statek.task_difficulty import (
     TaskDifficulty,
     max_task_difficulty,
@@ -419,7 +419,6 @@ class JobDef:
         """
         new_value = parse_warmup_code(warmup_code)
         if new_value != self.warmup_code:
-            statek_log(f"updating warmup code: {new_value!r}", level='debug')
             self.warmup_code = new_value
 
     def set_chat_style(self, chat_style: Optional[ChatStyle]) -> None:

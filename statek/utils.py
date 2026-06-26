@@ -15,8 +15,6 @@
 """Utility functions for statek package."""  # pylint: disable=too-many-lines
 
 import ast
-import difflib
-import logging
 import re
 import inspect
 import sys
@@ -45,8 +43,6 @@ from typing import (
     get_type_hints,
 )
 import dbzero as db0
-
-logger = logging.getLogger(__name__)
 
 _STATEK_CTX_VAR: _PyContextVar[Optional[Dict[str, Any]]] = _PyContextVar(
     "statek_ctx",
@@ -1149,19 +1145,6 @@ def _yield_matching_local(value, var_type, var_name, future_type):
         yield value
 
 
-def _log_find_locals_miss(var_name: str, local_context: Dict[str, Any]) -> None:
-    """Log available local names when debug logging is enabled."""
-    available = list(local_context.keys())
-    close = difflib.get_close_matches(var_name, available, n=3, cutoff=0.5)
-    logger.debug(
-        "find_locals: variable %r not found. "
-        "Available: %s. Closest matches: %s",
-        var_name,
-        available,
-        close if close else "(none)",
-    )
-
-
 def _find_locals_in_context(
     local_context: Optional[Dict[str, Any]],
     var_type: Optional[Type] = None,
@@ -1178,7 +1161,6 @@ def _find_locals_in_context(
         if perm_ctx:
             aggregated_locals = {**perm_ctx, **aggregated_locals}
 
-    found = False
     name_found = False
     for name, value in aggregated_locals.items():
         if var_type is None and var_name is None:
@@ -1191,7 +1173,6 @@ def _find_locals_in_context(
         name_found = True
         yielded = list(_yield_matching_local(value, var_type, var_name, FutureResult))
         if yielded:
-            found = True
             yield from yielded
 
     if ext_scan and var_name is not None and not name_found and perm_ctx_getter is not None:
@@ -1200,11 +1181,7 @@ def _find_locals_in_context(
             value = perm_ctx_dict[var_name]
             yielded = list(_yield_matching_local(value, var_type, var_name, FutureResult))
             if yielded:
-                found = True
                 yield from yielded
-
-    if var_name is not None and not found and logger.isEnabledFor(logging.DEBUG):
-        _log_find_locals_miss(var_name, aggregated_locals)
 
 
 def find_locals(var_type: Optional[Type] = None,
