@@ -9,7 +9,8 @@ import pytest
 from statek.llm_api import (
     LLM_API, LLM_Response, LLM_Stats, DefaultLLM_API_Impl,
     OPENAI_COMPATIBLE_API_PROVIDERS, OpenRouter_API, OpenAI_API, VertexAI_API,
-    ClaudeAI_API, Claude_API, CallParams, extract_call_params,
+    ClaudeAI_API, Claude_API, CallParams, extract_call_params, add_provider,
+    _CUSTOM_LLM_API_PROVIDERS,
 )
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.exceptions import InvalidFormat
@@ -65,9 +66,11 @@ class TestLLMAPIGetFactory:
 
     def setup_method(self):
         LLM_API.get.cache_clear()
+        _CUSTOM_LLM_API_PROVIDERS.clear()
 
     def teardown_method(self):
         LLM_API.get.cache_clear()
+        _CUSTOM_LLM_API_PROVIDERS.clear()
 
     def test_get_openai_provider(self):
         settings = LLM_API_Settings(
@@ -146,6 +149,148 @@ class TestLLMAPIGetFactory:
             second = LLM_API.get(provider_name="OPENAI", timeout=30)
 
         assert first is second
+
+    def test_add_provider_registers_default_provider_case_insensitively(self):
+        add_provider(
+            "selltime",
+            api_url="https://selltime.ai/llm_api",
+            api_key="key",
+            vendor_option=True,
+        )
+
+        lower = LLM_API.get(provider_name="selltime")
+        LLM_API.get.cache_clear()
+        mixed = LLM_API.get(provider_name="SellTime")
+        LLM_API.get.cache_clear()
+        upper = LLM_API.get(provider_name="SELLTIME")
+
+        assert isinstance(lower, DefaultLLM_API_Impl)
+        assert isinstance(mixed, DefaultLLM_API_Impl)
+        assert isinstance(upper, DefaultLLM_API_Impl)
+        assert lower.settings.api_url == "https://selltime.ai/llm_api"
+        assert lower.kwargs == {"vendor_option": True}
+
+    def test_add_provider_direct_settings_do_not_leak_to_default_payload(self):
+        add_provider(
+            "selltime",
+            api_url="https://selltime.ai/llm_api",
+            api_key="secret",
+            custom_payload="value",
+        )
+
+        api = LLM_API.get(provider_name="SELLTIME")
+        payload = api.preview_request(model="model-1")
+
+        assert api.settings.api_url == "https://selltime.ai/llm_api"
+        assert api.settings.api_key == "secret"
+        assert api.kwargs == {"custom_payload": "value"}
+        assert payload["custom_payload"] == "value"
+        assert "api_url" not in payload
+        assert "api_key" not in payload
+
+    def test_add_provider_uses_environment_settings_when_direct_settings_absent(
+            self, monkeypatch):
+        monkeypatch.setenv("SELLTIME_API_URL", "https://selltime.ai/llm_api")
+        monkeypatch.setenv("SELLTIME_API_KEY", "env-key")
+        from statek.settings import get_provider_settings  # pylint: disable=import-outside-toplevel
+        get_provider_settings.cache_clear()
+        try:
+            add_provider("selltime")
+
+            api = LLM_API.get(provider_name="SELLTIME")
+
+            assert isinstance(api, DefaultLLM_API_Impl)
+            assert api.settings.api_url == "https://selltime.ai/llm_api"
+            assert api.settings.api_key == "env-key"
+        finally:
+            get_provider_settings.cache_clear()
+
+    def test_add_provider_registers_custom_llm_api_impl(self):
+        class CustomAPI(LLM_API):
+            def __init__(self, settings, **kwargs):
+                self.settings = settings
+                self.kwargs = kwargs
+
+            def _build_request_payload(
+                    self, system_prompt=None, model=None, metadata=None,
+                    tools=None, chat_history=None, chat_style=None,
+                    temperature=None, enable_reasoning=False):
+                return {"model": model}
+
+            async def _process_request(
+                    self, system_prompt=None, model=None, metadata=None,
+                    tools=None, chat_history=None, chat_style=None,
+                    temperature=None, enable_reasoning=False):
+                return _make_response()
+
+        add_provider(
+            "custom",
+            llm_api_impl=CustomAPI,
+            api_url="https://custom.test",
+            api_key="key",
+            registered_arg="registered",
+        )
+
+        api = LLM_API.get(provider_name="CUSTOM", call_arg="call")
+
+        assert isinstance(api, CustomAPI)
+        assert api.settings.api_url == "https://custom.test"
+        assert api.kwargs == {
+            "registered_arg": "registered",
+            "call_arg": "call",
+        }
+
+    def test_add_provider_get_kwargs_override_registered_kwargs(self):
+        add_provider(
+            "custom",
+            api_url="https://custom.test",
+            api_key="key",
+            timeout=30,
+        )
+
+        api = LLM_API.get(provider_name="CUSTOM", timeout=60)
+
+        assert api.kwargs["timeout"] == 60
+
+    @pytest.mark.parametrize("name", ["OPENAI", "openai", "VertexAI", "claude"])
+    def test_add_provider_rejects_builtin_names_case_insensitively(self, name):
+        with pytest.raises(ValueError, match="already registered"):
+            add_provider(name)
+
+    def test_add_provider_rejects_custom_duplicate_case_insensitively(self):
+        add_provider(
+            "selltime",
+            api_url="https://selltime.ai/llm_api",
+            api_key="key",
+        )
+
+        with pytest.raises(ValueError, match="already registered"):
+            add_provider("SELLTIME")
+
+    def test_add_provider_clears_get_cache(self):
+        first_settings = LLM_API_Settings(
+            api_url="https://first.test",
+            api_key="key",
+        )
+        second_settings = LLM_API_Settings(
+            api_url="https://second.test",
+            api_key="key",
+        )
+        with patch("statek.llm_api.get_provider_settings", return_value=first_settings):
+            first = LLM_API.get(provider_name="OPENAI")
+
+        add_provider(
+            "otherprovider",
+            api_url="https://registered.test",
+            api_key="key",
+        )
+
+        with patch("statek.llm_api.get_provider_settings", return_value=second_settings):
+            second = LLM_API.get(provider_name="OPENAI")
+
+        assert isinstance(first, DefaultLLM_API_Impl)
+        assert second is not first
+        assert second.settings.api_url == "https://second.test"
 
 
 # ---------------------------------------------------------------------------

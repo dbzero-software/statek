@@ -19,7 +19,7 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from functools import lru_cache
-from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, Any
+from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, Any, Type
 import json
 import httpx
 
@@ -29,6 +29,18 @@ from .chat_history import (
     ChatHistoryItem, ChatRole, format_chat_history_item,
 )
 from .llm_tools_scope import LLM_ToolsScope, parse_llm_tools_scope
+
+_CUSTOM_LLM_API_PROVIDERS: Dict[str, Dict[str, Any]] = {}
+_SETTINGS_KWARGS = {
+    "api_url",
+    "api_key",
+    "response_format_file",
+    "use_prompt_caching",
+}
+_INTERNAL_LLM_API_PROVIDER_ALIASES = {
+    "VERTEXAI", "VERTEX_AI", "GOOGLE_VERTEXAI", "GOOGLE",
+    "CLAUDEAI", "CLAUDE_AI", "CLAUDE", "ANTHROPIC",
+}
 
 def _func_name_from_tool_calls(tool_calls) -> str:
     """Return the function name from a single CallSpec or the first item of a list."""
@@ -559,9 +571,17 @@ class LLM_API(ABC):
             provider_key = get_statek_settings().default_llm_api_provider.upper()
         else:
             provider_key = provider_name.upper()
-        settings = get_provider_settings(provider_key)
+        custom_provider = _CUSTOM_LLM_API_PROVIDERS.get(provider_key)
+        if custom_provider is not None and custom_provider["settings"] is not None:
+            settings = custom_provider["settings"]
+        else:
+            settings = get_provider_settings(provider_key)
         if not settings:
             raise ValueError(f"No settings found for {provider_key} provider.")
+
+        if custom_provider is not None:
+            provider_kwargs = {**custom_provider["kwargs"], **kwargs}
+            return custom_provider["impl"](settings=settings, **provider_kwargs)
 
         compatible_provider_cls = OPENAI_COMPATIBLE_API_PROVIDERS.get(provider_key)
         if compatible_provider_cls is not None:
@@ -935,6 +955,41 @@ OPENAI_COMPATIBLE_API_PROVIDERS = {
     "LLAMACPP": LlamaCpp_API,
     "LLAMA_CPP_PYTHON": LlamaCpp_API,
 }
+
+
+def add_provider(name: str, llm_api_impl: Type[LLM_API] = None, **kwargs):
+    """Register a custom LLM API provider.
+
+    Provider names are case-insensitive. The only registration-time
+    validation is name uniqueness; implementation or settings problems surface
+    later when the provider is used.
+    """
+    provider_key = name.upper()
+    if (
+        provider_key in OPENAI_COMPATIBLE_API_PROVIDERS
+        or provider_key in _INTERNAL_LLM_API_PROVIDER_ALIASES
+        or provider_key in _CUSTOM_LLM_API_PROVIDERS
+    ):
+        raise ValueError(f"LLM API provider already registered: {name}")
+
+    settings_kwargs = {
+        key: value for key, value in kwargs.items()
+        if key in _SETTINGS_KWARGS
+    }
+    provider_kwargs = {
+        key: value for key, value in kwargs.items()
+        if key not in _SETTINGS_KWARGS
+    }
+    settings = None
+    if "api_url" in settings_kwargs and "api_key" in settings_kwargs:
+        settings = LLM_API_Settings(**settings_kwargs)
+
+    _CUSTOM_LLM_API_PROVIDERS[provider_key] = {
+        "impl": llm_api_impl or DefaultLLM_API_Impl,
+        "settings": settings,
+        "kwargs": provider_kwargs,
+    }
+    LLM_API.get.cache_clear()
 
 
 class VertexAI_API(LLM_API):
