@@ -19,7 +19,7 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from functools import lru_cache
-from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, Any
+from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, Any, Type
 import json
 import httpx
 
@@ -29,6 +29,18 @@ from .chat_history import (
     ChatHistoryItem, ChatRole, format_chat_history_item,
 )
 from .llm_tools_scope import LLM_ToolsScope, parse_llm_tools_scope
+
+_CUSTOM_LLM_API_PROVIDERS: Dict[str, Dict[str, Any]] = {}
+_SETTINGS_KWARGS = {
+    "api_url",
+    "api_key",
+    "response_format_file",
+    "use_prompt_caching",
+}
+_INTERNAL_LLM_API_PROVIDER_ALIASES = {
+    "VERTEXAI", "VERTEX_AI", "GOOGLE_VERTEXAI", "GOOGLE",
+    "CLAUDEAI", "CLAUDE_AI", "CLAUDE", "ANTHROPIC",
+}
 
 def _func_name_from_tool_calls(tool_calls) -> str:
     """Return the function name from a single CallSpec or the first item of a list."""
@@ -559,29 +571,36 @@ class LLM_API(ABC):
             provider_key = get_statek_settings().default_llm_api_provider.upper()
         else:
             provider_key = provider_name.upper()
-        settings = get_provider_settings(provider_key)
+        custom_provider = _CUSTOM_LLM_API_PROVIDERS.get(provider_key)
+        if custom_provider is not None and custom_provider["settings"] is not None:
+            settings = custom_provider["settings"]
+        else:
+            settings = get_provider_settings(provider_key)
         if not settings:
             raise ValueError(f"No settings found for {provider_key} provider.")
 
-        if provider_key == 'OPENROUTER':
-            return OpenRouter_API(settings=settings, **kwargs)
-        if provider_key == 'OPENAI':
-            return OpenAI_API(settings=settings, **kwargs)
+        if custom_provider is not None:
+            provider_kwargs = {**custom_provider["kwargs"], **kwargs}
+            return custom_provider["impl"](settings=settings, **provider_kwargs)
+
+        compatible_provider_cls = OPENAI_COMPATIBLE_API_PROVIDERS.get(provider_key)
+        if compatible_provider_cls is not None:
+            return compatible_provider_cls(settings=settings, **kwargs)
         if provider_key in ('VERTEXAI', 'VERTEX_AI', 'GOOGLE_VERTEXAI', 'GOOGLE'):
             return VertexAI_API(settings=settings, **kwargs)
         if provider_key in ('CLAUDEAI', 'CLAUDE_AI', 'CLAUDE', 'ANTHROPIC'):
             return ClaudeAI_API(settings=settings, **kwargs)
         raise ValueError(f"Unsupported LLM API provider: {provider_name}")
 
-class OpenRouter_API(LLM_API):
-    """OpenRouter API implementation of LLM_API.
+class DefaultLLM_API_Impl(LLM_API):
+    """Default OpenAI-compatible chat-completions implementation of LLM_API.
 
-    This class provides a concrete implementation for the OpenRouter service,
-    which acts as a gateway to multiple LLM providers.
+    This implementation is suitable for providers compatible with OpenAI's
+    standard chat completions API v1.
     """
 
     def __init__(self, settings: LLM_API_Settings, **kwargs):
-        """Initialize OpenRouter API client.
+        """Initialize an OpenAI-compatible API client.
 
         Args:
             settings: LLM_API_Settings containing API URL and key
@@ -602,11 +621,11 @@ class OpenRouter_API(LLM_API):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
     ) -> List[Dict[str, str]]:
-        """Build the OpenRouter messages list from a ``ChatHistoryItem`` stream.
+        """Build the OpenAI-compatible messages list from a ``ChatHistoryItem`` stream.
 
         Delegates per-item formatting to :func:`format_chat_history_item`,
-        which produces dicts in the OpenAI / OpenRouter chat-completions
-        schema.  ``chat_style`` defaults to the global StatekSettings value
+        which produces dicts in the OpenAI chat-completions schema.
+        ``chat_style`` defaults to the global StatekSettings value
         when not supplied.
         """
         if chat_style is None:
@@ -636,7 +655,7 @@ class OpenRouter_API(LLM_API):
         temperature: Optional[float] = None,
         enable_reasoning: bool = False,
     ) -> Dict:
-        """Build the OpenAI-compatible JSON payload for OpenRouter/OpenAI."""
+        """Build the OpenAI-compatible JSON payload."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
         del metadata
@@ -670,7 +689,7 @@ class OpenRouter_API(LLM_API):
         temperature: Optional[float] = None,
         enable_reasoning: bool = False,
     ) -> LLM_Response:
-        """Process a request to the OpenRouter API.
+        """Process a request to an OpenAI-compatible API.
 
         Args:
             system_prompt: Optional system prompt
@@ -723,11 +742,9 @@ class OpenRouter_API(LLM_API):
             # Parse the response
             data = response.json()
 
-            # Extract the response text
-            # OpenRouter follows OpenAI's response format
             if "choices" not in data or not data["choices"]:
                 error_detail = data.get("error", {}).get("message", str(data))
-                raise RuntimeError(f"OpenRouter API error: {error_detail}")
+                raise RuntimeError(f"LLM API error: {error_detail}")
 
             message = data["choices"][0]["message"]
 
@@ -763,8 +780,216 @@ class OpenRouter_API(LLM_API):
             )
 
 
-class OpenAI_API(OpenRouter_API):
+class OpenRouter_API(DefaultLLM_API_Impl):
+    """OpenRouter API typed wrapper over the default chat-completions implementation."""
+
+
+class OpenAI_API(DefaultLLM_API_Impl):
     """OpenAI API implementation using the chat completions wire format."""
+
+
+class Groq_API(DefaultLLM_API_Impl):
+    """Groq API typed wrapper over the default chat-completions implementation."""
+
+
+class MistralAI_API(DefaultLLM_API_Impl):
+    """Mistral AI API typed wrapper over the default chat-completions implementation."""
+
+
+class DeepSeek_API(DefaultLLM_API_Impl):
+    """DeepSeek API typed wrapper over the default chat-completions implementation."""
+
+
+class XAI_API(DefaultLLM_API_Impl):
+    """xAI API typed wrapper over the default chat-completions implementation."""
+
+
+class TogetherAI_API(DefaultLLM_API_Impl):
+    """Together AI API typed wrapper over the default chat-completions implementation."""
+
+
+class FireworksAI_API(DefaultLLM_API_Impl):
+    """Fireworks AI API typed wrapper over the default chat-completions implementation."""
+
+
+class Cerebras_API(DefaultLLM_API_Impl):
+    """Cerebras API typed wrapper over the default chat-completions implementation."""
+
+
+class Perplexity_API(DefaultLLM_API_Impl):
+    """Perplexity API typed wrapper over the default chat-completions implementation."""
+
+
+class SambaNova_API(DefaultLLM_API_Impl):
+    """SambaNova API typed wrapper over the default chat-completions implementation."""
+
+
+class NvidiaNIM_API(DefaultLLM_API_Impl):
+    """NVIDIA NIM API typed wrapper over the default chat-completions implementation."""
+
+
+class Nebius_API(DefaultLLM_API_Impl):
+    """Nebius API typed wrapper over the default chat-completions implementation."""
+
+
+class Cohere_API(DefaultLLM_API_Impl):
+    """Cohere compatibility API typed wrapper over the default implementation."""
+
+
+class MoonshotAI_API(DefaultLLM_API_Impl):
+    """Moonshot AI / Kimi API typed wrapper over the default implementation."""
+
+
+class DashScope_API(DefaultLLM_API_Impl):
+    """Alibaba Cloud DashScope API typed wrapper over the default implementation."""
+
+
+class CloudflareWorkersAI_API(DefaultLLM_API_Impl):
+    """Cloudflare Workers AI typed wrapper over the default implementation."""
+
+
+class CloudflareAIGateway_API(DefaultLLM_API_Impl):
+    """Cloudflare AI Gateway typed wrapper over the default implementation."""
+
+
+class GitHubModels_API(DefaultLLM_API_Impl):
+    """GitHub Models API typed wrapper over the default implementation."""
+
+
+class Bedrock_API(DefaultLLM_API_Impl):
+    """Amazon Bedrock OpenAI-compatible API typed wrapper over the default implementation."""
+
+
+class MicrosoftFoundry_API(DefaultLLM_API_Impl):
+    """Microsoft Foundry OpenAI-compatible API typed wrapper over the default implementation."""
+
+
+class AzureOpenAI_API(DefaultLLM_API_Impl):
+    """Azure OpenAI API typed wrapper over the default implementation."""
+
+
+class GeminiEnterprise_API(DefaultLLM_API_Impl):
+    """Gemini Enterprise OpenAI-compatible API typed wrapper over the default implementation."""
+
+
+class Ollama_API(DefaultLLM_API_Impl):
+    """Ollama OpenAI-compatible API typed wrapper over the default implementation."""
+
+
+class LMStudio_API(DefaultLLM_API_Impl):
+    """LM Studio OpenAI-compatible API typed wrapper over the default implementation."""
+
+
+class VLLM_API(DefaultLLM_API_Impl):
+    """vLLM OpenAI-compatible server typed wrapper over the default implementation."""
+
+
+class SGLang_API(DefaultLLM_API_Impl):
+    """SGLang OpenAI-compatible server typed wrapper over the default implementation."""
+
+
+class LlamaCpp_API(DefaultLLM_API_Impl):
+    """llama.cpp OpenAI-compatible server typed wrapper over the default implementation."""
+
+
+OPENAI_COMPATIBLE_API_PROVIDERS = {
+    "OPENAI": OpenAI_API,
+    "OPENROUTER": OpenRouter_API,
+    "GROQ": Groq_API,
+    "MISTRAL": MistralAI_API,
+    "MISTRALAI": MistralAI_API,
+    "MISTRAL_AI": MistralAI_API,
+    "DEEPSEEK": DeepSeek_API,
+    "DEEP_SEEK": DeepSeek_API,
+    "XAI": XAI_API,
+    "X_AI": XAI_API,
+    "GROK": XAI_API,
+    "TOGETHER": TogetherAI_API,
+    "TOGETHERAI": TogetherAI_API,
+    "TOGETHER_AI": TogetherAI_API,
+    "FIREWORKS": FireworksAI_API,
+    "FIREWORKSAI": FireworksAI_API,
+    "FIREWORKS_AI": FireworksAI_API,
+    "CEREBRAS": Cerebras_API,
+    "PERPLEXITY": Perplexity_API,
+    "SAMBANOVA": SambaNova_API,
+    "SAMBA_NOVA": SambaNova_API,
+    "NVIDIA": NvidiaNIM_API,
+    "NVIDIA_NIM": NvidiaNIM_API,
+    "NIM": NvidiaNIM_API,
+    "NEBIUS": Nebius_API,
+    "COHERE": Cohere_API,
+    "MOONSHOT": MoonshotAI_API,
+    "MOONSHOTAI": MoonshotAI_API,
+    "MOONSHOT_AI": MoonshotAI_API,
+    "KIMI": MoonshotAI_API,
+    "DASHSCOPE": DashScope_API,
+    "DASH_SCOPE": DashScope_API,
+    "ALIBABA": DashScope_API,
+    "ALIBABA_CLOUD": DashScope_API,
+    "QWEN": DashScope_API,
+    "CLOUDFLARE": CloudflareWorkersAI_API,
+    "CLOUDFLARE_WORKERS_AI": CloudflareWorkersAI_API,
+    "WORKERS_AI": CloudflareWorkersAI_API,
+    "CLOUDFLARE_AI_GATEWAY": CloudflareAIGateway_API,
+    "AI_GATEWAY": CloudflareAIGateway_API,
+    "GITHUB": GitHubModels_API,
+    "GITHUB_MODELS": GitHubModels_API,
+    "BEDROCK": Bedrock_API,
+    "AMAZON_BEDROCK": Bedrock_API,
+    "AWS_BEDROCK": Bedrock_API,
+    "MICROSOFT_FOUNDRY": MicrosoftFoundry_API,
+    "MS_FOUNDRY": MicrosoftFoundry_API,
+    "AZURE_FOUNDRY": MicrosoftFoundry_API,
+    "AZURE_OPENAI": AzureOpenAI_API,
+    "AZURE_OPEN_AI": AzureOpenAI_API,
+    "GEMINI_ENTERPRISE": GeminiEnterprise_API,
+    "GOOGLE_GEMINI_ENTERPRISE": GeminiEnterprise_API,
+    "GOOGLE_OPENAI": GeminiEnterprise_API,
+    "OLLAMA": Ollama_API,
+    "LMSTUDIO": LMStudio_API,
+    "LM_STUDIO": LMStudio_API,
+    "VLLM": VLLM_API,
+    "SGLANG": SGLang_API,
+    "LLAMA_CPP": LlamaCpp_API,
+    "LLAMACPP": LlamaCpp_API,
+    "LLAMA_CPP_PYTHON": LlamaCpp_API,
+}
+
+
+def add_provider(name: str, llm_api_impl: Type[LLM_API] = None, **kwargs):
+    """Register a custom LLM API provider.
+
+    Provider names are case-insensitive. The only registration-time
+    validation is name uniqueness; implementation or settings problems surface
+    later when the provider is used.
+    """
+    provider_key = name.upper()
+    if (
+        provider_key in OPENAI_COMPATIBLE_API_PROVIDERS
+        or provider_key in _INTERNAL_LLM_API_PROVIDER_ALIASES
+        or provider_key in _CUSTOM_LLM_API_PROVIDERS
+    ):
+        raise ValueError(f"LLM API provider already registered: {name}")
+
+    settings_kwargs = {
+        key: value for key, value in kwargs.items()
+        if key in _SETTINGS_KWARGS
+    }
+    provider_kwargs = {
+        key: value for key, value in kwargs.items()
+        if key not in _SETTINGS_KWARGS
+    }
+    settings = None
+    if "api_url" in settings_kwargs and "api_key" in settings_kwargs:
+        settings = LLM_API_Settings(**settings_kwargs)
+
+    _CUSTOM_LLM_API_PROVIDERS[provider_key] = {
+        "impl": llm_api_impl or DefaultLLM_API_Impl,
+        "settings": settings,
+        "kwargs": provider_kwargs,
+    }
+    LLM_API.get.cache_clear()
 
 
 class VertexAI_API(LLM_API):
