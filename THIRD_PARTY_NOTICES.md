@@ -9,7 +9,7 @@ identified from the current package metadata.
 | Package | Version reviewed | Relationship | License |
 |---|---:|---|---|
 | dbzero-modelkit | 1.1.1 | Direct runtime dependency | MIT |
-| dbzero | 0.3.7 | Transitive via dbzero-modelkit; used directly by statek | LGPL-2.1 license text in package metadata |
+| dbzero | 0.4.0 | Optional backend via dbzero extra; used directly by statek | LGPL-2.1 license text in package metadata |
 | fasteners | 0.19 | Transitive via dbzero | Apache-2.0 |
 | pydantic | 2.12.5 | Direct runtime dependency | MIT |
 | pydantic-core | 2.41.5 | Transitive via pydantic | MIT |
@@ -37,4 +37,3 @@ not runtime dependencies of the distributed package.
 | pylint | 4.0.6 | Linting | GPL-2.0-or-later |
 | build | 1.5.0 | Package builds | MIT |
 | twine | 6.2.0 metadata reviewed from PyPI | Publishing | Apache-2.0 |
-

@@ -24,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "dbzero-modelkit>=0.1.0",
+    "dbzero-modelkit>=1.2.0",
     "pydantic==2.12.5",
     "pydantic-settings==2.12.0",
     "httpx==0.28.1",
@@ -33,12 +33,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dbzero = [
-    "dbzero>=0.3.3",
+    "dbzero-modelkit[dbzero]>=1.2.0",
+    "dbzero>=0.4.0",
 ]
 dbzero-pro = [
+    "dbzero-modelkit[dbzero-pro]>=1.2.0",
     "dbzero-pro>=0.3.3",
 ]
 dev = [
+    "dbzero>=0.4.0",
     "pytest>=7.0",
     "pylint>=3.0",
     "build>=1.0.0",

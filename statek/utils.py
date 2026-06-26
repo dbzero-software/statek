@@ -1161,7 +1161,6 @@ def _find_locals_in_context(
         if perm_ctx:
             aggregated_locals = {**perm_ctx, **aggregated_locals}
 
-    found = False
     name_found = False
     for name, value in aggregated_locals.items():
         if var_type is None and var_name is None:
@@ -1174,7 +1173,6 @@ def _find_locals_in_context(
         name_found = True
         yielded = list(_yield_matching_local(value, var_type, var_name, FutureResult))
         if yielded:
-            found = True
             yield from yielded
 
     if ext_scan and var_name is not None and not name_found and perm_ctx_getter is not None:
@@ -1183,7 +1181,6 @@ def _find_locals_in_context(
             value = perm_ctx_dict[var_name]
             yielded = list(_yield_matching_local(value, var_type, var_name, FutureResult))
             if yielded:
-                found = True
                 yield from yielded
 
 
