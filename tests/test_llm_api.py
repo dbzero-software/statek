@@ -7,7 +7,8 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from statek.llm_api import (
-    LLM_API, LLM_Response, LLM_Stats, OpenRouter_API, OpenAI_API, VertexAI_API,
+    LLM_API, LLM_Response, LLM_Stats, DefaultLLM_API_Impl,
+    OPENAI_COMPATIBLE_API_PROVIDERS, OpenRouter_API, OpenAI_API, VertexAI_API,
     ClaudeAI_API, Claude_API, CallParams, extract_call_params,
 )
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
@@ -77,6 +78,40 @@ class TestLLMAPIGetFactory:
             api = LLM_API.get(provider_name="OPENAI")
 
         assert isinstance(api, OpenAI_API)
+
+    def test_openai_and_openrouter_wrap_default_implementation(self):
+        openai_settings = LLM_API_Settings(
+            api_url="https://api.openai.com/v1/chat/completions",
+            api_key="key",
+        )
+        openrouter_settings = LLM_API_Settings(
+            api_url="https://openrouter.ai/api/v1/chat/completions",
+            api_key="key",
+        )
+
+        openai_api = OpenAI_API(settings=openai_settings)
+        openrouter_api = OpenRouter_API(settings=openrouter_settings)
+
+        assert isinstance(openai_api, DefaultLLM_API_Impl)
+        assert isinstance(openrouter_api, DefaultLLM_API_Impl)
+        assert not issubclass(OpenAI_API, OpenRouter_API)
+        assert not issubclass(OpenRouter_API, OpenAI_API)
+
+    @pytest.mark.parametrize(
+        ("provider_name", "expected_cls"),
+        sorted(OPENAI_COMPATIBLE_API_PROVIDERS.items()),
+    )
+    def test_get_openai_compatible_provider_aliases(self, provider_name, expected_cls):
+        LLM_API.get.cache_clear()
+        settings = LLM_API_Settings(
+            api_url=f"https://example.test/{provider_name.lower()}/chat/completions",
+            api_key="key",
+        )
+        with patch("statek.llm_api.get_provider_settings", return_value=settings):
+            api = LLM_API.get(provider_name=provider_name)
+
+        assert isinstance(api, expected_cls)
+        assert isinstance(api, DefaultLLM_API_Impl)
 
     def test_get_vertexai_provider(self):
         settings = LLM_API_Settings(
