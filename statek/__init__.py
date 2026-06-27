@@ -24,7 +24,12 @@ except ImportError as exc:
         "or install dbzero-pro with `pip install statek[dbzero-pro]`."
     ) from exc
 
-from .settings import LLM_API_Settings, StatekSettings, get_statek_settings
+from .settings import (
+    LLM_API_Settings,
+    StatekSettings,
+    get_statek_settings,
+    set_statek_settings,
+)
 from .multi_source_settings import (
     MultiSourceBaseSettings,
     SettingValuesSource,
@@ -43,7 +48,8 @@ from .llm_api import (
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
 from .system import (tool, subtask, docstr, get_any, get_all, error_handler,
-                     is_valid_error_handler, docs_style, find_sub_task_handler)
+                     is_valid_error_handler, docs_style, find_sub_task_handler,
+                     find_tools)
 from .shared_context import (
     ContextCategory,
     ContextCategoryDict,
@@ -68,13 +74,28 @@ from . import task
 __version__ = "0.1.0"
 
 
-def init(settings: Optional[StatekSettings] = None) -> None:
+def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> None:
     """Initialize statek before first use.
 
     Loads model pricing from statek_model_info_dir when configured.
     """
     if settings is None:
         settings = get_statek_settings()
+    if not restricted:
+        settings.python_sandbox_mode = "off"
+    elif settings.python_sandbox_mode.lower() != "off":
+        settings.python_sandbox_mode = "restricted"
+    set_statek_settings(settings)
+    from .python_sandbox import configure_sandbox  # pylint: disable=import-outside-toplevel
+
+    configure_sandbox(
+        settings,
+        blocked_tools={
+            fn.__name__
+            for fn in find_tools(None, include_hidden=True)
+            if getattr(fn, "tool_hidden", False)
+        },
+    )
     if settings.statek_model_info_dir:
         from .model_pricing import init_model_pricing  # pylint: disable=import-outside-toplevel
         init_model_pricing(settings.statek_model_info_dir)

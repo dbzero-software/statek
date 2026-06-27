@@ -5,6 +5,7 @@ import pytest
 import dbzero as db0
 
 from statek.executors.utils import exec_step
+from statek.python_sandbox import SandboxViolation
 from statek.system import tool
 
 
@@ -48,13 +49,12 @@ class TestExecStepPrint:
         assert job.py_env.console[0] == "custom:test"
 
     @pytest.mark.asyncio
-    async def test_hidden_system_tool_executes_from_runtime_context(self, job_factory):
-        """Hidden registered system tools remain callable through exec_step."""
+    async def test_hidden_system_tool_is_blocked_from_runtime_context(self, job_factory):
+        """Hidden registered system tools are not callable through sandboxed code."""
         job = self._make_job(job_factory)
 
-        await exec_step('result = hidden_runtime_system_tool()', job)
-
-        assert job.py_env.local_state['result'] == "hidden-runtime-ok"
+        with pytest.raises(SandboxViolation, match="hidden_runtime_system_tool"):
+            await exec_step('result = hidden_runtime_system_tool()', job)
 
 
 class TestExecStepFStringFormatting:

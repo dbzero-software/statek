@@ -46,6 +46,7 @@ from statek.llm_harness import get_llm_harness
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.settings import get_statek_settings, statek_log, ChatStyle
 from statek.system import inject_context
+from statek.python_sandbox import get_sandbox_policy
 from statek.utils import (
     CodeBlock,
     CallSpec,
@@ -60,11 +61,13 @@ from statek.utils import (
 )
 
 _MATCH_UNSET = object()
+_HIDDEN_REGISTERED_TOOL_NAMES: Optional[set[str]] = None
 
 if TYPE_CHECKING:
     from statek.agents.agent import Agent
 
 MARKDOWN_MEDIA_LINK_PATTERN = re.compile(r'!?\[[^\]]*\]\([^\s)]+(?:\s+"[^"]*")?\)')
+_SANDBOX_EXPR_RESULT = "statek_expr_result"
 
 
 def _normalize_dialog_media_links(dialog: str) -> str:
@@ -348,6 +351,59 @@ def _copy_modified_locals(current_locals: dict, job_locals: dict) -> None:
             job_locals[key] = value
 
 
+def _hidden_registered_tool_names() -> set[str]:
+    """Return hidden registered tool names for the process-global sandbox policy."""
+    global _HIDDEN_REGISTERED_TOOL_NAMES  # pylint: disable=global-statement
+
+    if _HIDDEN_REGISTERED_TOOL_NAMES is not None:
+        return _HIDDEN_REGISTERED_TOOL_NAMES
+
+    from statek.system import find_tools  # pylint: disable=import-outside-toplevel
+
+    _HIDDEN_REGISTERED_TOOL_NAMES = {
+        tool.__name__
+        for tool in find_tools(None, include_hidden=True)
+        if getattr(tool, "tool_hidden", False)
+    }
+    return _HIDDEN_REGISTERED_TOOL_NAMES
+
+
+def _execution_sandbox_policy():
+    return get_sandbox_policy(blocked_tools=_hidden_registered_tool_names())
+
+
+def _is_hidden_tool_call(call_spec: CallSpec, job: Job, policy) -> bool:
+    if policy is None or call_spec.func_name in policy.allowed_tools:
+        return False
+    if call_spec.func_name in policy.blocked_tools:
+        return True
+
+    agent = job.job_def.agent
+    if agent is None:
+        return False
+
+    for tool_fn in agent._tools:  # pylint: disable=protected-access
+        if (getattr(tool_fn, "__name__", None) == call_spec.func_name
+                and getattr(tool_fn, "tool_hidden", False)):
+            return True
+
+    context_fn = agent.context.get(call_spec.func_name)
+    return bool(callable(context_fn) and getattr(context_fn, "tool_hidden", False))
+
+
+def _compile_exec_node(node: ast.AST, filename: str):
+    wrapper = ast.Module(body=[node], type_ignores=[])
+    ast.fix_missing_locations(wrapper)
+    return compile(wrapper, filename=filename, mode="exec")
+
+
+def _expression_assign_node(expr: ast.AST) -> ast.Assign:
+    return ast.Assign(
+        targets=[ast.Name(id=_SANDBOX_EXPR_RESULT, ctx=ast.Store())],
+        value=expr,
+    )
+
+
 def _exec_code_body(code_str: str, job: Job, global_context: dict,
                     local_context: dict, output_fn: Callable,
                     error_fn: Callable, print_fn: Callable = None,
@@ -372,6 +428,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
         instr_num: optional instruction index to resume from.
     """
     import types
+    policy = _execution_sandbox_policy()
     initial_local_functions = {
         key for key, value in local_context.items()
         if isinstance(value, types.FunctionType)
@@ -386,7 +443,16 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
         return value
 
     with _setup_execution_context(job, global_context, local_context, print_fn=print_fn):
-        tree = ast.parse(code_str)
+        if policy is not None:
+            try:
+                tree = policy.validate_source(code_str)
+            except Exception as e:
+                error_msg = f"{type(e).__name__}: {e}"
+                error_fn(error_msg)
+                raise
+            global_context = policy.globals(global_context)
+        else:
+            tree = ast.parse(code_str)
 
         # Before transformation, record which expression nodes are print()
         # calls.  print() is always called for side effects and returns
@@ -428,9 +494,6 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
             try:
                 is_expression = isinstance(node, ast.Expr)
 
-                wrapper = ast.Module(body=[node], type_ignores=[])
-                code_obj = compile(wrapper, filename="<string>", mode="exec")
-
                 global_context.update(local_context)
                 sync_local = _MirrorDict(
                     local_context,
@@ -439,10 +502,17 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                 )
 
                 if is_expression:
-                    result = eval(
-                        compile(ast.Expression(body=node.value),
-                                filename="<string>", mode="eval"),
-                        global_context, sync_local)
+                    marker = object()
+                    previous_result = sync_local.get(_SANDBOX_EXPR_RESULT, marker)
+                    assign_node = ast.copy_location(_expression_assign_node(node.value), node)
+                    code_obj = _compile_exec_node(assign_node, "<string>")
+                    exec(code_obj, global_context, sync_local)
+                    result = sync_local.get(_SANDBOX_EXPR_RESULT)
+                    if previous_result is marker:
+                        sync_local.pop(_SANDBOX_EXPR_RESULT, None)
+                        global_context.pop(_SANDBOX_EXPR_RESULT, None)
+                    else:
+                        sync_local[_SANDBOX_EXPR_RESULT] = previous_result
                     if isinstance(result, FutureResult):
                         try:
                             result = _resolve_output_future(result)
@@ -452,6 +522,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                     if result is not None or idx not in print_call_exprs:
                         output_fn(format_default_llm_repr(result))
                 else:
+                    code_obj = _compile_exec_node(node, "<string>")
                     exec(code_obj, global_context, sync_local)
 
                 local_context.update(sync_local)
@@ -689,6 +760,11 @@ async def exec_tool(call_spec: CallSpec, job: Job,
     def _private_print(*args, sep=' ', end='\n', **kwargs):
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
         private_console.append(output.rstrip('\n'))
+
+    policy = _execution_sandbox_policy()
+    if _is_hidden_tool_call(call_spec, job, policy):
+        error_msg = f"NameError: tool '{call_spec.func_name}' is not exposed to this job"
+        return error_msg, error_msg
 
     # Build global and local contexts — mirrors exec_step
     if job.py_env.global_state is None:
