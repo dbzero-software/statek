@@ -316,47 +316,6 @@ class JobDefError:
 _JOBDEF_HASH_TAG_PREFIX = "STATEK_JOBDEF:H:"
 
 
-def _safe_db0_uuid(value: Any) -> Optional[str]:
-    try:
-        return db0.uuid(value)
-    except Exception:  # pylint: disable=broad-except
-        return None
-
-
-def _normalize_jobdef_hash_value(value: Any):
-    """Return a deterministic representation for JobDef identity hashing."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, CodeBlock):
-        return {
-            "code": _normalize_jobdef_hash_value(value.code),
-            "tool_calls": _normalize_jobdef_hash_value(value.tool_calls),
-            "metadata": _normalize_jobdef_hash_value(value.metadata),
-        }
-    if isinstance(value, CallSpec):
-        return {
-            "id": value.id,
-            "func_name": value.func_name,
-            "args": _normalize_jobdef_hash_value(value.args),
-            "kwargs": _normalize_jobdef_hash_value(value.kwargs),
-        }
-    if isinstance(value, dict):
-        return {
-            repr(_normalize_jobdef_hash_value(key)): _normalize_jobdef_hash_value(item)
-            for key, item in sorted(value.items(), key=lambda pair: repr(pair[0]))
-        }
-    if isinstance(value, (list, tuple)):
-        return [_normalize_jobdef_hash_value(item) for item in value]
-    if isinstance(value, set):
-        normalized = [_normalize_jobdef_hash_value(item) for item in value]
-        return sorted(normalized, key=repr)
-
-    value_uuid = _safe_db0_uuid(value)
-    if value_uuid is not None:
-        return {"db0_uuid": value_uuid}
-    return repr(value)
-
-
 def _job_def_identity_hash(
     warmup_code,
     model_family,
@@ -365,16 +324,16 @@ def _job_def_identity_hash(
     locale,
     chat_style,
 ) -> str:
-    payload = {
-        "warmup_code": _normalize_jobdef_hash_value(warmup_code),
-        "model_family": _normalize_jobdef_hash_value(model_family),
-        "model": _normalize_jobdef_hash_value(model),
-        "job_params": _normalize_jobdef_hash_value(job_params),
-        "locale": _normalize_jobdef_hash_value(locale),
-        "chat_style": _normalize_jobdef_hash_value(chat_style),
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:3]
+    payload = (
+        warmup_code,
+        model_family,
+        model,
+        job_params,
+        locale,
+        chat_style,
+    )
+    encoded = str(payload).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:4]
 
 
 def _job_def_identity_tag(
@@ -446,10 +405,7 @@ class JobDef:
         """Ensure this JobDef has exactly one current identity hash tag."""
         new_tag = job_def_identity_tag_for_job_def(self)
         if old_tag is not None and old_tag != new_tag:
-            try:
-                db0.tags(self).remove(old_tag)
-            except Exception:  # pylint: disable=broad-except
-                pass
+            db0.tags(self).remove(old_tag)
         db0.tags(self).add(new_tag)
 
     @property

@@ -241,7 +241,7 @@ class TestFindExistingJobDef:
             if isinstance(arg, str) and arg.startswith(_JOBDEF_HASH_TAG_PREFIX)
         ]
         assert len(hash_tags) == 1
-        assert len(hash_tags[0]) == len(_JOBDEF_HASH_TAG_PREFIX) + 3
+        assert len(hash_tags[0]) == len(_JOBDEF_HASH_TAG_PREFIX) + 4
         assert len(first_call[1:]) == 2
 
     def test_hash_collision_still_uses_exact_comparison(
