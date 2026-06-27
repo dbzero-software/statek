@@ -24,12 +24,55 @@ from .future import FutureResult, temporal
 from .system import tool
 from .agents.agent import Agent, SupervisedAgent
 from .agents.dialog_agent import DialogAgent
+from .chat_style import ChatStyle
 from .executors.job import Job, JobStatus
 from .locale import StatekLocale
 from .pyenv import PyEnv
 from .settings import get_provider_settings as _get_provider_settings
 from .settings import get_statek_settings as _get_statek_settings
 from .utils import get_current_job
+
+
+def _job_params_from_kwargs(agent: Agent, kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the JobDef params created by Agent.create_job_def for these kwargs."""
+    job_params = dict(kwargs) if kwargs else {}
+    if isinstance(agent, DialogAgent):
+        job_params.pop("chat_style", None)
+    return job_params or None
+
+
+def _dialog_chat_style(agent: Agent, kwargs: Dict[str, Any]):
+    """Return the explicit JobDef chat style DialogAgent.create_job_def will set."""
+    if not isinstance(agent, DialogAgent):
+        return None
+    chat_style = kwargs.get("chat_style")
+    if chat_style is None and agent._metadata and 'CHAT_STYLE' in agent._metadata:  # pylint: disable=protected-access
+        chat_style = ChatStyle[agent._metadata['CHAT_STYLE']]  # pylint: disable=protected-access
+    return chat_style or ChatStyle.MD_DIALOG  # pylint: disable=no-member
+
+
+def _find_reusable_job_def(
+    agent: Agent,
+    warmup_code: Optional[Union[str, Sequence[str]]],
+    locale,
+    kwargs: Dict[str, Any],
+):
+    """Find an existing JobDef matching create_new_job's reusable definition."""
+    from statek.executors.utils import find_existing_job_def  # pylint: disable=import-outside-toplevel
+
+    if isinstance(agent, SupervisedAgent):
+        combined_warmup_code = agent._combine_warmup_code(warmup_code)  # pylint: disable=protected-access
+    else:
+        combined_warmup_code = warmup_code
+    metadata = agent._metadata or {}  # pylint: disable=protected-access
+    return find_existing_job_def(
+        agent,
+        combined_warmup_code,
+        model=metadata.get("MODEL"),
+        job_params=_job_params_from_kwargs(agent, kwargs),
+        locale=locale,
+        chat_style=_dialog_chat_style(agent, kwargs) if isinstance(agent, DialogAgent) else None,
+    )
 
 
 class _ReferencedLocalsCollector(ast.NodeVisitor):
@@ -379,11 +422,13 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
     """Create a ready job with shared locals, inherited locale, and error handlers."""
     shared_vars = shared_vars or {}
     effective_locale = _resolve_child_locale(parent_job, locale)
-    job_def = agent.create_job_def(
-        warmup_code=warmup_code,
-        locale=effective_locale,
-        **kwargs,
-    )
+    job_def = _find_reusable_job_def(agent, warmup_code, effective_locale, kwargs)
+    if job_def is None:
+        job_def = agent.create_job_def(
+            warmup_code=warmup_code,
+            locale=effective_locale,
+            **kwargs,
+        )
 
     env = PyEnv()
     if warmup_code and caller_frame is None:

@@ -15,6 +15,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from collections import namedtuple
+import hashlib
 import json
 import re
 import traceback as _traceback_module
@@ -312,6 +313,55 @@ class JobDefError:
             self.traceback = None
 
 
+_JOBDEF_HASH_TAG_PREFIX = "STATEK_JOBDEF:H:"
+
+
+def _job_def_identity_hash(
+    warmup_code,
+    model_family,
+    model,
+    job_params,
+    locale,
+    chat_style,
+) -> str:
+    payload = (
+        warmup_code,
+        model_family,
+        model,
+        job_params,
+        locale,
+        chat_style,
+    )
+    encoded = str(payload).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:4]
+
+
+def _job_def_identity_tag(
+    warmup_code,
+    model_family,
+    model,
+    job_params,
+    locale,
+    chat_style,
+) -> str:
+    return (
+        f"{_JOBDEF_HASH_TAG_PREFIX}"
+        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style)}"
+    )
+
+
+def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
+    """Return the single derived lookup tag for a JobDef."""
+    return _job_def_identity_tag(
+        job_def.warmup_code,
+        job_def.model_family,
+        job_def.model,
+        job_def.job_params,
+        job_def.locale,
+        getattr(job_def, "_chat_style", None),
+    )
+
+
 @memo
 @dataclass
 class JobDef:
@@ -349,6 +399,14 @@ class JobDef:
             )
         if not _is_model_mapping(metadata_model):
             self.metadata["MODEL"] = parse_model_metadata(metadata_model)
+        self._sync_identity_hash_tag()
+
+    def _sync_identity_hash_tag(self, old_tag: Optional[str] = None) -> None:
+        """Ensure this JobDef has exactly one current identity hash tag."""
+        new_tag = job_def_identity_tag_for_job_def(self)
+        if old_tag is not None and old_tag != new_tag:
+            db0.tags(self).remove(old_tag)
+        db0.tags(self).add(new_tag)
 
     @property
     def model(self) -> Optional[str]:
@@ -419,7 +477,9 @@ class JobDef:
         """
         new_value = parse_warmup_code(warmup_code)
         if new_value != self.warmup_code:
+            old_tag = job_def_identity_tag_for_job_def(self)
             self.warmup_code = new_value
+            self._sync_identity_hash_tag(old_tag)
 
     def set_chat_style(self, chat_style: Optional[ChatStyle]) -> None:
         """Update _chat_style only when the new value differs from the current one.
@@ -428,7 +488,9 @@ class JobDef:
             chat_style: New chat style value, or None to clear the override.
         """
         if self._chat_style != chat_style:
+            old_tag = job_def_identity_tag_for_job_def(self)
             self._chat_style = chat_style
+            self._sync_identity_hash_tag(old_tag)
 
     @property
     def chat_style(self) -> Optional[ChatStyle]:

@@ -97,6 +97,8 @@ class StatekSettings(MultiSourceBaseSettings):
     statek_default_difficulty: str = "M"
     """Directory containing model pricing files (.csv/.txt); scanned recursively on init."""
     statek_model_info_dir: Optional[str] = None
+    """Directory containing agent warmup definition .py files."""
+    warmup_defs_dir: Optional[str] = None
 
     model_config = SettingsConfigDict(extra='ignore')
 
@@ -127,6 +129,9 @@ class StatekSettings(MultiSourceBaseSettings):
 
         if self.statek_model_info_dir is None:
             self.statek_model_info_dir = os.environ.get('STATEK_MODEL_INFO_DIR')
+
+        if self.warmup_defs_dir is None:
+            self.warmup_defs_dir = os.environ.get('STATEK_WARMUP_DEFS_DIR')
 
         # Parse STATEK_ prefixed env vars for harness settings
         for attr, env_var, conv in [

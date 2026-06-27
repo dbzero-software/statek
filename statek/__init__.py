@@ -55,6 +55,7 @@ from .task import (
     create_new_job,
     create_sub_task,
 )
+from .runner import start_statek, start_statek_async
 from . import task
 
 __version__ = "0.1.0"
@@ -74,6 +75,8 @@ def init(settings: Optional[StatekSettings] = None) -> None:
 
 __all__ = [
     "init",
+    "start_statek",
+    "start_statek_async",
     "LLM_API_Settings",
     "StatekSettings",
     "MultiSourceBaseSettings",

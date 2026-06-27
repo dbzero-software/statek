@@ -4,7 +4,7 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import SupervisedAgent
-from statek.executors.job import Job
+from statek.executors.job import Job, JobDef
 from statek.executors.utils import process_agent_events
 from statek.prompt_config import make_system_prompt
 from statek.statek_push_queue import StatekPushQueue
@@ -44,6 +44,23 @@ def test_process_agent_events_creates_job_with_event_shared_var(db0_fixture):
     job = jobs[0]
     assert job.job_def.agent is agent
     assert job.py_env.local_state["event"] is event
+
+
+def test_process_agent_events_reuses_matching_job_def(db0_fixture):
+    agent = _make_agent()
+    queue = StatekPushQueue()
+    events = [_QueuedEvent("first"), _QueuedEvent("second")]
+    for event in events:
+        queue.push_to_agent_queue(agent, event)
+
+    process_agent_events(agents={agent}, max_count=10, queue_prefixes=_current_queue_prefixes())
+
+    jobs = list(db0.find(Job, db0.as_tag(agent)))
+    assert len(jobs) == 2
+    assert jobs[1].job_def is jobs[0].job_def
+    assert len(db0.find(JobDef, db0.as_tag(agent))) == 1
+    payloads = sorted(job.py_env.local_state["event"].payload for job in jobs)
+    assert payloads == ["first", "second"]
 
 
 def test_process_agent_events_uses_all_supervised_agents_when_filter_missing(db0_fixture):

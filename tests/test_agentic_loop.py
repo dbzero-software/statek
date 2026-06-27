@@ -7,7 +7,11 @@ import dbzero as db0
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.executors.job import parse_warmup_code
+from statek.executors.job import (
+    _JOBDEF_HASH_TAG_PREFIX,
+    _job_def_identity_tag,
+    parse_warmup_code,
+)
 from statek.executors.utils import _make_start_jobs_func, find_existing_job_def, run_agentic_loop
 from statek.pyenv import PyEnv
 
@@ -205,6 +209,88 @@ class TestFindExistingJobDef:
         # The same code passed as a raw string should resolve to the same parsed form
         result = find_existing_job_def(agent, "x = 1\nprint(x)")
         assert result is not None
+
+    def test_optimized_lookup_uses_single_short_hash_tag(
+        self, db0_fixture, agent, monkeypatch  # pylint: disable=unused-argument
+    ):
+        """Full-identity lookup queries by agent tag and one short hash tag."""
+        job_def = _make_tagged_job_def(agent, "print('hello')")
+        calls = []
+        original_find = db0.find
+
+        def recording_find(*args, **kwargs):
+            calls.append(args)
+            return original_find(*args, **kwargs)
+
+        monkeypatch.setattr(db0, "find", recording_find)
+
+        result = find_existing_job_def(
+            agent,
+            "print('hello')",
+            model_family=job_def.model_family,
+            model="test-model",
+            job_params=None,
+            locale=None,
+            chat_style=None,
+        )
+
+        assert result is job_def
+        first_call = calls[0]
+        hash_tags = [
+            arg for arg in first_call[1:]
+            if isinstance(arg, str) and arg.startswith(_JOBDEF_HASH_TAG_PREFIX)
+        ]
+        assert len(hash_tags) == 1
+        assert len(hash_tags[0]) == len(_JOBDEF_HASH_TAG_PREFIX) + 4
+        assert len(first_call[1:]) == 2
+
+    def test_hash_collision_still_uses_exact_comparison(
+        self, db0_fixture, agent, monkeypatch  # pylint: disable=unused-argument
+    ):
+        """A short-hash collision only widens candidates; exact matching wins."""
+        monkeypatch.setattr("statek.executors.job._job_def_identity_hash", lambda *args: "abc")
+        matching = _make_tagged_job_def(agent, "print('match')")
+        _make_tagged_job_def(agent, "print('collision')")
+
+        result = find_existing_job_def(
+            agent,
+            "print('match')",
+            model_family=matching.model_family,
+            model="test-model",
+            job_params=None,
+            locale=None,
+            chat_style=None,
+        )
+
+        assert result is matching
+
+    def test_legacy_untagged_match_falls_back_and_syncs_hash_tag(
+        self, db0_fixture, agent  # pylint: disable=unused-argument
+    ):
+        """Old JobDefs without the short hash tag still match and get tagged."""
+        job_def = _make_tagged_job_def(agent, "print('legacy')")
+        hash_tag = _job_def_identity_tag(
+            job_def.warmup_code,
+            job_def.model_family,
+            job_def.model,
+            job_def.job_params,
+            job_def.locale,
+            getattr(job_def, "_chat_style", None),
+        )
+        db0.tags(job_def).remove(hash_tag)
+
+        result = find_existing_job_def(
+            agent,
+            "print('legacy')",
+            model_family=job_def.model_family,
+            model="test-model",
+            job_params=None,
+            locale=None,
+            chat_style=None,
+        )
+
+        assert result is job_def
+        assert job_def in list(db0.find(JobDef, hash_tag))
 
 
 class TestRunAgenticLoop:
