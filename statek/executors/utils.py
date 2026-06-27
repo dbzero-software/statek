@@ -31,7 +31,14 @@ from statek.future import FutureResult
 
 from statek.exceptions import FutureError
 from statek.future import FutureResult
-from statek.executors.job import Job, JobStatus, JobDef, parse_warmup_code
+from statek.executors.job import (
+    Job,
+    JobStatus,
+    JobDef,
+    job_def_identity_tag_for_job_def,
+    parse_warmup_code,
+    _job_def_identity_tag,
+)
 from statek.executors.chat_log_item import ToolError, WarmupLogItem
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
@@ -51,6 +58,8 @@ from statek.utils import (
     _statek_ctx_for_job,
     _statek_ctx_scope,
 )
+
+_MATCH_UNSET = object()
 
 if TYPE_CHECKING:
     from statek.agents.agent import Agent
@@ -1329,6 +1338,9 @@ def find_existing_job_def(
     warmup_code: Optional[Union[str, Sequence]],
     model_family: Optional[str] = None,
     model: Optional[str] = None,
+    job_params: object = _MATCH_UNSET,
+    locale: object = _MATCH_UNSET,
+    chat_style: object = _MATCH_UNSET,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
@@ -1339,15 +1351,49 @@ def find_existing_job_def(
     Returns:
         The first matching JobDef, or None if not found
     """
-    parsed = parse_warmup_code(warmup_code)
-    for job_def in db0.find(JobDef, db0.as_tag(agent)):
+    def _matches(job_def):
         if job_def.warmup_code != parsed:
-            continue
+            return False
         if model_family is not None and job_def.model_family != model_family:
-            continue
+            return False
         if model is not None and job_def.model != model:
-            continue
-        return job_def
+            return False
+        if job_params is not _MATCH_UNSET and job_def.job_params != job_params:
+            return False
+        if locale is not _MATCH_UNSET and job_def.locale is not locale:
+            return False
+        if (
+            chat_style is not _MATCH_UNSET
+            and getattr(job_def, "_chat_style", None) != chat_style
+        ):
+            return False
+        return True
+
+    parsed = parse_warmup_code(warmup_code)
+    agent_tag = db0.as_tag(agent)
+    if (
+        model is not None
+        and job_params is not _MATCH_UNSET
+        and locale is not _MATCH_UNSET
+        and chat_style is not _MATCH_UNSET
+    ):
+        resolved_model_family = model_family or ensure_model_name(model).model_family
+        lookup_tag = _job_def_identity_tag(
+            parsed,
+            resolved_model_family,
+            model,
+            job_params,
+            locale,
+            chat_style,
+        )
+        for job_def in db0.find(JobDef, agent_tag, lookup_tag):
+            if _matches(job_def):
+                return job_def
+
+    for job_def in db0.find(JobDef, agent_tag):
+        if _matches(job_def):
+            job_def._sync_identity_hash_tag(job_def_identity_tag_for_job_def(job_def))  # pylint: disable=protected-access
+            return job_def
     return None
 
 
@@ -1491,7 +1537,13 @@ async def run_agentic_loop(agent: 'Agent',
     # Reuse an existing matching job definition or create a new one
     model_family, model_to_use = _resolve_job_def_model(agent, provider)
     job_def = find_existing_job_def(
-        agent, warmup_code, model_family=model_family, model=model_to_use
+        agent,
+        warmup_code,
+        model_family=model_family,
+        model=model_to_use,
+        job_params=None,
+        locale=None,
+        chat_style=None,
     )
     if job_def:
         # Clear any previous errors on the job definition they might'be been fixed after process restart
@@ -1548,7 +1600,13 @@ async def run_agentic_fleet(
 
         model_family, model_to_use = _resolve_job_def_model(agent, provider)
         job_def = find_existing_job_def(
-            agent, warmup_code, model_family=model_family, model=model_to_use
+            agent,
+            warmup_code,
+            model_family=model_family,
+            model=model_to_use,
+            job_params=None,
+            locale=None,
+            chat_style=None,
         )
         if job_def:
             job_def.clear_errors()

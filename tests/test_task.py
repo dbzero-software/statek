@@ -11,7 +11,7 @@ from statek.task import (
     TaskError, complete_sub_task, create_new_job, get_referenced_locals,
 )
 from statek.executors.chat_log_item import LLM_LogItem
-from statek.executors.job import Job, JobStatus
+from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.chat_log_item import UserLogItem
 from statek.agents.dialog_agent import DialogAgent, RecursiveReminder
 from statek.chat_style import ChatStyle
@@ -22,6 +22,10 @@ from statek.utils import _statek_ctx_scope
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
+
+
+def _send_dialog_body(body, **kwargs):  # pylint: disable=unused-argument
+    """Minimal dialog sender for tests."""
 
 
 def _run_with_current_job(job, func):
@@ -687,6 +691,61 @@ class TestCreateNewJob:
         assert job.py_env.local_state["x"] == 10
         assert job.py_env.local_state["alpha"] == 42
         assert "unused_var" not in job.py_env.local_state
+
+    def test_reuses_matching_job_def(self, db0_fixture, supervised_agent):
+        """Repeated identical jobs reuse one JobDef."""
+        first = create_new_job(
+            supervised_agent,
+            shared_vars={"alpha": 1},
+            topic="orders",
+        )
+        second = create_new_job(
+            supervised_agent,
+            shared_vars={"alpha": 2},
+            topic="orders",
+        )
+
+        assert second.job_def is first.job_def
+        assert len(db0.find(JobDef, db0.as_tag(supervised_agent))) == 1
+        assert first.py_env.local_state["alpha"] == 1
+        assert second.py_env.local_state["alpha"] == 2
+
+    def test_creates_distinct_job_def_for_different_static_inputs(
+        self, db0_fixture, supervised_agent
+    ):
+        """Warmup, params, and locale remain part of JobDef identity."""
+        locale = StatekLocale(
+            lang_code=StatekLangCode.EN,
+            country_code=StatekCountryCode.US,
+        )
+        base = create_new_job(supervised_agent, topic="orders")
+        different_warmup = create_new_job(
+            supervised_agent,
+            warmup_code="x = 1",
+            topic="orders",
+        )
+        different_params = create_new_job(supervised_agent, topic="staff")
+        different_locale = create_new_job(supervised_agent, topic="orders", locale=locale)
+
+        assert different_warmup.job_def is not base.job_def
+        assert different_params.job_def is not base.job_def
+        assert different_locale.job_def is not base.job_def
+        assert len(db0.find(JobDef, db0.as_tag(supervised_agent))) == 4
+
+    def test_reuses_dialog_job_def_with_same_chat_style(self, db0_fixture):
+        """Dialog job reuse includes the resolved chat style."""
+        agent = DialogAgent(
+            send_message=_send_dialog_body,
+            _metadata={"MODEL": "test-model"},
+        )
+
+        first = create_new_job(agent, chat_style=ChatStyle.DIRECT)
+        second = create_new_job(agent, chat_style=ChatStyle.DIRECT)
+        third = create_new_job(agent, chat_style=ChatStyle.MD_DIALOG)
+
+        assert second.job_def is first.job_def
+        assert third.job_def is not first.job_def
+        assert len(db0.find(JobDef, db0.as_tag(agent))) == 2
 
 
 class TestSubTaskHandler:

@@ -560,7 +560,7 @@ class SupervisedAgent(Agent):
         return _as_list(dynamic) + _as_list(agent_warmup)
 
 
-def update_warmup_defs(path: Path):
+def update_warmup_defs(path: Path, agents: Optional[Sequence[SupervisedAgent]] = None):
     """Load warmup definitions from .py files and apply to matching SupervisedAgents.
 
     Files are matched to agents by convention: the filename (without .py) must
@@ -568,8 +568,11 @@ def update_warmup_defs(path: Path):
 
     Args:
         path: Directory to scan for warmup definition files.
+        agents: Optional supervised agents to update. When None, all persisted
+            supervised agents are considered.
     """
-    agents_by_role = {agent.role: agent for agent in db0.find(SupervisedAgent)}  # pylint: disable=no-member
+    agents_to_update = agents if agents is not None else db0.find(SupervisedAgent)  # pylint: disable=no-member
+    agents_by_role = {agent.role: agent for agent in agents_to_update}
     for py_file in path.glob("*.py"):
         role = py_file.stem
         agent = agents_by_role.get(role)
