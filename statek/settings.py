@@ -99,10 +99,20 @@ class StatekSettings(MultiSourceBaseSettings):
     statek_model_info_dir: Optional[str] = None
     """Directory containing agent warmup definition .py files."""
     warmup_defs_dir: Optional[str] = None
+    """Python sandbox mode: restricted or off."""
+    python_sandbox_mode: str = "restricted"
+    """Maximum number of UTF-8 bytes accepted for an executed Python snippet."""
+    python_sandbox_max_source_bytes: int = 200_000
+    """Maximum AST nodes accepted for an executed Python snippet."""
+    python_sandbox_max_ast_nodes: int = 20_000
+    """Comma-separated import roots allowed in sandboxed Python."""
+    python_sandbox_allowed_imports: str = "datetime,calendar,statek"
+    """Comma-separated additional hidden/internal tool names allowed in sandboxed Python."""
+    python_sandbox_allowed_tools: str = ""
 
     model_config = SettingsConfigDict(extra='ignore')
 
-    def __init__(self, **data):  # pylint: disable=too-many-branches
+    def __init__(self, **data):  # pylint: disable=too-many-branches,too-many-statements
         """Initialize StatekSettings by parsing environment variables.
 
         Automatically detects provider-prefixed environment variables and
@@ -133,6 +143,10 @@ class StatekSettings(MultiSourceBaseSettings):
         if self.warmup_defs_dir is None:
             self.warmup_defs_dir = os.environ.get('STATEK_WARMUP_DEFS_DIR')
 
+        env_val = os.environ.get('STATEK_PYTHON_SANDBOX_MODE')
+        if env_val is not None and 'python_sandbox_mode' not in data:
+            self.python_sandbox_mode = env_val.lower()
+
         # Parse STATEK_ prefixed env vars for harness settings
         for attr, env_var, conv in [
             ('max_turns', 'STATEK_MAX_TURNS', int),
@@ -140,10 +154,20 @@ class StatekSettings(MultiSourceBaseSettings):
             ('max_consecutive_exceptions', 'STATEK_MAX_CONSECUTIVE_EXCEPTIONS', int),
             ('max_token_usage', 'STATEK_MAX_TOKEN_USAGE', int),
             ('limit_extension_per_completion', 'STATEK_LIMIT_EXTENSION_PER_COMPLETION', float),
+            ('python_sandbox_max_source_bytes', 'STATEK_PYTHON_SANDBOX_MAX_SOURCE_BYTES', int),
+            ('python_sandbox_max_ast_nodes', 'STATEK_PYTHON_SANDBOX_MAX_AST_NODES', int),
         ]:
             env_val = os.environ.get(env_var)
             if env_val is not None and attr not in data:
                 setattr(self, attr, conv(env_val))
+
+        env_val = os.environ.get('STATEK_PYTHON_SANDBOX_ALLOWED_IMPORTS')
+        if env_val is not None and 'python_sandbox_allowed_imports' not in data:
+            self.python_sandbox_allowed_imports = env_val
+
+        env_val = os.environ.get('STATEK_PYTHON_SANDBOX_ALLOWED_TOOLS')
+        if env_val is not None and 'python_sandbox_allowed_tools' not in data:
+            self.python_sandbox_allowed_tools = env_val
 
         env_val = os.environ.get('STATEK_CHAT_STYLE')
         if env_val is not None:
@@ -290,6 +314,19 @@ class StatekSettings(MultiSourceBaseSettings):
 
 
 
+_ACTIVE_STATEK_SETTINGS: Optional[StatekSettings] = None
+
+
+def set_statek_settings(settings: Optional[StatekSettings]) -> None:
+    """Set the process-active Statek settings instance."""
+    global _ACTIVE_STATEK_SETTINGS  # pylint: disable=global-statement
+    _ACTIVE_STATEK_SETTINGS = settings
+    get_statek_settings.cache_clear()
+    from statek.python_sandbox import reset_sandbox_policy  # pylint: disable=import-outside-toplevel
+
+    reset_sandbox_policy()
+
+
 @lru_cache()
 def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Settings]:
     """Get LLM_API_Settings for a specific provider or the default provider."""
@@ -299,6 +336,8 @@ def get_provider_settings(provider: Optional[str] = None) -> Optional[LLM_API_Se
 @lru_cache()
 def get_statek_settings() -> StatekSettings:
     """Get the cached StatekSettings instance."""
+    if _ACTIVE_STATEK_SETTINGS is not None:
+        return _ACTIVE_STATEK_SETTINGS
     return StatekSettings()
 
 

@@ -24,6 +24,7 @@ identified from the current package metadata.
 | certifi | 2026.6.17 | Transitive via httpx | MPL-2.0 |
 | idna | 3.18 | Transitive via httpx | BSD-3-Clause |
 | nest-asyncio | 1.6.0 | Direct runtime dependency | BSD license in package metadata |
+| RestrictedPython | 8.3 | Direct runtime dependency | ZPL-2.1 |
 
 ## Development Tools
 
