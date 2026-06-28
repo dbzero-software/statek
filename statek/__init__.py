@@ -24,7 +24,12 @@ except ImportError as exc:
         "or install dbzero-pro with `pip install statek[dbzero-pro]`."
     ) from exc
 
-from .settings import LLM_API_Settings, StatekSettings, get_statek_settings
+from .settings import (
+    LLM_API_Settings,
+    StatekSettings,
+    get_statek_settings,
+    set_statek_settings,
+)
 from .multi_source_settings import (
     MultiSourceBaseSettings,
     SettingValuesSource,
@@ -43,8 +48,16 @@ from .llm_api import (
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
 from .system import (tool, subtask, docstr, get_any, get_all, error_handler,
-                     is_valid_error_handler, docs_style, find_sub_task_handler)
-from .shared_context import init_shared_context, print_locals, shared_context_set_var
+                     is_valid_error_handler, docs_style, find_sub_task_handler,
+                     find_tools)
+from .shared_context import (
+    ContextCategory,
+    ContextCategoryDict,
+    ContextVar,
+    init_shared_context,
+    print_locals,
+    shared_context_set_var,
+)
 from .utils import (statek_print, format_default_llm_repr,
                     get_current_agent, get_current_agent_name, get_current_job)
 from .task import (
@@ -61,13 +74,28 @@ from . import task
 __version__ = "0.1.0"
 
 
-def init(settings: Optional[StatekSettings] = None) -> None:
+def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> None:
     """Initialize statek before first use.
 
     Loads model pricing from statek_model_info_dir when configured.
     """
     if settings is None:
         settings = get_statek_settings()
+    if not restricted:
+        settings.python_sandbox_mode = "off"
+    elif settings.python_sandbox_mode.lower() != "off":
+        settings.python_sandbox_mode = "restricted"
+    set_statek_settings(settings)
+    from .python_sandbox import configure_sandbox  # pylint: disable=import-outside-toplevel
+
+    configure_sandbox(
+        settings,
+        blocked_tools={
+            fn.__name__
+            for fn in find_tools(None, include_hidden=True)
+            if getattr(fn, "tool_hidden", False)
+        },
+    )
     if settings.statek_model_info_dir:
         from .model_pricing import init_model_pricing  # pylint: disable=import-outside-toplevel
         init_model_pricing(settings.statek_model_info_dir)
@@ -129,6 +157,9 @@ __all__ = [
     "create_new_job",
     "create_sub_task",
     "find_sub_task_handler",
+    "ContextCategory",
+    "ContextCategoryDict",
+    "ContextVar",
     "init_shared_context",
     "print_locals",
     "shared_context_set_var",
