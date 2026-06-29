@@ -2,7 +2,7 @@
 -r requirements.txt
 
 # Testing
-dbzero>=0.4.0
+dbzero>=0.4.1
 pytest>=7.0
 pytest-asyncio==1.3.0
 

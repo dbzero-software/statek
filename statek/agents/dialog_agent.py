@@ -67,7 +67,7 @@ class Reminder(ABC):
 
 @db0.memo
 @dataclass
-class RecursiveReminder(Reminder):
+class RecurringReminder(Reminder):
     """Reminder that should be re-applied whenever the condition is reached."""
 
     min_dialog_len: Optional[int] = None
@@ -80,6 +80,10 @@ class RecursiveReminder(Reminder):
             if idx >= self.min_dialog_len:
                 return True
         return False
+
+
+# Backward-compatible alias for the old public name.
+RecursiveReminder = RecurringReminder
 
 
 @db0.memo
@@ -140,21 +144,22 @@ class DialogAgent(SupervisedAgent):
         return getattr(self, "_DialogAgent__reminder", None)
 
     def set_new_reminder(  # pylint: disable=redefined-builtin
-        self, text: str, type: str = "RECURSIVE", **kwargs
+        self, text: str, type: str = "RECURRING", **kwargs
     ) -> Reminder:
         """Create and configure a reminder for dialog job looping.
 
         Args:
             text: Reminder text to feed back to the dialog.
-            type: Reminder kind. Supported value: ``RECURSIVE``.
+            type: Reminder kind. Supported value: ``RECURRING``.
+                ``RECURSIVE`` is accepted as a compatibility alias.
             **kwargs: Reminder implementation-specific properties.
 
         Returns:
             The stored reminder instance.
         """
         reminder_type = type.upper()
-        if reminder_type == "RECURSIVE":
-            self.__reminder = RecursiveReminder(text=text, **kwargs)
+        if reminder_type in {"RECURRING", "RECURSIVE"}:
+            self.__reminder = RecurringReminder(text=text, **kwargs)
         else:
             raise ValueError(f"Unsupported reminder type: {type}")
         return self.__reminder

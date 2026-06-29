@@ -18,10 +18,19 @@ from __future__ import annotations
 
 import ast
 import builtins
+import calendar
+import collections
 import copy
-import importlib
+import datetime
+import decimal
+import fractions
+import functools
+import itertools
+import json
+import math
 import operator
 import re
+import statistics
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -138,6 +147,11 @@ _INPLACE_OPERATORS = {
     "|=": operator.or_,
 }
 
+DEFAULT_ALLOWED_IMPORTS = (
+    "datetime,calendar,re,math,decimal,fractions,statistics,collections,"
+    "itertools,functools,operator,json"
+)
+
 _PYTHON_FENCE_RE = re.compile(
     r"```(?P<lang>[A-Za-z0-9_+.-]*)[^\n]*\n(?P<code>.*?)```",
     re.DOTALL,
@@ -176,6 +190,309 @@ def _blocked_import(name: str, allowed_imports: set[str], level: int):
     root = name.split(".", 1)[0]
     if root not in allowed_imports:
         raise SandboxViolation(f"import '{root}' is not allowed")
+    if name != root:
+        raise SandboxViolation(f"import '{name}' is not available in the sandbox")
+
+
+def _blocked_import_name(module_name: str, imported_name: str, allowed_imports: set[str]) -> None:
+    _blocked_import(module_name, allowed_imports, level=0)
+    if imported_name.startswith("_"):
+        raise SandboxViolation(f"import '{imported_name}' is not allowed")
+    try:
+        getattr(_SAFE_IMPORTS[module_name], imported_name)
+    except KeyError as exc:
+        raise SandboxViolation(
+            f"import '{module_name}' is not available in the sandbox"
+        ) from exc
+    except SandboxViolation as exc:
+        raise SandboxViolation(f"import '{imported_name}' is not allowed") from exc
+
+
+class _SandboxModule:
+    """Minimal attribute wrapper for modules exposed to sandboxed code."""
+
+    __slots__ = ("_name", "_exports")
+
+    def __init__(self, name: str, exports: dict[str, object]):
+        object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_exports", dict(exports))
+
+    def __getattribute__(self, name: str):
+        if name == "__class__":
+            return type(self)
+        if name in {"_name", "_exports"}:
+            return object.__getattribute__(self, name)
+        if name.startswith("_") or (name.startswith("__") and name.endswith("__")):
+            module_name = object.__getattribute__(self, "_name")
+            raise SandboxViolation(f"attribute '{module_name}.{name}' is not allowed")
+        exports = object.__getattribute__(self, "_exports")
+        try:
+            return exports[name]
+        except KeyError as exc:
+            module_name = object.__getattribute__(self, "_name")
+            raise SandboxViolation(f"attribute '{module_name}.{name}' is not allowed") from exc
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise SandboxViolation("sandbox module attributes are read-only")
+
+    def __delattr__(self, name: str) -> None:
+        raise SandboxViolation("sandbox module attributes are read-only")
+
+    def __repr__(self) -> str:
+        name = object.__getattribute__(self, "_name")
+        return f"<sandbox module {name}>"
+
+
+_SAFE_IMPORTS = {
+    "datetime": _SandboxModule(
+        "datetime",
+        {
+            "date": datetime.date,
+            "datetime": datetime.datetime,
+            "time": datetime.time,
+            "timedelta": datetime.timedelta,
+            "timezone": datetime.timezone,
+        },
+    ),
+    "calendar": _SandboxModule(
+        "calendar",
+        {
+            "monthrange": calendar.monthrange,
+            "weekday": calendar.weekday,
+            "isleap": calendar.isleap,
+            "day_name": calendar.day_name,
+            "day_abbr": calendar.day_abbr,
+            "month_name": calendar.month_name,
+            "month_abbr": calendar.month_abbr,
+        },
+    ),
+    "re": _SandboxModule(
+        "re",
+        {
+            "compile": re.compile,
+            "search": re.search,
+            "match": re.match,
+            "fullmatch": re.fullmatch,
+            "findall": re.findall,
+            "finditer": re.finditer,
+            "sub": re.sub,
+            "subn": re.subn,
+            "split": re.split,
+            "escape": re.escape,
+            "ASCII": re.ASCII,
+            "A": re.A,
+            "IGNORECASE": re.IGNORECASE,
+            "I": re.I,
+            "LOCALE": re.LOCALE,
+            "L": re.L,
+            "MULTILINE": re.MULTILINE,
+            "M": re.M,
+            "DOTALL": re.DOTALL,
+            "S": re.S,
+            "VERBOSE": re.VERBOSE,
+            "X": re.X,
+            "NOFLAG": re.NOFLAG,
+        },
+    ),
+    "math": _SandboxModule(
+        "math",
+        {
+            "acos": math.acos,
+            "acosh": math.acosh,
+            "asin": math.asin,
+            "asinh": math.asinh,
+            "atan": math.atan,
+            "atan2": math.atan2,
+            "atanh": math.atanh,
+            "ceil": math.ceil,
+            "comb": math.comb,
+            "copysign": math.copysign,
+            "cos": math.cos,
+            "cosh": math.cosh,
+            "degrees": math.degrees,
+            "dist": math.dist,
+            "erf": math.erf,
+            "erfc": math.erfc,
+            "exp": math.exp,
+            "expm1": math.expm1,
+            "fabs": math.fabs,
+            "factorial": math.factorial,
+            "floor": math.floor,
+            "fmod": math.fmod,
+            "frexp": math.frexp,
+            "fsum": math.fsum,
+            "gamma": math.gamma,
+            "gcd": math.gcd,
+            "hypot": math.hypot,
+            "isclose": math.isclose,
+            "isfinite": math.isfinite,
+            "isinf": math.isinf,
+            "isnan": math.isnan,
+            "isqrt": math.isqrt,
+            "lcm": math.lcm,
+            "ldexp": math.ldexp,
+            "lgamma": math.lgamma,
+            "log": math.log,
+            "log10": math.log10,
+            "log1p": math.log1p,
+            "log2": math.log2,
+            "modf": math.modf,
+            "nextafter": math.nextafter,
+            "perm": math.perm,
+            "pow": math.pow,
+            "prod": math.prod,
+            "radians": math.radians,
+            "remainder": math.remainder,
+            "sin": math.sin,
+            "sinh": math.sinh,
+            "sqrt": math.sqrt,
+            "tan": math.tan,
+            "tanh": math.tanh,
+            "trunc": math.trunc,
+            "ulp": math.ulp,
+            "pi": math.pi,
+            "e": math.e,
+            "tau": math.tau,
+            "inf": math.inf,
+            "nan": math.nan,
+        },
+    ),
+    "decimal": _SandboxModule(
+        "decimal",
+        {
+            "Decimal": decimal.Decimal,
+            "ROUND_CEILING": decimal.ROUND_CEILING,
+            "ROUND_FLOOR": decimal.ROUND_FLOOR,
+            "ROUND_UP": decimal.ROUND_UP,
+            "ROUND_DOWN": decimal.ROUND_DOWN,
+            "ROUND_HALF_UP": decimal.ROUND_HALF_UP,
+            "ROUND_HALF_DOWN": decimal.ROUND_HALF_DOWN,
+            "ROUND_HALF_EVEN": decimal.ROUND_HALF_EVEN,
+            "ROUND_05UP": decimal.ROUND_05UP,
+        },
+    ),
+    "fractions": _SandboxModule("fractions", {"Fraction": fractions.Fraction}),
+    "statistics": _SandboxModule(
+        "statistics",
+        {
+            "StatisticsError": statistics.StatisticsError,
+            "mean": statistics.mean,
+            "fmean": statistics.fmean,
+            "geometric_mean": statistics.geometric_mean,
+            "harmonic_mean": statistics.harmonic_mean,
+            "median": statistics.median,
+            "median_low": statistics.median_low,
+            "median_high": statistics.median_high,
+            "median_grouped": statistics.median_grouped,
+            "mode": statistics.mode,
+            "multimode": statistics.multimode,
+            "pstdev": statistics.pstdev,
+            "pvariance": statistics.pvariance,
+            "stdev": statistics.stdev,
+            "variance": statistics.variance,
+            "quantiles": statistics.quantiles,
+            "correlation": statistics.correlation,
+            "covariance": statistics.covariance,
+            "linear_regression": statistics.linear_regression,
+        },
+    ),
+    "collections": _SandboxModule(
+        "collections",
+        {
+            "Counter": collections.Counter,
+            "deque": collections.deque,
+            "defaultdict": collections.defaultdict,
+            "OrderedDict": collections.OrderedDict,
+        },
+    ),
+    "itertools": _SandboxModule(
+        "itertools",
+        {
+            "accumulate": itertools.accumulate,
+            "chain": itertools.chain,
+            "combinations": itertools.combinations,
+            "combinations_with_replacement": itertools.combinations_with_replacement,
+            "compress": itertools.compress,
+            "count": itertools.count,
+            "cycle": itertools.cycle,
+            "dropwhile": itertools.dropwhile,
+            "filterfalse": itertools.filterfalse,
+            "groupby": itertools.groupby,
+            "islice": itertools.islice,
+            "pairwise": itertools.pairwise,
+            "permutations": itertools.permutations,
+            "product": itertools.product,
+            "repeat": itertools.repeat,
+            "starmap": itertools.starmap,
+            "takewhile": itertools.takewhile,
+            "tee": itertools.tee,
+            "zip_longest": itertools.zip_longest,
+        },
+    ),
+    "functools": _SandboxModule("functools", {"reduce": functools.reduce}),
+    "operator": _SandboxModule(
+        "operator",
+        {
+            "abs": operator.abs,
+            "add": operator.add,
+            "and_": operator.and_,
+            "concat": operator.concat,
+            "contains": operator.contains,
+            "countOf": operator.countOf,
+            "eq": operator.eq,
+            "floordiv": operator.floordiv,
+            "ge": operator.ge,
+            "gt": operator.gt,
+            "index": operator.index,
+            "indexOf": operator.indexOf,
+            "inv": operator.inv,
+            "invert": operator.invert,
+            "is_": operator.is_,
+            "is_not": operator.is_not,
+            "le": operator.le,
+            "length_hint": operator.length_hint,
+            "lshift": operator.lshift,
+            "lt": operator.lt,
+            "matmul": operator.matmul,
+            "mod": operator.mod,
+            "mul": operator.mul,
+            "ne": operator.ne,
+            "neg": operator.neg,
+            "not_": operator.not_,
+            "or_": operator.or_,
+            "pos": operator.pos,
+            "pow": operator.pow,
+            "rshift": operator.rshift,
+            "sub": operator.sub,
+            "truediv": operator.truediv,
+            "truth": operator.truth,
+            "xor": operator.xor,
+        },
+    ),
+    "json": _SandboxModule("json", {"loads": json.loads, "dumps": json.dumps}),
+}
+
+
+def _is_safe_export(value: object) -> bool:
+    return any(
+        value is exported
+        for module in _SAFE_IMPORTS.values()
+        for exported in object.__getattribute__(module, "_exports").values()
+    )
+
+
+def _safe_import(name: str, allowed_imports: set[str], level: int):
+    _blocked_import(name, allowed_imports, level)
+    root = name.split(".", 1)[0]
+    try:
+        return _SAFE_IMPORTS[root]
+    except KeyError as exc:
+        raise SandboxViolation(f"import '{root}' is not available in the sandbox") from exc
+
+
+def is_sandbox_transient_value(value: object) -> bool:
+    """Return whether a runtime value should not be persisted after sandbox execution."""
+    return isinstance(value, _SandboxModule) or _is_safe_export(value)
 
 
 def _is_private_name_only_restrictedpython_error(exc: SyntaxError) -> bool:
@@ -195,7 +512,7 @@ class SandboxPolicy:
 
     max_source_bytes: int = 200_000
     max_ast_nodes: int = 20_000
-    allowed_imports: set[str] = field(default_factory=lambda: {"datetime", "calendar", "statek"})
+    allowed_imports: set[str] = field(default_factory=lambda: _csv_set(DEFAULT_ALLOWED_IMPORTS))
     allowed_tools: set[str] = field(default_factory=set)
     blocked_tools: set[str] = field(default_factory=set)
     _globals_template: dict = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -215,7 +532,7 @@ class SandboxPolicy:
             max_source_bytes=_setting_int(settings, "python_sandbox_max_source_bytes", 200_000),
             max_ast_nodes=_setting_int(settings, "python_sandbox_max_ast_nodes", 20_000),
             allowed_imports=_csv_set(
-                _setting_str(settings, "python_sandbox_allowed_imports", "datetime,calendar,statek")
+                _setting_str(settings, "python_sandbox_allowed_imports", DEFAULT_ALLOWED_IMPORTS)
             ),
             allowed_tools=set(allowed_tools or set()) | configured_tools,
             blocked_tools=set(blocked_tools or set()) - configured_tools,
@@ -311,8 +628,7 @@ class SandboxPolicy:
         fromlist=(),  # pylint: disable=unused-argument
         level: int = 0,
     ):
-        _blocked_import(name, self.allowed_imports, level)
-        return importlib.import_module(name)
+        return _safe_import(name, self.allowed_imports, level)
 
 
 def _settings_sandbox_mode(settings: StatekSettings) -> str:
@@ -382,6 +698,8 @@ class _PolicyVisitor(ast.NodeVisitor):
         if node.module is None:
             raise SandboxViolation("relative imports are not allowed")
         _blocked_import(node.module, self.policy.allowed_imports, node.level)
+        for alias in node.names:
+            _blocked_import_name(node.module, alias.name, self.policy.allowed_imports)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call):  # pylint: disable=invalid-name

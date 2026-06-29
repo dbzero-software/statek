@@ -70,6 +70,13 @@ from .task import (
 )
 from .runner import start_statek, start_statek_async
 from . import task
+from .dbzero_restricted import (
+    DbzeroRestrictedModeError,
+    dbzero_restricted_enabled,
+    open_prefix,
+    validate_current_prefix_restricted,
+    validate_dbzero_restricted,
+)
 
 __version__ = "0.1.0"
 
@@ -86,6 +93,7 @@ def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> 
     elif settings.python_sandbox_mode.lower() != "off":
         settings.python_sandbox_mode = "restricted"
     set_statek_settings(settings)
+    validate_dbzero_restricted(settings)
     from .python_sandbox import configure_sandbox  # pylint: disable=import-outside-toplevel
 
     configure_sandbox(
@@ -105,6 +113,11 @@ __all__ = [
     "init",
     "start_statek",
     "start_statek_async",
+    "DbzeroRestrictedModeError",
+    "dbzero_restricted_enabled",
+    "open_prefix",
+    "validate_current_prefix_restricted",
+    "validate_dbzero_restricted",
     "LLM_API_Settings",
     "StatekSettings",
     "MultiSourceBaseSettings",

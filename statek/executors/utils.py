@@ -54,8 +54,10 @@ from statek.utils import (
     extract_dialog,
     get_current_job,
     get_current_agent,
+    perm_ctx_set,
     parse_dialog,
     strip_markup,
+    statek_ctx_get,
     _statek_ctx_for_job,
     _statek_ctx_scope,
 )
@@ -104,6 +106,16 @@ class _MirrorDict(dict):
         super().__setitem__(key, value)
         if self._target is not None:
             self._target[key] = value
+
+    def __delitem__(self, key):
+        if self._fallback is not None:
+            ensure_writable = getattr(self._fallback, "ensure_writable", None)
+            if ensure_writable is not None:
+                ensure_writable(key)
+            self._fallback.pop(key, None)
+        super().__delitem__(key)
+        if self._target is not None:
+            self._target.pop(key, None)
 
 
 def _wrap_param(param):
@@ -274,6 +286,8 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     global_context['_smart_call'] = _smart_call
     global_context['_wrap_param'] = _wrap_param
     global_context['_fmt_fstring_arg'] = _fmt_print_arg
+    global_context['statek_ctx_get'] = statek_ctx_get
+    global_context['perm_ctx_set'] = perm_ctx_set
 
     missing_ctx = object()
     previous_local_statek_ctx = local_context.get('_STATEK_CTX', missing_ctx)
@@ -296,9 +310,19 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
             builtins.exit = original_exit
 
             # Remove helpers from context
-            for key in ['print', 'exit', '_smart_call', '_wrap_param', '_fmt_fstring_arg']:
+            for key in [
+                'print',
+                'exit',
+                '_smart_call',
+                '_wrap_param',
+                '_fmt_fstring_arg',
+                'statek_ctx_get',
+                'perm_ctx_set',
+            ]:
                 if key in local_context:
                     del local_context[key]
+                if key in global_context:
+                    del global_context[key]
             if previous_local_statek_ctx is missing_ctx:
                 local_context.pop('_STATEK_CTX', None)
             else:
@@ -346,7 +370,11 @@ def _value_changed(before, after) -> bool:
 
 def _copy_modified_locals(current_locals: dict, job_locals: dict) -> None:
     """Copy locals from then current execution step into job persistent locals without dropping keys"""
+    from statek.python_sandbox import is_sandbox_transient_value  # pylint: disable=import-outside-toplevel
+
     for key, value in current_locals.items():
+        if is_sandbox_transient_value(value):
+            continue
         if key not in job_locals or _value_changed(job_locals[key], value):
             job_locals[key] = value
 
