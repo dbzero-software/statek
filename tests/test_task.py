@@ -13,7 +13,7 @@ from statek.task import (
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.chat_log_item import UserLogItem
-from statek.agents.dialog_agent import DialogAgent, RecursiveReminder
+from statek.agents.dialog_agent import DialogAgent, RecurringReminder, RecursiveReminder
 from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
@@ -1404,25 +1404,40 @@ class TestDialogAgentReminder:
 
         assert agent.reminder is None
 
-    def test_set_new_reminder_creates_recursive_reminder_by_default(self, db0_fixture):
-        """set_new_reminder stores a recursive reminder by default."""
+    def test_set_new_reminder_creates_recurring_reminder_by_default(self, db0_fixture):
+        """set_new_reminder stores a recurring reminder by default."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
 
         reminder = agent.set_new_reminder("Use report_outcome.")
 
-        assert isinstance(reminder, RecursiveReminder)
+        assert isinstance(reminder, RecurringReminder)
         assert reminder.text == "Use report_outcome."
         assert agent.reminder is reminder
 
-    def test_set_new_reminder_passes_recursive_reminder_kwargs(self, db0_fixture):
+    def test_set_new_reminder_passes_recurring_reminder_kwargs(self, db0_fixture):
         """set_new_reminder forwards implementation-specific reminder properties."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
 
         reminder = agent.set_new_reminder("Use report_outcome.", min_dialog_len=3)
 
-        assert isinstance(reminder, RecursiveReminder)
+        assert isinstance(reminder, RecurringReminder)
         assert reminder.min_dialog_len == 3
         assert agent.reminder is reminder
+
+    def test_set_new_reminder_accepts_recursive_type_alias(self, db0_fixture):
+        """set_new_reminder accepts the old RECURSIVE type as an alias."""
+        agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
+
+        reminder = agent.set_new_reminder("Use report_outcome.", type="RECURSIVE")
+
+        assert isinstance(reminder, RecurringReminder)
+        assert agent.reminder is reminder
+
+    def test_recursive_reminder_alias_is_available(self, db0_fixture):
+        """RecursiveReminder remains as a backward-compatible class alias."""
+        reminder = RecursiveReminder(text="Use report_outcome.")
+
+        assert isinstance(reminder, RecurringReminder)
 
     def test_set_new_reminder_rejects_base_reminder_type(self, db0_fixture):
         """set_new_reminder does not instantiate the base reminder type."""
@@ -1441,7 +1456,7 @@ class TestDialogAgentReminder:
     def test_set_reminder_accepts_same_prefix_reminder(self, db0_fixture):
         """set_reminder stores a preconfigured reminder on the same prefix."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
-        reminder = RecursiveReminder(text="Use report_outcome.", min_dialog_len=3)
+        reminder = RecurringReminder(text="Use report_outcome.", min_dialog_len=3)
 
         stored = agent.set_reminder(reminder)
 
@@ -1459,7 +1474,7 @@ class TestDialogAgentReminder:
         """set_reminder rejects reminders stored outside the agent prefix."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         db0.open("other_prefix", "rw")
-        reminder = RecursiveReminder(text="Use report_outcome.")
+        reminder = RecurringReminder(text="Use report_outcome.")
 
         with pytest.raises(ValueError, match="same db0 prefix"):
             agent.set_reminder(reminder)

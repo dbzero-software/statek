@@ -23,7 +23,7 @@ from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
 from statek.model_pricing import set_model_pricing
 from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
-from statek.agents.dialog_agent import RecursiveReminder
+from statek.agents.dialog_agent import RecurringReminder
 from statek.executors.chat_log_item import (
     LLM_LogItem,
     ReminderLogItem,
@@ -2389,18 +2389,18 @@ class TestUserLogItem:
 class TestJobHandleReminder:
     """Tests for Job.handle_reminder."""
 
-    def test_recursive_reminder_without_min_dialog_len_is_ready(self, job_factory):
-        """RecursiveReminder is ready by default."""
+    def test_recurring_reminder_without_min_dialog_len_is_ready(self, job_factory):
+        """RecurringReminder is ready by default."""
         job = job_factory()
-        reminder = RecursiveReminder(text="Use report_outcome.")
+        reminder = RecurringReminder(text="Use report_outcome.")
 
         assert reminder.fire_ready(job) is True
 
-    def test_recursive_reminder_waits_for_min_dialog_len(self, job_factory):
+    def test_recurring_reminder_waits_for_min_dialog_len(self, job_factory):
         """min_dialog_len gates reminders on the dialog length."""
         job = job_factory()
         job.chat_log.append("initial user message")
-        reminder = RecursiveReminder(text="Use report_outcome.", min_dialog_len=2)
+        reminder = RecurringReminder(text="Use report_outcome.", min_dialog_len=2)
 
         assert reminder.fire_ready(job) is False
 
@@ -2415,11 +2415,11 @@ class TestJobHandleReminder:
 
         assert reminder.fire_ready(job) is True
 
-    def test_recursive_reminder_is_processed(self, job_factory):
-        """RecursiveReminder appends console text and records a ReminderLogItem."""
+    def test_recurring_reminder_is_processed(self, job_factory):
+        """RecurringReminder appends console text and records a ReminderLogItem."""
         job = job_factory()
         job.py_env.console = ["existing"]
-        reminder = RecursiveReminder(text="Use report_outcome.")
+        reminder = RecurringReminder(text="Use report_outcome.")
 
         processed = job.handle_reminder(reminder)
 
@@ -2433,7 +2433,7 @@ class TestJobHandleReminder:
     def test_unready_reminder_is_skipped(self, job_factory):
         """Unready reminders are skipped without side effects."""
         job = job_factory()
-        reminder = RecursiveReminder(text="Not yet supported.", min_dialog_len=1)
+        reminder = RecurringReminder(text="Not yet supported.", min_dialog_len=1)
 
         processed = job.handle_reminder(reminder)
 
@@ -2646,7 +2646,7 @@ class TestGetNextRequestUserMessages:
     def test_reminder_log_item_in_chat_log_yields_system_item(self, job_factory):
         """A ReminderLogItem is yielded as an injected SYSTEM ChatHistoryItem."""
         job = job_factory()
-        reminder = RecursiveReminder(text="Use report_outcome before finishing.")
+        reminder = RecurringReminder(text="Use report_outcome before finishing.")
         job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
 
         history = list(job.get_next_request()["chat_history"])
@@ -2659,7 +2659,7 @@ class TestGetNextRequestUserMessages:
     def test_reminder_log_item_formats_as_system_message(self, job_factory):
         """Reminder content is sent to OpenAI-compatible LLMs as role=system."""
         job = job_factory()
-        reminder = RecursiveReminder(text="Use report_outcome before finishing.")
+        reminder = RecurringReminder(text="Use report_outcome before finishing.")
         job.chat_log.append(ReminderLogItem(console_pos=0, reminder=reminder))
         history = list(job.get_next_request()["chat_history"])
         settings = types.SimpleNamespace(get_xml_box_tags=lambda: {"console": "out"})

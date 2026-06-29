@@ -1226,10 +1226,7 @@ class TestExecStepStatekCtx:
     async def test_statek_ctx_get_current_job_in_exec_step(self, job_factory):
         """statek_ctx_get resolves the current job inside executed code."""
         job = job_factory()
-        await exec_step(
-            'from statek.utils import statek_ctx_get\n_ctx_job = statek_ctx_get("job")',
-            job,
-        )
+        await exec_step('_ctx_job = statek_ctx_get("job")', job)
         assert job.py_env.local_state.get('_ctx_job') is job
 
     @pytest.mark.asyncio
@@ -1257,7 +1254,7 @@ class TestExecStepStatekCtx:
     async def test_perm_ctx_created_on_demand_persists_after_exec_step(self, job_factory):
         """_PERM_CTX is created only when requested and remains in PyEnv locals."""
         job = job_factory()
-        await exec_step('from statek.utils import perm_ctx_set\nperm_ctx_set(key="value")', job)
+        await exec_step('perm_ctx_set(key="value")', job)
         assert job.py_env.local_state["_PERM_CTX"] == {"key": "value"}
 
     @pytest.mark.asyncio

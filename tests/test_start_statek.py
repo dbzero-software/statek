@@ -15,7 +15,7 @@ from statek.statek_push_queue import StatekPushQueue
 
 
 def _settings(**kwargs):
-    data = {"prompt_defs": {}, "warmup_defs_dir": None}
+    data = {"prompt_defs": {}, "warmup_defs_dir": None, "python_sandbox_mode": "off"}
     data.update(kwargs)
     return StatekSettings(**data)
 
