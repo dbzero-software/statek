@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Optional
 
 import dbzero as db0
@@ -25,6 +27,22 @@ from statek.settings import StatekSettings, get_statek_settings
 
 class DbzeroRestrictedModeError(RuntimeError):
     """Raised when Statek restricted mode is not backed by dbzero restricted mode."""
+
+
+_DBZERO_RESTRICTED_CONTEXT: ContextVar[bool] = ContextVar(
+    "statek_dbzero_restricted",
+    default=False,
+)
+
+
+@contextmanager
+def llm_dbzero_restricted_context():
+    """Temporarily enable dbzero restricted mode for LLM-authored code."""
+    token = _DBZERO_RESTRICTED_CONTEXT.set(True)
+    try:
+        yield
+    finally:
+        _DBZERO_RESTRICTED_CONTEXT.reset(token)
 
 
 def _statek_restricted(settings: Optional[StatekSettings] = None) -> bool:
@@ -50,6 +68,29 @@ def _dbzero_config() -> Optional[dict[str, Any]]:
         ) from exc
 
 
+def configure_dbzero_restricted_context(settings: Optional[StatekSettings] = None) -> None:
+    """Configure dbzero to use Statek's dynamic restricted-mode context."""
+    if not _statek_restricted(settings):
+        return
+
+    config = _dbzero_config()
+    if config is None:
+        raise DbzeroRestrictedModeError(
+            "Statek restricted mode requires dbzero to be initialized before statek.init()."
+        )
+    if config.get("restricted", False):
+        return
+
+    try:
+        db0.set_restricted(  # pylint: disable=no-member
+            restricted_context=_DBZERO_RESTRICTED_CONTEXT
+        )
+    except AttributeError as exc:
+        raise DbzeroRestrictedModeError(
+            "Statek restricted mode requires dbzero >= 0.4.2 with set_restricted()."
+        ) from exc
+
+
 def dbzero_restricted_enabled() -> Optional[bool]:
     """Return dbzero global restricted mode, or None when dbzero is not initialized."""
     config = _dbzero_config()
@@ -59,23 +100,15 @@ def dbzero_restricted_enabled() -> Optional[bool]:
 
 
 def validate_dbzero_restricted(settings: Optional[StatekSettings] = None) -> None:
-    """Validate that initialized dbzero is restricted when Statek is restricted."""
-    if not _statek_restricted(settings):
-        return
-
-    restricted = dbzero_restricted_enabled()
-    if restricted is None:
-        return
-    if not restricted:
-        raise DbzeroRestrictedModeError(
-            "Statek restricted mode requires dbzero to be initialized with "
-            "restricted=True."
-        )
+    """Validate/configure dbzero restricted mode when Statek is restricted."""
+    configure_dbzero_restricted_context(settings)
 
 
 def validate_current_prefix_restricted(settings: Optional[StatekSettings] = None) -> None:
-    """Validate the current dbzero prefix is restricted when Statek is restricted."""
+    """Validate the current dbzero prefix when Statek uses static dbzero restriction."""
     if not _statek_restricted(settings):
+        return
+    if dbzero_restricted_enabled() is False:
         return
     try:
         stats = db0.get_prefix_stats()  # pylint: disable=no-member
@@ -112,7 +145,6 @@ def open_prefix(
             raise DbzeroRestrictedModeError(
                 "Statek restricted mode cannot open dbzero prefixes with restricted=False."
             )
-        kwargs["restricted"] = True
     elif restricted is not None:
         kwargs["restricted"] = restricted
 

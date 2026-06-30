@@ -38,6 +38,49 @@ def _call_spec(func_name, args=None, kwargs=None):
     return CallSpec(id="SANDBOX-001", func_name=func_name, args=args or [], kwargs=kwargs or {})
 
 
+@db0.memo
+class RestrictedContextProbe:
+    """Memo object used to detect dbzero restricted-context state."""
+
+    def __init__(self, value):
+        self.value = value
+        self.label = "probe"
+        self._private = "secret"
+
+    @property
+    def public_property(self):
+        return self.value + 1
+
+    @property
+    def callable_property(self):
+        return _probe_dbzero_mode
+
+    def public_method(self):
+        return self.value
+
+
+def _probe_dbzero_mode(probe):
+    try:
+        probe.__class__  # pylint: disable=pointless-statement
+    except AttributeError:
+        return "restricted"
+    return "unrestricted"
+
+
+def _inspect_probe_then_raise(probe, observed_modes):
+    observed_modes.append(_probe_dbzero_mode(probe))
+    raise RuntimeError("boom")
+
+
+DENIED_ATTACK_ERRORS = (
+    SandboxViolation,
+    AttributeError,
+    NameError,
+    TypeError,
+    RuntimeError,
+)
+
+
 @tool
 def visible_tool(value: str, **kwargs):  # pylint: disable=unused-argument
     return f"visible: {value}"
@@ -68,7 +111,7 @@ def _job_with_tools(tools=None):
     )
 
 
-def test_statek_init_enables_restricted_mode_by_default():
+def test_statek_init_enables_restricted_mode_by_default(db0_fixture):  # pylint: disable=unused-argument
     statek.init(StatekSettings(prompt_defs={}))
 
     assert get_statek_settings().python_sandbox_mode == "restricted"
@@ -80,14 +123,43 @@ def test_statek_init_restricted_false_disables_mode():
     assert get_statek_settings().python_sandbox_mode == "off"
 
 
-def test_statek_init_restricted_mode_requires_restricted_dbzero(monkeypatch):
+def test_statek_init_restricted_mode_requires_initialized_dbzero():
+    with pytest.raises(DbzeroRestrictedModeError, match="dbzero to be initialized"):
+        statek.init(StatekSettings(prompt_defs={}))
+
+
+def test_statek_init_restricted_mode_configures_dbzero_context(monkeypatch):
+    calls = []
     monkeypatch.setattr(
         "statek.dbzero_restricted.db0.get_config",
         lambda: {"restricted": False},
     )
+    monkeypatch.setattr(
+        "statek.dbzero_restricted.db0.set_restricted",
+        lambda **kwargs: calls.append(kwargs),
+    )
 
-    with pytest.raises(DbzeroRestrictedModeError, match="restricted=True"):
-        statek.init(StatekSettings(prompt_defs={}))
+    statek.init(StatekSettings(prompt_defs={}))
+
+    assert len(calls) == 1
+    restricted_context = calls[0]["restricted_context"]
+    assert restricted_context.get() is False
+
+
+def test_statek_init_accepts_static_restricted_dbzero(monkeypatch):
+    monkeypatch.setattr(
+        "statek.dbzero_restricted.db0.get_config",
+        lambda: {"restricted": True},
+    )
+
+    def fail_if_called(**kwargs):  # pylint: disable=unused-argument
+        raise AssertionError("static restricted dbzero should not be reconfigured")
+
+    monkeypatch.setattr("statek.dbzero_restricted.db0.set_restricted", fail_if_called)
+
+    statek.init(StatekSettings(prompt_defs={}))
+
+    assert get_statek_settings().python_sandbox_mode == "restricted"
 
 
 def test_statek_init_restricted_false_does_not_validate_dbzero(monkeypatch):
@@ -101,25 +173,28 @@ def test_statek_init_restricted_false_does_not_validate_dbzero(monkeypatch):
     assert get_statek_settings().python_sandbox_mode == "off"
 
 
-def test_open_prefix_forces_restricted_prefix(tmp_path):
+def test_open_prefix_uses_dynamic_restricted_context(tmp_path):
     settings = StatekSettings(prompt_defs={})
-    db0.init(str(tmp_path), restricted=True)
+    db0.init(str(tmp_path))
     try:
         if "restricted" not in db0.get_config():  # pylint: disable=no-member
             pytest.skip("installed dbzero does not expose restricted mode")
         statek.init(settings)
 
         statek.open_prefix("statek-prefix", "rw")
-        env = PyEnv()
-        env.console = ["ok"]
+        probe = RestrictedContextProbe(123)
 
-        assert db0.get_prefix_stats()["restricted"] is True  # pylint: disable=no-member
-        assert list(db0.find(PyEnv))[0].console == ["ok"]  # pylint: disable=no-member
+        assert db0.get_prefix_stats()["restricted"] is False  # pylint: disable=no-member
+        assert _probe_dbzero_mode(probe) == "unrestricted"
+        with statek.llm_dbzero_restricted_context():
+            assert _probe_dbzero_mode(probe) == "restricted"
+        assert _probe_dbzero_mode(probe) == "unrestricted"
     finally:
         db0.close()  # pylint: disable=no-member
 
 
-def test_open_prefix_rejects_unrestricted_prefix_in_restricted_mode():
+def test_open_prefix_rejects_unrestricted_prefix_in_restricted_mode(db0_fixture):
+    del db0_fixture
     statek.init(StatekSettings(prompt_defs={}))
 
     with pytest.raises(DbzeroRestrictedModeError, match="restricted=False"):
@@ -415,6 +490,235 @@ async def test_exec_cli_step_uses_restricted_mode(job_factory):
         await exec_cli_step("__import__('os')", job, outputs.append)
 
     assert any("__import__" in output for output in outputs)
+
+
+@pytest.mark.asyncio
+async def test_exec_step_enables_dbzero_restricted_context(job_factory):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    job = job_factory()
+
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+    await exec_step(
+        "probe_mode = inspect_probe(probe)",
+        job,
+        local_context={
+            "inspect_probe": _probe_dbzero_mode,
+            "probe": probe,
+        },
+    )
+
+    assert job.py_env.local_state["probe_mode"] == "restricted"
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_exec_step_resets_dbzero_restricted_context_after_error(job_factory):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    job = job_factory()
+    observed_modes = []
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await exec_step(
+            "inspect_then_raise(probe, observed_modes)",
+            job,
+            local_context={
+                "inspect_then_raise": _inspect_probe_then_raise,
+                "observed_modes": observed_modes,
+                "probe": probe,
+            },
+        )
+
+    assert observed_modes == ["restricted"]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_exec_cli_step_enables_dbzero_restricted_context(job_factory):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    job = job_factory()
+    outputs = []
+
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+    await exec_cli_step(
+        "inspect_probe(probe)",
+        job,
+        outputs.append,
+        local_context={
+            "inspect_probe": _probe_dbzero_mode,
+            "probe": probe,
+        },
+    )
+
+    assert outputs == ["restricted"]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    [
+        "leak = probe.__class__",
+        "leak = probe.__dict__",
+        "leak = probe.__getattribute__",
+        "leak = probe.__subclasses__",
+        "leak = probe._private",
+        "leak = probe._workspace",
+        "leak = getattr(probe, '__class__')",
+        "leak = getattr(probe, '_' + '_dict' + '__')",
+        "leak = object.__getattribute__(probe, 'value')",
+        "leak = type(probe)",
+        "leak = vars(probe)",
+        "leak = dir(probe)",
+        "leak = probe.public_method.__globals__",
+        "leak = probe.public_method.__self__",
+        "leak = probe.public_method.__func__",
+        "leak = probe.public_method.__closure__",
+        "leak = probe.callable_property.__globals__",
+        "leak = probe.public_property.__class__",
+    ],
+)
+async def test_adversarial_memo_reflection_attacks_are_blocked(job_factory, source):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    job = job_factory()
+
+    with pytest.raises(DENIED_ATTACK_ERRORS):
+        await exec_step(source, job, local_context={"probe": probe})
+
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+    assert "leak" not in (job.py_env.local_state or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    [
+        "leak = items.__class__",
+        "leak = items.__dict__",
+        "leak = mapping.__class__",
+        "leak = mapping.__dict__",
+        "leak = items[0].__class__",
+        "leak = items[0].__dict__",
+        "leak = mapping['probe'].__class__",
+        "leak = mapping['probe'].public_method.__globals__",
+        "leak = mapping['nested'][0].__dict__",
+    ],
+)
+async def test_adversarial_dbzero_container_attacks_are_blocked(job_factory, source):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    items = db0.list()  # pylint: disable=no-member
+    items.append(probe)
+    items.append("visible")
+    nested = db0.list()  # pylint: disable=no-member
+    nested.append(probe)
+    mapping = db0.dict()  # pylint: disable=no-member
+    mapping["probe"] = probe
+    mapping["count"] = 2
+    mapping["nested"] = nested
+    job = job_factory()
+
+    with pytest.raises(DENIED_ATTACK_ERRORS):
+        await exec_step(
+            source,
+            job,
+            local_context={
+                "items": items,
+                "mapping": mapping,
+            },
+        )
+
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+    assert "leak" not in (job.py_env.local_state or {})
+
+
+@pytest.mark.asyncio
+async def test_restricted_mode_still_allows_safe_dbzero_field_and_container_use(job_factory):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    items = db0.list()  # pylint: disable=no-member
+    items.append(probe)
+    items.append("visible")
+    mapping = db0.dict()  # pylint: disable=no-member
+    mapping["count"] = 2
+    job = job_factory()
+
+    await exec_step(
+        "probe.value = 456\n"
+        "allowed_values = [probe.value, probe.label, probe.public_property, "
+        "items[1], mapping['count'], items[0].label]",
+        job,
+        local_context={
+            "probe": probe,
+            "items": items,
+            "mapping": mapping,
+        },
+    )
+
+    assert job.py_env.local_state["allowed_values"] == [
+        456,
+        "probe",
+        457,
+        "visible",
+        2,
+        "probe",
+    ]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    [
+        "probe.__class__",
+        "probe.public_method.__globals__",
+        "items[0].__dict__",
+    ],
+)
+async def test_exec_cli_step_blocks_adversarial_dbzero_attacks(job_factory, source):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    items = db0.list()  # pylint: disable=no-member
+    items.append(probe)
+    job = job_factory()
+    outputs = []
+
+    with pytest.raises(DENIED_ATTACK_ERRORS):
+        await exec_cli_step(
+            source,
+            job,
+            outputs.append,
+            local_context={
+                "probe": probe,
+                "items": items,
+            },
+        )
+
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_restricted_context_recovers_after_adversarial_failure(job_factory):
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    job = job_factory()
+
+    with pytest.raises(DENIED_ATTACK_ERRORS):
+        await exec_step("probe.__class__", job, local_context={"probe": probe})
+
+    await exec_step(
+        "after_attack = probe.value",
+        job,
+        local_context={"probe": probe},
+    )
+
+    assert job.py_env.local_state["after_attack"] == 123
+    assert _probe_dbzero_mode(probe) == "unrestricted"
 
 
 @pytest.mark.asyncio
