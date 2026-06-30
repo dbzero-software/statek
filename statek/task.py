@@ -17,7 +17,7 @@ import ast
 import builtins
 import inspect
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Type
 import dbzero as db0
 from .exceptions import FutureError
 from .future import FutureResult, temporal
@@ -25,12 +25,12 @@ from .system import tool
 from .agents.agent import Agent, SupervisedAgent
 from .agents.dialog_agent import DialogAgent
 from .chat_style import ChatStyle
-from .executors.job import Job, JobStatus
+from .executors.job import Job, JobStatus, WarmupCodeInput
 from .locale import StatekLocale
 from .pyenv import PyEnv
 from .settings import get_provider_settings as _get_provider_settings
 from .settings import get_statek_settings as _get_statek_settings
-from .utils import get_current_job
+from .utils import CodeBlock, get_current_job
 
 
 def _job_params_from_kwargs(agent: Agent, kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -53,7 +53,7 @@ def _dialog_chat_style(agent: Agent, kwargs: Dict[str, Any]):
 
 def _find_reusable_job_def(
     agent: Agent,
-    warmup_code: Optional[Union[str, Sequence[str]]],
+    warmup_code: WarmupCodeInput,
     locale,
     kwargs: Dict[str, Any],
 ):
@@ -261,6 +261,22 @@ def get_statek_settings():
     return _get_statek_settings()
 
 
+def _copy_warmup_locals(warmup_code: WarmupCodeInput, dest: Dict, caller_locals: Dict) -> None:
+    """Copy caller locals referenced by raw or already-parsed warmup blocks."""
+    if isinstance(warmup_code, CodeBlock):
+        if warmup_code.code:
+            copy_locals(warmup_code.code, dest, caller_locals)
+        return
+    if isinstance(warmup_code, str):
+        if warmup_code:
+            copy_locals(warmup_code, dest, caller_locals)
+        return
+    for block in warmup_code:
+        code = block.code if isinstance(block, CodeBlock) else block
+        if code:
+            copy_locals(code, dest, caller_locals)
+
+
 def copy_locals(code: str, dest: Dict, local_vars: Optional[Dict] = None):
     """
     Identify all locals referenced in a given code block and copy them
@@ -414,7 +430,7 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
     agent: Agent,
     shared_vars: Optional[Dict[str, Any]] = None,
     parent_job: Optional[Job] = None,
-    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    warmup_code: WarmupCodeInput = None,
     locale=None,
     caller_frame=None,
     **kwargs,
@@ -435,11 +451,7 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
         caller_frame = inspect.currentframe().f_back
     if warmup_code and caller_frame is not None:
         caller_locals = caller_frame.f_locals
-        if isinstance(warmup_code, str):
-            copy_locals(warmup_code, env.local_state, caller_locals)
-        else:
-            for block in warmup_code:
-                copy_locals(block, env.local_state, caller_locals)
+        _copy_warmup_locals(warmup_code, env.local_state, caller_locals)
 
     env.local_state.update(shared_vars)
 
@@ -479,7 +491,7 @@ def create_future_task(  # pylint: disable=too-many-arguments,too-many-positiona
     agent: Agent,
     shared_vars: dict,
     parent_job: Optional[Job],
-    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    warmup_code: WarmupCodeInput = None,
     locale=None,
     caller_frame=None,
     **kwargs,
@@ -513,7 +525,7 @@ def _resolve_child_locale(parent_job: Optional[Job], locale):
 @temporal(complement=get_task_result, condition=is_job_completed)
 @tool
 def delegate_task(agent: SupervisedAgent,
-    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    warmup_code: WarmupCodeInput = None,
     parent_job: Optional[Job] = None,
     shared_vars: Optional[Dict[str, Any]] = None,
     locale=None,
@@ -560,7 +572,7 @@ def get_mute_job_result(future: TaskFutureResult) -> str:
 @temporal(complement=get_mute_job_result, condition=is_job_completed)
 @tool
 def delegate_mute_task(agent: SupervisedAgent,
-    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    warmup_code: WarmupCodeInput = None,
     parent_job: Optional[Job] = None,
     shared_vars: Optional[Dict[str, Any]] = None,
     locale: Optional[StatekLocale] = None,
@@ -640,7 +652,7 @@ def delegate_mute_dialog(  # pylint: disable=too-many-arguments,too-many-positio
 def start_dialog(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     agent: DialogAgent,
     message: Any,
-    warmup_code: Optional[Union[str, Sequence[str]]] = None,
+    warmup_code: WarmupCodeInput = None,
     parent_job: Optional[Job] = None,
     shared_vars: Optional[Dict[str, Any]] = None,
     locale=None,

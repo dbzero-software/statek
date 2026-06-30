@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import dbzero as db0
 
+from statek.executors.job import Job, JobStatus, parse_warmup_code
+from statek.executors.utils import run_job_step
 from statek.shared_context import (
     ContextCategory,
     ContextCategoryDict,
@@ -150,6 +152,29 @@ def test_init_shared_context_is_hidden_system_tool():
     """Context initialization executes internally without LLM exposure."""
     assert init_shared_context.tool_system is True
     assert init_shared_context.tool_hidden is True
+
+
+@pytest.mark.asyncio
+async def test_hidden_shared_context_warmup_executes_without_history_exposure(
+    job_def_factory,
+):
+    """Hidden LTM warmup initializes context and stays out of LLM-facing history."""
+    parsed_warmup = parse_warmup_code(
+        "#STATEK: hidden = True\n"
+        "init_shared_context(user)\n"
+        "# ----------\n"
+        "visible_value = 1"
+    )
+    job_def = job_def_factory(warmup_code=parsed_warmup)
+    job = Job(job_def=job_def, job_status=JobStatus.READY)
+    job.py_env.local_state["user"] = "user-1"
+
+    await run_job_step(job)
+
+    history_text = "\n".join(str(item.content) for item in job.get_chat_history())
+    assert job._get_shared_context() is not None
+    assert "init_shared_context" not in history_text
+    assert "user-1" not in history_text
 
 
 def test_init_shared_context_requires_current_job():

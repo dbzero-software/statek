@@ -8,6 +8,7 @@ from statek.agents.agent import SupervisedAgent
 from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef
 from statek.executors.utils import AgentLoopDef, run_agentic_fleet, find_existing_job_def
+from statek.utils import CodeBlock
 
 
 def _current_queue_prefixes():
@@ -183,3 +184,17 @@ class TestRunAgenticFleet:
 
         all_job_defs = list(db0.find(JobDef, db0.as_tag(agent)))
         assert len(all_job_defs) == 1
+
+    def test_find_existing_job_def_matches_code_block_warmup(self, db0_fixture):  # pylint: disable=unused-argument
+        """Existing JobDefs can be matched with already-parsed CodeBlock warmup."""
+        agent = _make_supervised_agent("fleet_agent_code_block")
+        hidden_block = CodeBlock(code="init_shared_context(user)", metadata={"hidden": True})
+        job_def = JobDef(
+            agent=agent,
+            metadata={"MODEL": "test-model"},
+            warmup_code=["x = 1", hidden_block],
+        )
+
+        found = find_existing_job_def(agent, ["x = 1", hidden_block])
+
+        assert found is job_def
