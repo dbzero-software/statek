@@ -47,6 +47,7 @@ from statek.model_name import ensure_model_name, format_model_for_provider, sele
 from statek.settings import get_statek_settings, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.python_sandbox import get_sandbox_policy
+from statek.dbzero_restricted import llm_dbzero_restricted_context
 from statek.utils import (
     CodeBlock,
     CallSpec,
@@ -540,7 +541,8 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                     previous_result = sync_local.get(_SANDBOX_EXPR_RESULT, marker)
                     assign_node = ast.copy_location(_expression_assign_node(node.value), node)
                     code_obj = _compile_exec_node(assign_node, "<string>")
-                    exec(code_obj, global_context, sync_local)
+                    with llm_dbzero_restricted_context():
+                        exec(code_obj, global_context, sync_local)
                     result = sync_local.get(_SANDBOX_EXPR_RESULT)
                     if previous_result is marker:
                         sync_local.pop(_SANDBOX_EXPR_RESULT, None)
@@ -557,7 +559,8 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                         output_fn(format_default_llm_repr(result))
                 else:
                     code_obj = _compile_exec_node(node, "<string>")
-                    exec(code_obj, global_context, sync_local)
+                    with llm_dbzero_restricted_context():
+                        exec(code_obj, global_context, sync_local)
 
                 local_context.update(sync_local)
                 global_context.update(local_context)

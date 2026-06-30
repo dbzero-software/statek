@@ -95,9 +95,6 @@ DONE: execution has been completed (with either success or failure)
 class JobStatus:
     pass
 
-def some_function(x: int) -> int:
-    return x + 1
-
 def _parsed_code_block(block: CodeBlock) -> Optional[ParsedWarmupBlock]:
     """Return a parsed warmup representation for an already-parsed block."""
     if not block.code and not block.tool_calls and not block.metadata:
@@ -177,7 +174,8 @@ def parse_warmup_code(warmup_code: WarmupCodeInput) -> ParsedWarmupCode:
     a plain string (no tool calls) or a CodeBlock (tool calls present).
 
     Args:
-        warmup_code: Single string, sequence of strings, or None
+        warmup_code: Single string/CodeBlock, sequence of strings/CodeBlocks,
+            or None
 
     Returns:
         None if input is None or results in no blocks
