@@ -80,7 +80,8 @@ if TYPE_CHECKING:
     from statek.task import SubTaskHandler
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
-WarmupCodeInput = Optional[Union[str, Sequence[str]]]
+WarmupBlockInput = Union[str, "CodeBlock"]
+WarmupCodeInput = Optional[Union[WarmupBlockInput, Sequence[WarmupBlockInput]]]
 ParsedWarmupCode = Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]
 
 """
@@ -97,29 +98,74 @@ class JobStatus:
 def some_function(x: int) -> int:
     return x + 1
 
-def _parse_warmup_blocks(warmup_code: WarmupCodeInput) -> Optional[List[ParsedWarmupBlock]]:
+def _parse_warmup_blocks(
+    warmup_code: WarmupCodeInput,
+) -> Optional[List[Union[ParsedWarmupBlock, CodeBlock]]]:
     """Parse raw warmup input into per-block parsed warmup definitions.
 
     Args:
         warmup_code: Single raw warmup string, sequence of blocks, or None.
 
     Returns:
-        Parsed warmup blocks, or None when no non-empty blocks are present.
+        Parsed warmup blocks and existing CodeBlocks, or None when no
+        non-empty blocks are present.
     """
     if warmup_code is None:
         return None
+
+    if isinstance(warmup_code, CodeBlock):
+        return [warmup_code]
 
     if isinstance(warmup_code, str):
         raw_blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
     else:
         raw_blocks = list(warmup_code)
 
-    raw_blocks = [block.strip() for block in raw_blocks if block.strip()]
+    parsed_blocks = []
+    for block in raw_blocks:
+        if isinstance(block, CodeBlock):
+            parsed_blocks.append(block)
+            continue
 
-    if not raw_blocks:
+        block = block.strip()
+        if block:
+            parsed_blocks.append(parse_warmup_block(block))
+
+    if not parsed_blocks:
         return None
 
-    return [parse_warmup_block(block) for block in raw_blocks]
+    return parsed_blocks
+
+
+def _build_parsed_warmup_code(
+    parsed_blocks: List[Union[ParsedWarmupBlock, CodeBlock]],
+) -> Union[str, CodeBlock, List[Union[str, CodeBlock]]]:
+    """Build parsed warmup code while preserving existing CodeBlock values."""
+    built_blocks: List[Union[str, CodeBlock]] = []
+    pending_parsed_blocks: List[ParsedWarmupBlock] = []
+
+    def _flush_pending_parsed_blocks():
+        if not pending_parsed_blocks:
+            return
+        built = build_warmup_code(pending_parsed_blocks)
+        if isinstance(built, list):
+            built_blocks.extend(built)
+        else:
+            built_blocks.append(built)
+        pending_parsed_blocks.clear()
+
+    for block in parsed_blocks:
+        if isinstance(block, CodeBlock):
+            _flush_pending_parsed_blocks()
+            built_blocks.append(block)
+        else:
+            pending_parsed_blocks.append(block)
+
+    _flush_pending_parsed_blocks()
+
+    if len(built_blocks) == 1:
+        return built_blocks[0]
+    return built_blocks
 
 
 def parse_warmup_code_with_metadata(
@@ -142,7 +188,7 @@ def parse_warmup_code_with_metadata(
         if parsed_block.metadata:
             metadata.update(parsed_block.metadata)
 
-    return build_warmup_code(parsed_blocks), metadata or None
+    return _build_parsed_warmup_code(parsed_blocks), metadata or None
 
 
 def parse_warmup_code(warmup_code: WarmupCodeInput) -> ParsedWarmupCode:
@@ -154,7 +200,8 @@ def parse_warmup_code(warmup_code: WarmupCodeInput) -> ParsedWarmupCode:
     a plain string (no tool calls) or a CodeBlock (tool calls present).
 
     Args:
-        warmup_code: Single string, sequence of strings, or None
+        warmup_code: Single string/CodeBlock, sequence of strings/CodeBlocks,
+            or None
 
     Returns:
         None if input is None or results in no blocks
