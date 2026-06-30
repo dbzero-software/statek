@@ -13,12 +13,13 @@ from statek.task import (
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.chat_log_item import UserLogItem
+from statek.agents.agent import WarmupDef
 from statek.agents.dialog_agent import DialogAgent, RecurringReminder, RecursiveReminder
 from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt
-from statek.utils import _statek_ctx_scope
+from statek.utils import CodeBlock, _statek_ctx_scope
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
@@ -691,6 +692,38 @@ class TestCreateNewJob:
         assert job.py_env.local_state["x"] == 10
         assert job.py_env.local_state["alpha"] == 42
         assert "unused_var" not in job.py_env.local_state
+
+    def test_code_block_warmup_copies_referenced_caller_locals(
+        self, db0_fixture, supervised_agent
+    ):
+        """create_new_job copies caller locals referenced by dynamic CodeBlock warmup."""
+        external_value = 10
+        unused_var = 999
+
+        job = create_new_job(
+            supervised_agent,
+            warmup_code=[
+                CodeBlock(code="result = external_value + 1"),
+                CodeBlock(code=None),
+                CodeBlock(code=""),
+            ],
+        )
+
+        assert job.py_env.local_state["external_value"] == 10
+        assert "unused_var" not in job.py_env.local_state
+
+    def test_reuses_job_def_with_agent_code_block_warmup(
+        self, db0_fixture, supervised_agent
+    ):
+        """Agent warmup_def entries that are CodeBlocks do not crash reuse lookup."""
+        hidden_block = CodeBlock(code="init_shared_context(user)", metadata={"hidden": True})
+        supervised_agent.warmup_def = WarmupDef(warmup_code=["x = 1", hidden_block])
+
+        first = create_new_job(supervised_agent)
+        second = create_new_job(supervised_agent)
+
+        assert first.job_def is second.job_def
+        assert first.job_def.warmup_code == ["x = 1", hidden_block]
 
     def test_reuses_matching_job_def(self, db0_fixture, supervised_agent):
         """Repeated identical jobs reuse one JobDef."""

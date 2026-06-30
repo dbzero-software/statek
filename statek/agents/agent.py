@@ -23,6 +23,7 @@ from statek.docstring import parse_tool_docstring, format_docstring
 from statek.utils import CodeBlock
 from statek.executors.job import (
     JobDef,
+    WarmupCodeInput,
     parse_warmup_code,
     parse_warmup_code_with_metadata,
 )
@@ -486,7 +487,7 @@ class SupervisedAgent(Agent):
     def create_job_def(
         self,
         tools: Optional[List[Callable]] = None,
-        warmup_code: Optional[Union[str, Sequence[str]]] = None,
+        warmup_code: WarmupCodeInput = None,
         shared_vars: Optional[Dict[str, Any]] = None,
         locale=None,
         **kwargs

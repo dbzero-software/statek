@@ -80,7 +80,8 @@ if TYPE_CHECKING:
     from statek.task import SubTaskHandler
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
-WarmupCodeInput = Optional[Union[str, Sequence[str]]]
+WarmupBlockInput = Union[str, "CodeBlock"]
+WarmupCodeInput = Optional[Union[WarmupBlockInput, Sequence[WarmupBlockInput]]]
 ParsedWarmupCode = Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]
 
 """
@@ -97,6 +98,17 @@ class JobStatus:
 def some_function(x: int) -> int:
     return x + 1
 
+def _parsed_code_block(block: CodeBlock) -> Optional[ParsedWarmupBlock]:
+    """Return a parsed warmup representation for an already-parsed block."""
+    if not block.code and not block.tool_calls and not block.metadata:
+        return None
+    return ParsedWarmupBlock(
+        code=block.code,
+        tool_calls=list(block.tool_calls) if block.tool_calls else [],
+        metadata=dict(block.metadata) if block.metadata else {},
+    )
+
+
 def _parse_warmup_blocks(warmup_code: WarmupCodeInput) -> Optional[List[ParsedWarmupBlock]]:
     """Parse raw warmup input into per-block parsed warmup definitions.
 
@@ -111,15 +123,26 @@ def _parse_warmup_blocks(warmup_code: WarmupCodeInput) -> Optional[List[ParsedWa
 
     if isinstance(warmup_code, str):
         raw_blocks = re.split(r'\n\s*#\s*-{10,}\s*\n', warmup_code)
+    elif isinstance(warmup_code, CodeBlock):
+        raw_blocks = [warmup_code]
     else:
         raw_blocks = list(warmup_code)
 
-    raw_blocks = [block.strip() for block in raw_blocks if block.strip()]
+    parsed_blocks = []
+    for block in raw_blocks:
+        if isinstance(block, CodeBlock):
+            parsed_block = _parsed_code_block(block)
+            if parsed_block is not None:
+                parsed_blocks.append(parsed_block)
+            continue
+        stripped_block = block.strip()
+        if stripped_block:
+            parsed_blocks.append(parse_warmup_block(stripped_block))
 
-    if not raw_blocks:
+    if not parsed_blocks:
         return None
 
-    return [parse_warmup_block(block) for block in raw_blocks]
+    return parsed_blocks
 
 
 def parse_warmup_code_with_metadata(
