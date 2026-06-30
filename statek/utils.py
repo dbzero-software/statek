@@ -337,12 +337,15 @@ def build_warmup_code(
             tool_calls = []
             for tc in parsed_block.tool_calls:
                 counter += 1
-                tool_calls.append(CallSpec(
-                    id=f"STATEK-{counter:03d}",
-                    func_name=tc.name,
-                    args=tc.args if tc.args else [],
-                    kwargs=tc.kwargs if tc.kwargs is not None else {},
-                ))
+                if isinstance(tc, CallSpec):
+                    tool_calls.append(tc)
+                else:
+                    tool_calls.append(CallSpec(
+                        id=f"STATEK-{counter:03d}",
+                        func_name=tc.name,
+                        args=tc.args if tc.args else [],
+                        kwargs=tc.kwargs if tc.kwargs is not None else {},
+                    ))
             blocks.append(CodeBlock(
                 code=parsed_block.code,
                 tool_calls=tool_calls,

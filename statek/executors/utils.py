@@ -20,7 +20,7 @@ import asyncio
 import builtins
 import functools
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional, Sequence, Set, Tuple, TYPE_CHECKING, Union
 from contextlib import contextmanager
 import dbzero as db0
@@ -58,6 +58,7 @@ from statek.utils import (
     perm_ctx_set,
     parse_dialog,
     strip_markup,
+    _is_hidden_warmup_block,
     statek_ctx_get,
     _statek_ctx_for_job,
     _statek_ctx_scope,
@@ -397,8 +398,11 @@ def _hidden_registered_tool_names() -> set[str]:
     return _HIDDEN_REGISTERED_TOOL_NAMES
 
 
-def _execution_sandbox_policy():
-    return get_sandbox_policy(blocked_tools=_hidden_registered_tool_names())
+def _execution_sandbox_policy(allowed_tools: Optional[Set[str]] = None):
+    policy = get_sandbox_policy(blocked_tools=_hidden_registered_tool_names())
+    if policy is not None and allowed_tools:
+        return replace(policy, allowed_tools=set(policy.allowed_tools) | allowed_tools)
+    return policy
 
 
 def _is_hidden_tool_call(call_spec: CallSpec, job: Job, policy) -> bool:
@@ -436,7 +440,8 @@ def _expression_assign_node(expr: ast.AST) -> ast.Assign:
 def _exec_code_body(code_str: str, job: Job, global_context: dict,
                     local_context: dict, output_fn: Callable,
                     error_fn: Callable, print_fn: Callable = None,
-                    instr_num: Optional[int] = None):
+                    instr_num: Optional[int] = None,
+                    allowed_tools: Optional[Set[str]] = None):
     """Shared execution body used by exec_step and exec_cli_step.
 
     Parses *code_str*, transforms it, and executes each statement in order
@@ -455,9 +460,10 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
             ``_setup_execution_context``; when *None* the default
             job-console print is used.
         instr_num: optional instruction index to resume from.
+        allowed_tools: optional tool names allowed by the sandbox for this execution.
     """
     import types
-    policy = _execution_sandbox_policy()
+    policy = _execution_sandbox_policy(allowed_tools=allowed_tools)
     initial_local_functions = {
         key for key, value in local_context.items()
         if isinstance(value, types.FunctionType)
@@ -580,7 +586,8 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
 
 
 async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
-                    local_context: Optional[dict] = None) -> bool:
+                    local_context: Optional[dict] = None,
+                    allowed_tools: Optional[Set[str]] = None) -> bool:
     """
     Execute a single step of code within the job's Python environment.
 
@@ -589,9 +596,11 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
     provided job's state.
 
     Args:
-        code: Python code (or expression) to be executed
+        code_str: Python code (or expression) to be executed
         job: the Job defining the execution context
         instr_num: optional instruction number to start from (for continuation)
+        local_context: optional local namespace for this execution step
+        allowed_tools: optional tool names allowed by the sandbox for this execution
 
     Returns:
         True if the exit was called (program finished), False otherwise
@@ -622,6 +631,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
             output_fn=lambda s: job.console_append(s),
             error_fn=lambda msg: job.console_append(msg, error_message=msg),
             instr_num=instr_num,
+            allowed_tools=allowed_tools,
         )
     finally:
         if job.py_env.local_state is None:
@@ -720,9 +730,15 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
     # Warmup blocks, however, are real setup code and must still execute.
     is_direct = job.job_def.chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
     is_warmup = job.status == JobStatus.WARMING_UP
+    allowed_tools = (
+        _hidden_registered_tool_names()
+        if is_warmup and _is_hidden_warmup_block(code)
+        else None
+    )
     if not skip_regular and (is_warmup or not is_direct) and not _is_empty_code(code.code):
         exited = not await exec_step(code.code, job, instr_num=regular_instr_num,
-                                     local_context=local_context)
+                                     local_context=local_context,
+                                     allowed_tools=allowed_tools)
         if exited:
             return True
 

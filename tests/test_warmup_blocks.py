@@ -6,12 +6,17 @@ from dataclasses import dataclass
 import pytest
 import dbzero as db0
 
-from statek.executors.job import Job, JobStatus, parse_warmup_code
+from statek.executors.job import (
+    Job,
+    JobStatus,
+    parse_warmup_code,
+    parse_warmup_code_with_metadata,
+)
 from statek.executors.utils import run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
 from statek.chat_style import ChatStyle
-from statek.utils import CodeBlock
+from statek.utils import CallSpec, CodeBlock
 
 
 @db0.memo
@@ -124,6 +129,50 @@ y = 2"""
         assert isinstance(result, CodeBlock)
         assert result.code == "print('hidden')"
         assert result.metadata == {"hidden": True}
+
+    def test_parse_single_code_block_is_idempotent(self, db0_fixture):  # pylint: disable=unused-argument
+        """Already-parsed warmup CodeBlock values are not reparsed as strings."""
+        block = CodeBlock(code="init_shared_context(user)", metadata={"hidden": True})
+
+        result = parse_warmup_code(block)
+
+        assert result == block
+
+    def test_parse_mixed_sequence_with_code_blocks(self, db0_fixture):  # pylint: disable=unused-argument
+        """Mixed raw and parsed warmup blocks parse without losing CodeBlock data."""
+        tool_block = CodeBlock(
+            code="",
+            tool_calls=[CallSpec("STATEK-001", "list_of_examples")],
+        )
+        hidden_block = CodeBlock(code="init_shared_context(user)", metadata={"hidden": True})
+
+        result = parse_warmup_code(["x = 1", tool_block, hidden_block])
+
+        assert result == ["x = 1", tool_block, hidden_block]
+
+    def test_reparse_selltime_like_warmup(self, db0_fixture):  # pylint: disable=unused-argument
+        """A parsed multi-block warmup can be passed through parsing again."""
+        raw_warmup = """from datetime import datetime
+now = datetime.now()
+print("Current date and time:", now, "(" + now.strftime("%A") + ")")
+# ----------
+list_of_examples() #STATEK: as tool
+# ----------
+show_example() #STATEK: as tool"""
+        parsed_once = parse_warmup_code(raw_warmup)
+
+        parsed_twice = parse_warmup_code(parsed_once)
+
+        assert parsed_twice == parsed_once
+
+    def test_parse_code_block_metadata_is_aggregated(self, db0_fixture):  # pylint: disable=unused-argument
+        """Metadata from already-parsed CodeBlock warmup contributes to aggregate metadata."""
+        hidden_block = CodeBlock(code="init_shared_context(user)", metadata={"hidden": True})
+
+        result, metadata = parse_warmup_code_with_metadata(["x = 1", hidden_block])
+
+        assert result == ["x = 1", hidden_block]
+        assert metadata == {"hidden": True}
 
 
 class TestRunJobStepMultipleBlocks:
