@@ -6,6 +6,7 @@ import pytest
 import dbzero as db0
 
 import statek
+import statek.dbzero_restricted as dbzero_restricted_module
 import statek.python_sandbox as sandbox_module
 from statek.dbzero_restricted import DbzeroRestrictedModeError
 from statek.agents.agent import Agent
@@ -65,6 +66,10 @@ def _probe_dbzero_mode(probe):
     except AttributeError:
         return "restricted"
     return "unrestricted"
+
+
+def _restricted_context_value() -> bool:
+    return dbzero_restricted_module._DBZERO_RESTRICTED_CONTEXT.get()  # pylint: disable=protected-access
 
 
 def _inspect_probe_then_raise(probe, observed_modes):
@@ -187,6 +192,40 @@ def test_open_prefix_uses_dynamic_restricted_context(tmp_path):
         assert db0.get_prefix_stats()["restricted"] is False  # pylint: disable=no-member
         assert _probe_dbzero_mode(probe) == "unrestricted"
         with statek.llm_dbzero_restricted_context():
+            assert _probe_dbzero_mode(probe) == "restricted"
+        assert _probe_dbzero_mode(probe) == "unrestricted"
+    finally:
+        db0.close()  # pylint: disable=no-member
+
+
+def test_as_unrestricted_resets_existing_restricted_context():
+    assert _restricted_context_value() is False
+
+    with statek.llm_dbzero_restricted_context():
+        assert _restricted_context_value() is True
+        with statek.as_unrestricted():
+            assert _restricted_context_value() is False
+        assert _restricted_context_value() is True
+
+    assert _restricted_context_value() is False
+
+
+def test_as_unrestricted_temporarily_disables_dynamic_restricted_context(tmp_path):
+    settings = StatekSettings(prompt_defs={})
+    db0.init(str(tmp_path))
+    try:
+        if "restricted" not in db0.get_config():  # pylint: disable=no-member
+            pytest.skip("installed dbzero does not expose restricted mode")
+        statek.init(settings)
+
+        statek.open_prefix("statek-prefix", "rw")
+        probe = RestrictedContextProbe(123)
+
+        assert _probe_dbzero_mode(probe) == "unrestricted"
+        with statek.llm_dbzero_restricted_context():
+            assert _probe_dbzero_mode(probe) == "restricted"
+            with statek.as_unrestricted():
+                assert _probe_dbzero_mode(probe) == "unrestricted"
             assert _probe_dbzero_mode(probe) == "restricted"
         assert _probe_dbzero_mode(probe) == "unrestricted"
     finally:

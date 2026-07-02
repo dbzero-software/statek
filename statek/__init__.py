@@ -72,6 +72,7 @@ from .runner import start_statek, start_statek_async
 from . import task
 from .dbzero_restricted import (
     DbzeroRestrictedModeError,
+    as_unrestricted,
     configure_dbzero_restricted_context,
     dbzero_restricted_enabled,
     llm_dbzero_restricted_context,
@@ -116,6 +117,7 @@ __all__ = [
     "start_statek",
     "start_statek_async",
     "DbzeroRestrictedModeError",
+    "as_unrestricted",
     "configure_dbzero_restricted_context",
     "dbzero_restricted_enabled",
     "llm_dbzero_restricted_context",
