@@ -81,7 +81,7 @@ from .dbzero_restricted import (
     validate_dbzero_restricted,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.4.1"
 
 
 def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> None:

@@ -91,6 +91,17 @@ def visible_tool(value: str, **kwargs):  # pylint: disable=unused-argument
     return f"visible: {value}"
 
 
+@tool
+def probe_mode_tool(probe: RestrictedContextProbe, **kwargs):  # pylint: disable=unused-argument
+    return _probe_dbzero_mode(probe)
+
+
+@tool
+def probe_mode_then_raise_tool(probe: RestrictedContextProbe, observed_modes, **kwargs):  # pylint: disable=unused-argument
+    observed_modes.append(_probe_dbzero_mode(probe))
+    raise RuntimeError("tool boom")
+
+
 @tool(hidden=True)
 def hidden_tool(**kwargs):  # pylint: disable=unused-argument
     return "hidden"
@@ -594,6 +605,62 @@ async def test_exec_cli_step_enables_dbzero_restricted_context(job_factory):
     )
 
     assert outputs == ["restricted"]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_tool_body_runs_unrestricted_inside_restricted_exec(db0_fixture):  # pylint: disable=unused-argument
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    job = _job_with_tools([probe_mode_tool])
+
+    await exec_step(
+        "before_mode = inspect_probe(probe)\n"
+        "tool_mode = probe_mode_tool(probe)\n"
+        "after_mode = inspect_probe(probe)",
+        job,
+        local_context={
+            "inspect_probe": _probe_dbzero_mode,
+            "probe": probe,
+        },
+    )
+
+    assert job.py_env.local_state["before_mode"] == "restricted"
+    assert job.py_env.local_state["tool_mode"] == "unrestricted"
+    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_tool_body_unrestricted_scope_resets_after_error(db0_fixture):  # pylint: disable=unused-argument
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    observed_modes = []
+    job = _job_with_tools([probe_mode_then_raise_tool])
+
+    with pytest.raises(RuntimeError, match="tool boom"):
+        await exec_step(
+            "probe_mode_then_raise_tool(probe, observed_modes)",
+            job,
+            local_context={
+                "observed_modes": observed_modes,
+                "probe": probe,
+            },
+        )
+
+    assert observed_modes == ["unrestricted"]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+    await exec_step(
+        "after_mode = inspect_probe(probe)",
+        job,
+        local_context={
+            "inspect_probe": _probe_dbzero_mode,
+            "probe": probe,
+        },
+    )
+
+    assert job.py_env.local_state["after_mode"] == "restricted"
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 
