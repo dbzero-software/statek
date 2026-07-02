@@ -23,6 +23,7 @@ from datetime import date, datetime, time as _time
 import nest_asyncio
 import dbzero as db0
 from .chat_style import ChatStyle
+from .dbzero_restricted import as_unrestricted
 from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
 from .utils import find_locals, get_current_agent_name, get_current_job, _statek_ctx_scope
@@ -314,13 +315,14 @@ def tool(f=None, *, system: bool = False, target=None, error_handler=None,
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            args, kwargs = _prepare_decorated_call(func, args, kwargs)
-            if inspect.iscoroutinefunction(func):
-                result = _run_coroutine_result(func(*args, **kwargs))
-            else:
-                result = func(*args, **kwargs)
-            _bind_error_handler_result(result, error_handler)
-            return result
+            with as_unrestricted():
+                args, kwargs = _prepare_decorated_call(func, args, kwargs)
+                if inspect.iscoroutinefunction(func):
+                    result = _run_coroutine_result(func(*args, **kwargs))
+                else:
+                    result = func(*args, **kwargs)
+                _bind_error_handler_result(result, error_handler)
+                return result
 
         return _register_wrapper(wrapper, system, target, hidden)
 

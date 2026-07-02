@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import dbzero as db0
 
@@ -39,6 +39,16 @@ _DBZERO_RESTRICTED_CONTEXT: ContextVar[bool] = ContextVar(
 def llm_dbzero_restricted_context():
     """Temporarily enable dbzero restricted mode for LLM-authored code."""
     token = _DBZERO_RESTRICTED_CONTEXT.set(True)
+    try:
+        yield
+    finally:
+        _DBZERO_RESTRICTED_CONTEXT.reset(token)
+
+
+@contextmanager
+def as_unrestricted() -> Iterator[None]:
+    """Temporarily disable dbzero restricted mode within the current context."""
+    token = _DBZERO_RESTRICTED_CONTEXT.set(False)
     try:
         yield
     finally:

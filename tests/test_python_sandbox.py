@@ -6,6 +6,7 @@ import pytest
 import dbzero as db0
 
 import statek
+import statek.dbzero_restricted as dbzero_restricted_module
 import statek.python_sandbox as sandbox_module
 from statek.dbzero_restricted import DbzeroRestrictedModeError
 from statek.agents.agent import Agent
@@ -67,6 +68,10 @@ def _probe_dbzero_mode(probe):
     return "unrestricted"
 
 
+def _restricted_context_value() -> bool:
+    return dbzero_restricted_module._DBZERO_RESTRICTED_CONTEXT.get()  # pylint: disable=protected-access
+
+
 def _inspect_probe_then_raise(probe, observed_modes):
     observed_modes.append(_probe_dbzero_mode(probe))
     raise RuntimeError("boom")
@@ -84,6 +89,17 @@ DENIED_ATTACK_ERRORS = (
 @tool
 def visible_tool(value: str, **kwargs):  # pylint: disable=unused-argument
     return f"visible: {value}"
+
+
+@tool
+def probe_mode_tool(probe: RestrictedContextProbe, **kwargs):  # pylint: disable=unused-argument
+    return _probe_dbzero_mode(probe)
+
+
+@tool
+def probe_mode_then_raise_tool(probe: RestrictedContextProbe, observed_modes, **kwargs):  # pylint: disable=unused-argument
+    observed_modes.append(_probe_dbzero_mode(probe))
+    raise RuntimeError("tool boom")
 
 
 @tool(hidden=True)
@@ -187,6 +203,40 @@ def test_open_prefix_uses_dynamic_restricted_context(tmp_path):
         assert db0.get_prefix_stats()["restricted"] is False  # pylint: disable=no-member
         assert _probe_dbzero_mode(probe) == "unrestricted"
         with statek.llm_dbzero_restricted_context():
+            assert _probe_dbzero_mode(probe) == "restricted"
+        assert _probe_dbzero_mode(probe) == "unrestricted"
+    finally:
+        db0.close()  # pylint: disable=no-member
+
+
+def test_as_unrestricted_resets_existing_restricted_context():
+    assert _restricted_context_value() is False
+
+    with statek.llm_dbzero_restricted_context():
+        assert _restricted_context_value() is True
+        with statek.as_unrestricted():
+            assert _restricted_context_value() is False
+        assert _restricted_context_value() is True
+
+    assert _restricted_context_value() is False
+
+
+def test_as_unrestricted_temporarily_disables_dynamic_restricted_context(tmp_path):
+    settings = StatekSettings(prompt_defs={})
+    db0.init(str(tmp_path))
+    try:
+        if "restricted" not in db0.get_config():  # pylint: disable=no-member
+            pytest.skip("installed dbzero does not expose restricted mode")
+        statek.init(settings)
+
+        statek.open_prefix("statek-prefix", "rw")
+        probe = RestrictedContextProbe(123)
+
+        assert _probe_dbzero_mode(probe) == "unrestricted"
+        with statek.llm_dbzero_restricted_context():
+            assert _probe_dbzero_mode(probe) == "restricted"
+            with statek.as_unrestricted():
+                assert _probe_dbzero_mode(probe) == "unrestricted"
             assert _probe_dbzero_mode(probe) == "restricted"
         assert _probe_dbzero_mode(probe) == "unrestricted"
     finally:
@@ -555,6 +605,62 @@ async def test_exec_cli_step_enables_dbzero_restricted_context(job_factory):
     )
 
     assert outputs == ["restricted"]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_tool_body_runs_unrestricted_inside_restricted_exec(db0_fixture):  # pylint: disable=unused-argument
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    job = _job_with_tools([probe_mode_tool])
+
+    await exec_step(
+        "before_mode = inspect_probe(probe)\n"
+        "tool_mode = probe_mode_tool(probe)\n"
+        "after_mode = inspect_probe(probe)",
+        job,
+        local_context={
+            "inspect_probe": _probe_dbzero_mode,
+            "probe": probe,
+        },
+    )
+
+    assert job.py_env.local_state["before_mode"] == "restricted"
+    assert job.py_env.local_state["tool_mode"] == "unrestricted"
+    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_tool_body_unrestricted_scope_resets_after_error(db0_fixture):  # pylint: disable=unused-argument
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    observed_modes = []
+    job = _job_with_tools([probe_mode_then_raise_tool])
+
+    with pytest.raises(RuntimeError, match="tool boom"):
+        await exec_step(
+            "probe_mode_then_raise_tool(probe, observed_modes)",
+            job,
+            local_context={
+                "observed_modes": observed_modes,
+                "probe": probe,
+            },
+        )
+
+    assert observed_modes == ["unrestricted"]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+    await exec_step(
+        "after_mode = inspect_probe(probe)",
+        job,
+        local_context={
+            "inspect_probe": _probe_dbzero_mode,
+            "probe": probe,
+        },
+    )
+
+    assert job.py_env.local_state["after_mode"] == "restricted"
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 

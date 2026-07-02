@@ -72,6 +72,7 @@ from .runner import start_statek, start_statek_async
 from . import task
 from .dbzero_restricted import (
     DbzeroRestrictedModeError,
+    as_unrestricted,
     configure_dbzero_restricted_context,
     dbzero_restricted_enabled,
     llm_dbzero_restricted_context,
@@ -80,7 +81,7 @@ from .dbzero_restricted import (
     validate_dbzero_restricted,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.4.1"
 
 
 def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> None:
@@ -116,6 +117,7 @@ __all__ = [
     "start_statek",
     "start_statek_async",
     "DbzeroRestrictedModeError",
+    "as_unrestricted",
     "configure_dbzero_restricted_context",
     "dbzero_restricted_enabled",
     "llm_dbzero_restricted_context",
