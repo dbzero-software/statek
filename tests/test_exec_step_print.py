@@ -4,9 +4,12 @@ from dataclasses import dataclass
 import pytest
 import dbzero as db0
 
-from statek.executors.utils import exec_step
+import statek
+from statek.executors.utils import exec_step, exec_tool
 from statek.python_sandbox import SandboxViolation
+from statek.settings import StatekSettings
 from statek.system import tool
+from statek.utils import CallSpec
 
 
 DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
@@ -25,6 +28,12 @@ class _LLMReprObject:  # pylint: disable=too-few-public-methods
 def hidden_runtime_system_tool(**kwargs) -> str:  # pylint: disable=unused-argument
     """Return a marker value from a hidden system tool."""
     return "hidden-runtime-ok"
+
+
+@tool
+def return_llm_repr_object(**kwargs) -> _LLMReprObject:  # pylint: disable=unused-argument
+    """Return an object whose __llm_repr__ requires unrestricted dbzero access."""
+    return _LLMReprObject(name="tool")
 
 
 class TestExecStepPrint:
@@ -47,6 +56,43 @@ class TestExecStepPrint:
         job.py_env.local_state = {'obj': _LLMReprObject(name="test")}
         await exec_step('print(obj)', job)
         assert job.py_env.console[0] == "custom:test"
+
+    @pytest.mark.asyncio
+    async def test_print_dbzero_memo_object_uses_llm_repr_in_restricted_context(self, job_factory):
+        """Trusted print formatting should access __llm_repr__ outside restricted mode."""
+        statek.init(StatekSettings(prompt_defs={}))
+        job = self._make_job(job_factory)
+        job.py_env.local_state = {'obj': _LLMReprObject(name="restricted")}
+
+        await exec_step('print(obj)', job)
+
+        assert job.py_env.console[0] == "custom:restricted"
+
+    @pytest.mark.asyncio
+    async def test_expression_output_uses_llm_repr_in_restricted_context(self, job_factory):
+        """REPL-style expression output should use unrestricted trusted formatting."""
+        statek.init(StatekSettings(prompt_defs={}))
+        job = self._make_job(job_factory)
+        job.py_env.local_state = {'obj': _LLMReprObject(name="expr")}
+
+        await exec_step('obj', job)
+
+        assert job.py_env.console[0] == "custom:expr"
+
+    @pytest.mark.asyncio
+    async def test_tool_result_output_uses_llm_repr_in_restricted_context(
+        self, job_factory
+    ):
+        """Tool result formatting should use unrestricted trusted formatting."""
+        statek.init(StatekSettings(prompt_defs={}))
+        job = self._make_job(job_factory)
+        job.job_def.agent._tools.append(return_llm_repr_object)  # pylint: disable=protected-access
+
+        call_spec = CallSpec(id="TOOL-001", func_name="return_llm_repr_object")
+        result, error = await exec_tool(call_spec, job)
+
+        assert error is None
+        assert result == "custom:tool"
 
     @pytest.mark.asyncio
     async def test_hidden_system_tool_is_blocked_from_runtime_context(self, job_factory):

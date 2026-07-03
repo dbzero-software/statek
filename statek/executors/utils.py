@@ -47,7 +47,7 @@ from statek.model_name import ensure_model_name, format_model_for_provider, sele
 from statek.settings import get_statek_settings, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.python_sandbox import get_sandbox_policy
-from statek.dbzero_restricted import llm_dbzero_restricted_context
+from statek.dbzero_restricted import statek_internal_tool, llm_dbzero_restricted_context
 from statek.utils import (
     CodeBlock,
     CallSpec,
@@ -217,6 +217,7 @@ class _ResilientTransformer(ast.NodeTransformer):
         return node
 
 """Execute a single AST node with custom print function."""
+@statek_internal_tool
 def _fmt_print_arg(arg) -> str:
     """Format a single print() argument.
 
@@ -512,7 +513,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
         if job.py_env.future_result is not None:
             try:
                 result = _resolve_output_future(job.py_env.future_result)
-                output = format_default_llm_repr(result)
+                output = _fmt_print_arg(result)
                 output_fn(output)
                 job.py_env.future_result = None
                 if instr_num is not None:
@@ -556,7 +557,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                             job.py_env.future_result = result
                             raise
                     if result is not None or idx not in print_call_exprs:
-                        output_fn(format_default_llm_repr(result))
+                        output_fn(_fmt_print_arg(result))
                 else:
                     code_obj = _compile_exec_node(node, "<string>")
                     with llm_dbzero_restricted_context():
@@ -861,7 +862,7 @@ async def exec_tool(call_spec: CallSpec, job: Job,
                 if asyncio.iscoroutine(result):
                     result = await result
             if result is not None:
-                private_console.append(format_default_llm_repr(result))
+                private_console.append(_fmt_print_arg(result))
         except Exception as e:  # pylint: disable=broad-exception-caught
             error_msg = f"{type(e).__name__}: {e}"
             private_console.append(error_msg)

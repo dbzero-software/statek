@@ -44,6 +44,8 @@ from typing import (
 )
 import dbzero as db0
 
+from statek.dbzero_restricted import statek_internal_tool
+
 _STATEK_CTX_VAR: _PyContextVar[Optional[Dict[str, Any]]] = _PyContextVar(
     "statek_ctx",
     default=None,
@@ -1435,6 +1437,7 @@ def format_default_llm_repr(obj: Any, **kwargs) -> str:
     return format_llm_repr(obj, **kwargs)
 
 
+@statek_internal_tool
 def statek_print(*objects, sep=' ', end='\n', file=None, flush=False):
     """LLM-friendly replacement for Python's built-in print.
 
