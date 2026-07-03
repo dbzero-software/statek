@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
+import functools
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional, ParamSpec, TypeVar
 
 import dbzero as db0
 
@@ -33,6 +34,8 @@ _DBZERO_RESTRICTED_CONTEXT: ContextVar[bool] = ContextVar(
     "statek_dbzero_restricted",
     default=False,
 )
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 @contextmanager
@@ -53,6 +56,16 @@ def as_unrestricted() -> Iterator[None]:
         yield
     finally:
         _DBZERO_RESTRICTED_CONTEXT.reset(token)
+
+
+def internal_unrestricted(func: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Run a trusted Statek-internal helper outside dbzero restricted mode."""
+    @functools.wraps(func)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with as_unrestricted():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _statek_restricted(settings: Optional[StatekSettings] = None) -> bool:

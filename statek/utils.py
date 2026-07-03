@@ -44,7 +44,7 @@ from typing import (
 )
 import dbzero as db0
 
-from statek.dbzero_restricted import as_unrestricted
+from statek.dbzero_restricted import internal_unrestricted
 
 _STATEK_CTX_VAR: _PyContextVar[Optional[Dict[str, Any]]] = _PyContextVar(
     "statek_ctx",
@@ -1437,12 +1437,7 @@ def format_default_llm_repr(obj: Any, **kwargs) -> str:
     return format_llm_repr(obj, **kwargs)
 
 
-def _unrestricted_llm_repr(obj: Any, **kwargs) -> str:
-    """Format trusted Statek console output outside LLM dbzero restrictions."""
-    with as_unrestricted():
-        return format_default_llm_repr(obj, **kwargs)
-
-
+@internal_unrestricted
 def statek_print(*objects, sep=' ', end='\n', file=None, flush=False):
     """LLM-friendly replacement for Python's built-in print.
 
@@ -1455,7 +1450,7 @@ def statek_print(*objects, sep=' ', end='\n', file=None, flush=False):
         file: File-like object to write to. Defaults to sys.stdout.
         flush: Whether to forcibly flush the stream. Defaults to False.
     """
-    text = sep.join(_unrestricted_llm_repr(obj) for obj in objects)
+    text = sep.join(format_default_llm_repr(obj) for obj in objects)
     print(text, end=end, file=file, flush=flush)
 
 
