@@ -51,7 +51,7 @@ from statek.dbzero_restricted import llm_dbzero_restricted_context
 from statek.utils import (
     CodeBlock,
     CallSpec,
-    format_default_llm_repr,
+    _unrestricted_llm_repr,
     extract_dialog,
     get_current_job,
     get_current_agent,
@@ -225,7 +225,7 @@ def _fmt_print_arg(arg) -> str:
     """
     if isinstance(arg, str):
         return arg
-    return format_default_llm_repr(arg)
+    return _unrestricted_llm_repr(arg)
 
 
 def custom_print(job, *args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
@@ -512,7 +512,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
         if job.py_env.future_result is not None:
             try:
                 result = _resolve_output_future(job.py_env.future_result)
-                output = format_default_llm_repr(result)
+                output = _unrestricted_llm_repr(result)
                 output_fn(output)
                 job.py_env.future_result = None
                 if instr_num is not None:
@@ -556,7 +556,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
                             job.py_env.future_result = result
                             raise
                     if result is not None or idx not in print_call_exprs:
-                        output_fn(format_default_llm_repr(result))
+                        output_fn(_unrestricted_llm_repr(result))
                 else:
                     code_obj = _compile_exec_node(node, "<string>")
                     with llm_dbzero_restricted_context():
@@ -861,7 +861,7 @@ async def exec_tool(call_spec: CallSpec, job: Job,
                 if asyncio.iscoroutine(result):
                     result = await result
             if result is not None:
-                private_console.append(format_default_llm_repr(result))
+                private_console.append(_unrestricted_llm_repr(result))
         except Exception as e:  # pylint: disable=broad-exception-caught
             error_msg = f"{type(e).__name__}: {e}"
             private_console.append(error_msg)

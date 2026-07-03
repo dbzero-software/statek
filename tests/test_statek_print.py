@@ -9,6 +9,9 @@ from decimal import Decimal
 
 import dbzero as db0
 
+import statek
+from statek.dbzero_restricted import llm_dbzero_restricted_context
+from statek.settings import StatekSettings
 from statek.utils import statek_print
 
 
@@ -153,6 +156,24 @@ def test_db0_memo_with_llm_repr(db0_fixture, capsys):  # pylint: disable=unused-
 
     statek_print(Config(name="test"))
     assert capsys.readouterr().out == "Config[test]\n"
+
+
+def test_db0_memo_with_llm_repr_under_restricted_context(db0_fixture, capsys):  # pylint: disable=unused-argument
+    """statek_print should use unrestricted trusted formatting for dbzero objects."""
+    statek.init(StatekSettings(prompt_defs={}))
+
+    @db0.memo
+    @dataclasses.dataclass
+    class Config:
+        name: str
+
+        def __llm_repr__(self):
+            return f"Config[{self.name}]"
+
+    with llm_dbzero_restricted_context():
+        statek_print(Config(name="restricted"))
+
+    assert capsys.readouterr().out == "Config[restricted]\n"
 
 
 def test_db0_memo_without_custom_methods(db0_fixture, capsys):  # pylint: disable=unused-argument
