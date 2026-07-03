@@ -47,7 +47,7 @@ from statek.model_name import ensure_model_name, format_model_for_provider, sele
 from statek.settings import get_statek_settings, statek_log, ChatStyle
 from statek.system import inject_context
 from statek.python_sandbox import get_sandbox_policy
-from statek.dbzero_restricted import internal_unrestricted, llm_dbzero_restricted_context
+from statek.dbzero_restricted import statek_internal_tool, llm_dbzero_restricted_context
 from statek.utils import (
     CodeBlock,
     CallSpec,
@@ -217,7 +217,7 @@ class _ResilientTransformer(ast.NodeTransformer):
         return node
 
 """Execute a single AST node with custom print function."""
-@internal_unrestricted
+@statek_internal_tool
 def _fmt_print_arg(arg) -> str:
     """Format a single print() argument.
 

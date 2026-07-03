@@ -58,7 +58,7 @@ def as_unrestricted() -> Iterator[None]:
         _DBZERO_RESTRICTED_CONTEXT.reset(token)
 
 
-def internal_unrestricted(func: Callable[_P, _R]) -> Callable[_P, _R]:
+def statek_internal_tool(func: Callable[_P, _R]) -> Callable[_P, _R]:
     """Run a trusted Statek-internal helper outside dbzero restricted mode."""
     @functools.wraps(func)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
