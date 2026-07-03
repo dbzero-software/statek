@@ -1373,7 +1373,18 @@ def _get_object_members(value: Any) -> Optional[Dict[str, Any]]:
     """Return an ordered dict of an object's members, or None if not applicable."""
     if isinstance(value, type):
         return None
-    if is_dataclass(value):
+    dataclass_field_map = getattr(value, '__dataclass_fields__', None)
+    dataclass_fields_are_valid = (
+        is_dataclass(value)
+        and isinstance(dataclass_field_map, dict)
+        and all(
+            isinstance(name, str)
+            and hasattr(field_def, 'name')
+            and hasattr(field_def, '_field_type')
+            for name, field_def in dataclass_field_map.items()
+        )
+    )
+    if dataclass_fields_are_valid:
         return {f.name: getattr(value, f.name) for f in dataclass_fields(value)}
     if hasattr(value, '__dict__'):
         return dict(vars(value))

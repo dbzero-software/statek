@@ -148,6 +148,28 @@ def test_dataclass_uses_format_llm_repr():
     assert format_default_llm_repr(Point(1, 2)) == "Point(x=1,y=2)"
 
 
+def test_malformed_dataclass_like_object_falls_back_to_dict_members():
+    """Objects with invalid dataclass metadata should not crash formatting."""
+    class PseudoDataclass:
+        __dataclass_fields__ = None
+
+        def __init__(self):
+            self.name = "bad"
+
+    assert format_default_llm_repr(PseudoDataclass()) == 'PseudoDataclass(name="bad")'
+
+
+def test_malformed_dataclass_like_collection_item_falls_back_to_dict_members():
+    """Malformed dataclass-like objects should also be safe inside collections."""
+    class PseudoDataclass:
+        __dataclass_fields__ = None
+
+        def __init__(self):
+            self.name = "bad"
+
+    assert format_default_llm_repr([PseudoDataclass()]) == '[PseudoDataclass(name="bad")]'
+
+
 # --- db0.memo objects ---
 
 def test_db0_memo_with_llm_repr(db0_fixture):  # pylint: disable=unused-argument
