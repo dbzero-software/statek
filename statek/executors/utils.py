@@ -1174,12 +1174,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 14: Add new log item using append_chat_log
     job.append_chat_log(request, response)
+    step_data = response.step_data
 
     # Step 15: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
     dialog_error = False
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         try:
-            await handle_dialog(response.text, _local_context=local_context)
+            await handle_dialog(step_data.text, _local_context=local_context)
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
             job.console_append(error_msg, error_message=error_msg)
@@ -1191,11 +1192,11 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # If send_message raised, always continue so the LLM can react to the error.
     if not dialog_error and job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-            has_code = bool(response.call_requests)
+            has_code = bool(step_data.call_requests)
         else:
             has_code = (
-                response.call_requests
-                or not _is_empty_code(strip_markup(response.text, strict=True))
+                step_data.call_requests
+                or not _is_empty_code(strip_markup(step_data.text, strict=True))
             )
         if not has_code:
             reminder = getattr(job.job_def.agent, "reminder", None)

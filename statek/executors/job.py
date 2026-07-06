@@ -1495,8 +1495,9 @@ class Job:
         is_md_style = chat_style in (  # pylint: disable=no-member
             ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)
         is_direct = chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
+        step_data = llm_resp.step_data
 
-        if llm_resp.call_requests:
+        if step_data.call_requests:
             # When tool calls are present we build a CodeBlock and need to
             # decide what (if anything) goes into its `code` field.
             #   - DIRECT: dialog text (not Python) — stored for chat history,
@@ -1506,14 +1507,14 @@ class Job:
             #     ast.parse.
             #   - other styles: pass the response through as-is.
             if is_direct:
-                response_code = extract_dialog(llm_resp.text or "")
+                response_code = extract_dialog(step_data.text or "")
             elif is_md_style:
-                response_code = strip_markup(llm_resp.text, strict=True)
+                response_code = strip_markup(step_data.text, strict=True)
             else:
-                response_code = llm_resp.text
+                response_code = step_data.text
             tool_calls = [
                 CallSpec(id=cp.id, func_name=cp.name, args=cp.args or [], kwargs=cp.kwargs or {})
-                for cp in llm_resp.call_requests
+                for cp in step_data.call_requests
             ]
             stored_resp = CodeBlock(code=response_code or None, tool_calls=tool_calls)
         else:
@@ -1521,9 +1522,9 @@ class Job:
             # history. DIRECT keeps only the dialog text; markdown styles
             # keep the cleaned-up form; other styles store as-is.
             if is_direct:
-                stored_resp = extract_dialog(llm_resp.text or "")
+                stored_resp = extract_dialog(step_data.text or "")
             else:
-                stored_resp = strip_markup(llm_resp.text, strict=is_md_style)
+                stored_resp = strip_markup(step_data.text, strict=is_md_style)
 
         chat_item = LLM_LogItem(
             console_pos=len(self.py_env.console) if self.py_env.console else 0,

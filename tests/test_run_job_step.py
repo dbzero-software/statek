@@ -17,7 +17,7 @@ from statek.executors.utils import handle_dialog, run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
 from statek.llm_harness import LLM_Harness
-from statek.llm_api import LLM_Response, LLM_Stats, CallParams, OpenRouter_API
+from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, CallParams, OpenRouter_API
 from statek.settings import LLM_API_Settings
 from statek.task import SubTaskHandler
 from statek.utils import CodeBlock, CallSpec
@@ -58,6 +58,13 @@ def _completed_subtask_handler(job, subtask_id=None, result=None):
     handler._SubTaskHandler__is_completed = True  # pylint: disable=protected-access
     handler._SubTaskHandler__result = result  # pylint: disable=protected-access
     return handler
+
+
+def _llm_response(text, call_requests=None):
+    return LLM_Response(
+        step_data=LLM_StepData(text=text, call_requests=call_requests),
+        stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+    )
 
 
 def create_future_not_ready():
@@ -164,11 +171,7 @@ class TestRunJobStepToolCallResponse:
         )
 
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={"x": 1})
-        mock_response = LLM_Response(
-            text="",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=[call_params],
-        )
+        mock_response = _llm_response("", call_requests=[call_params])
 
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
@@ -203,11 +206,7 @@ class TestRunJobStepToolCallResponse:
             job_status=JobStatus.STARTED,
         )
 
-        mock_response = LLM_Response(
-            text="x = 42",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("x = 42")
 
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
@@ -838,9 +837,8 @@ class TestRunJobStepWarmupException:
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="raise KeyError('oops')"))
 
         mock_response = MagicMock()
-        mock_response.text = "exit('done')"
+        mock_response.step_data = LLM_StepData(text="exit('done')", call_requests=None)
         mock_response.stats = LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None)
-        mock_response.call_requests = None
 
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
@@ -903,11 +901,7 @@ class TestRunJobStepEmptyLLMSubmission:
         from tests.conftest import create_chat_log_item
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp=""))
 
-        mock_response = LLM_Response(
-            text="exit('done')",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("exit('done')")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -942,11 +936,7 @@ class TestRunJobStepEmptyLLMSubmission:
         job.chat_log.append(create_chat_log_item(
             console_pos=0, llm_resp=comment_code))
 
-        mock_response = LLM_Response(
-            text="exit('done')",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("exit('done')")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -981,11 +971,7 @@ class TestRunJobStepEmptyLLMSubmission:
         job.chat_log.append(create_chat_log_item(
             console_pos=0, llm_resp=block_comment))
 
-        mock_response = LLM_Response(
-            text="exit('done')",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("exit('done')")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1292,11 +1278,7 @@ class TestRunJobStepMdDialog:
         """In MD_DIALOG style, text-only LLM response is sent via handle_dialog and job exits."""
         job = self._make_job(job_def_factory)
 
-        mock_response = LLM_Response(
-            text="Hello, how can I help?",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Hello, how can I help?")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1334,11 +1316,7 @@ class TestRunJobStepMdDialog:
             job_status=JobStatus.STARTED,
         )
 
-        mock_response = LLM_Response(
-            text="Hello, how can I help?",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Hello, how can I help?")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1367,11 +1345,7 @@ class TestRunJobStepMdDialog:
         """In MD_DIALOG style, LLM response with code is sent (text only) and job continues."""
         job = self._make_job(job_def_factory)
 
-        mock_response = LLM_Response(
-            text="Here is the result:\n```python\ntest_var = 99\n```",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Here is the result:\n```python\ntest_var = 99\n```")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1403,11 +1377,7 @@ class TestRunJobStepMdDialog:
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="test_var = 42"))
 
         # Next LLM response is text-only (job will exit after this)
-        mock_response = LLM_Response(
-            text="Done.",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Done.")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1435,11 +1405,7 @@ class TestRunJobStepMdDialog:
         job = self._make_job(job_def_factory, warmup_code='test_var = 42',
                              status=JobStatus.READY)
 
-        mock_response = LLM_Response(
-            text="Warmup complete.",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Warmup complete.")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1468,11 +1434,7 @@ class TestRunJobStepMdDialog:
         job = self._make_job(job_def_factory)
 
         # LLM response with code so job would normally continue
-        mock_response = LLM_Response(
-            text="Here is the result:\n```python\ntest_var = 99\n```",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Here is the result:\n```python\ntest_var = 99\n```")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1506,11 +1468,7 @@ class TestRunJobStepMdDialog:
         job = self._make_job(job_def_factory)
 
         # Text-only response — normally would exit job
-        mock_response = LLM_Response(
-            text="Hello, how can I help?",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Hello, how can I help?")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1558,11 +1516,7 @@ class TestRunJobStepDirect:
         """In DIRECT style, text-only LLM response exits job (no 'no code submitted' error)."""
         job = self._make_job(job_def_factory)
 
-        mock_response = LLM_Response(
-            text="Dzisiejsza data to 3 kwietnia 2026 roku.",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Dzisiejsza data to 3 kwietnia 2026 roku.")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1602,11 +1556,7 @@ class TestRunJobStepDirect:
             job_status=JobStatus.STARTED,
         )
 
-        mock_response = LLM_Response(
-            text="Dzisiejsza data to 3 kwietnia 2026 roku.",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Dzisiejsza data to 3 kwietnia 2026 roku.")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1641,11 +1591,7 @@ class TestRunJobStepDirect:
         )
         job.push_notification(handler)
 
-        mock_response = LLM_Response(
-            text="Dzisiejsza data to 3 kwietnia 2026 roku.",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Dzisiejsza data to 3 kwietnia 2026 roku.")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1735,9 +1681,8 @@ class TestHandleDialogMarkdownMedia:
         """In DIRECT style, LLM response with tool calls continues (does not exit)."""
         job = self._make_job(job_def_factory)
 
-        mock_response = LLM_Response(
-            text="Let me run that for you.",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
+        mock_response = _llm_response(
+            "Let me run that for you.",
             call_requests=[CallParams(
                 call_id="call-1", name="python_cli",
                 args=[], kwargs={"code": "x = 1"})],
@@ -1765,11 +1710,7 @@ class TestHandleDialogMarkdownMedia:
         """handle_dialog error in DIRECT: appended to console, job continues."""
         job = self._make_job(job_def_factory)
 
-        mock_response = LLM_Response(
-            text="Hello!",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("Hello!")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
 
@@ -1818,11 +1759,7 @@ class TestProviderRouting:
         )
 
     def _make_mock_api(self):
-        mock_response = LLM_Response(
-            text="x = 1",
-            stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
-        )
+        mock_response = _llm_response("x = 1")
         mock_api = MagicMock()
         mock_api.process_request = AsyncMock(return_value=mock_response)
         mock_harness = MagicMock()

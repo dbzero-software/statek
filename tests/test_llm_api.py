@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from statek.llm_api import (
-    LLM_API, LLM_Response, LLM_Stats, DefaultLLM_API_Impl,
+    LLM_API, LLM_Response, LLM_StepData, LLM_Stats, DefaultLLM_API_Impl,
     OPENAI_COMPATIBLE_API_PROVIDERS, OpenRouter_API, OpenAI_API, VertexAI_API,
     ClaudeAI_API, Claude_API, CallParams, extract_call_params, add_provider,
     _CUSTOM_LLM_API_PROVIDERS,
@@ -28,7 +28,7 @@ def _make_stats():
 
 
 def _make_response(text="ok"):
-    return LLM_Response(text=text, stats=_make_stats(), call_requests=None)
+    return LLM_Response(step_data=LLM_StepData(text=text, call_requests=None), stats=_make_stats())
 
 
 @pytest.fixture()
@@ -887,7 +887,10 @@ class TestPreviewRequest:
                     system_prompt, model, metadata, tools, chat_history, chat_style,
                     temperature, enable_reasoning,
                 )
-                return LLM_Response(text="ok", stats=_make_stats(), call_requests=None)
+                return LLM_Response(
+                    step_data=LLM_StepData(text="ok", call_requests=None),
+                    stats=_make_stats(),
+                )
 
         api = _PreviewIteratingAPI()
         history = iter([_user("hello"), _console("> ok")])
@@ -1140,9 +1143,9 @@ class TestOpenRouterCallRequests:
             result = await openrouter_api._process_request(
                 model="gpt-4o", tools=[app_tool], metadata={})
 
-        assert result.call_requests is not None
-        assert len(result.call_requests) == 1
-        cp = result.call_requests[0]
+        assert result.step_data.call_requests is not None
+        assert len(result.step_data.call_requests) == 1
+        cp = result.step_data.call_requests[0]
         assert cp.id == "call_abc"
         assert cp.name == "my_app_tool"
         assert cp.args == []
@@ -1163,8 +1166,8 @@ class TestOpenRouterCallRequests:
         with patch("httpx.AsyncClient.post", fake_post):
             result = await openrouter_api._process_request(model="gpt-4o", metadata={})
 
-        assert result.call_requests is None
-        assert result.text == "just text"
+        assert result.step_data.call_requests is None
+        assert result.step_data.text == "just text"
 
     @pytest.mark.asyncio
     async def test_multiple_tool_calls_all_parsed(
@@ -1193,13 +1196,13 @@ class TestOpenRouterCallRequests:
             result = await openrouter_api._process_request(
                 model="gpt-4o", tools=[app_tool, sys_tool], metadata={})
 
-        assert len(result.call_requests) == 2
-        names = {cp.name for cp in result.call_requests}
+        assert len(result.step_data.call_requests) == 2
+        names = {cp.name for cp in result.step_data.call_requests}
         assert names == {"my_app_tool", "my_sys_tool"}
 
     @pytest.mark.asyncio
     async def test_text_empty_when_only_tool_calls(self, openrouter_api):
-        """response.text is '' when content is null and tool_calls are present."""
+        """step_data.text is '' when content is null and tool_calls are present."""
         async def fake_post(self_, url, json=None, headers=None):
             mock_resp = MagicMock()
             mock_resp.raise_for_status = MagicMock()
@@ -1220,8 +1223,8 @@ class TestOpenRouterCallRequests:
         with patch("httpx.AsyncClient.post", fake_post):
             result = await openrouter_api._process_request(model="gpt-4o", metadata={})
 
-        assert result.text == ""
-        assert result.call_requests is not None
+        assert result.step_data.text == ""
+        assert result.step_data.call_requests is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1255,9 +1258,9 @@ class TestClaudeCallRequests:
             result = await claude_api._process_request(
                 model="claude-3", tools=[app_tool], metadata={})
 
-        assert result.call_requests is not None
-        assert len(result.call_requests) == 1
-        cp = result.call_requests[0]
+        assert result.step_data.call_requests is not None
+        assert len(result.step_data.call_requests) == 1
+        cp = result.step_data.call_requests[0]
         assert cp.id == "toolu_01"
         assert cp.name == "my_app_tool"
         assert cp.args == []
@@ -1278,8 +1281,8 @@ class TestClaudeCallRequests:
         with patch("httpx.AsyncClient.post", fake_post):
             result = await claude_api._process_request(model="claude-3", metadata={})
 
-        assert result.call_requests is None
-        assert result.text == "hello"
+        assert result.step_data.call_requests is None
+        assert result.step_data.text == "hello"
 
     @pytest.mark.asyncio
     async def test_mixed_text_and_tool_use_blocks(self, claude_api, app_tool):
@@ -1301,9 +1304,9 @@ class TestClaudeCallRequests:
             result = await claude_api._process_request(
                 model="claude-3", tools=[app_tool], metadata={})
 
-        assert result.text == "I will call "
-        assert len(result.call_requests) == 1
-        assert result.call_requests[0].name == "my_app_tool"
+        assert result.step_data.text == "I will call "
+        assert len(result.step_data.call_requests) == 1
+        assert result.step_data.call_requests[0].name == "my_app_tool"
 
     @pytest.mark.asyncio
     async def test_multiple_tool_use_blocks(self, claude_api, app_tool, sys_tool):
@@ -1326,8 +1329,8 @@ class TestClaudeCallRequests:
             result = await claude_api._process_request(
                 model="claude-3", tools=[app_tool, sys_tool], metadata={})
 
-        assert len(result.call_requests) == 2
-        names = {cp.name for cp in result.call_requests}
+        assert len(result.step_data.call_requests) == 2
+        names = {cp.name for cp in result.step_data.call_requests}
         assert names == {"my_app_tool", "my_sys_tool"}
 
     @pytest.mark.asyncio
@@ -1351,7 +1354,7 @@ class TestClaudeCallRequests:
             result = await claude_api._process_request(
                 model="claude-3", tools=[app_tool], metadata={})
 
-        assert result.call_requests[0].kwargs == nested
+        assert result.step_data.call_requests[0].kwargs == nested
 
 
 # ---------------------------------------------------------------------------
@@ -1986,7 +1989,7 @@ class TestVertexAIRequest:
         fn_decl = captured["json"]["tools"][0]["functionDeclarations"][0]
         assert fn_decl["name"] == "my_app_tool"
         assert fn_decl["parameters"]["type"] == "object"
-        assert result.text == "ok"
+        assert result.step_data.text == "ok"
 
     @pytest.mark.asyncio
     async def test_function_call_response_populates_call_requests(self, vertexai_api):
@@ -2011,10 +2014,10 @@ class TestVertexAIRequest:
         with patch("httpx.AsyncClient.post", fake_post):
             result = await vertexai_api._process_request(model="gemini-2.5-flash")
 
-        assert result.text == ""
-        assert len(result.call_requests) == 1
-        assert result.call_requests[0].name == "my_app_tool"
-        assert result.call_requests[0].kwargs == {"x": "hi"}
+        assert result.step_data.text == ""
+        assert len(result.step_data.call_requests) == 1
+        assert result.step_data.call_requests[0].name == "my_app_tool"
+        assert result.step_data.call_requests[0].kwargs == {"x": "hi"}
 
 
 # ---------------------------------------------------------------------------
@@ -2033,7 +2036,9 @@ class TestProcessRequestDirectChatStyle:
         async def fake_process_request(self, **kwargs):
             captured["chat_history"] = list(kwargs.get("chat_history", []))
             return LLM_Response(
-                text="ok", stats=_make_stats(), call_requests=None)
+                step_data=LLM_StepData(text="ok", call_requests=None),
+                stats=_make_stats(),
+            )
 
         history = [
             _user("prompt"),
@@ -2067,7 +2072,9 @@ class TestProcessRequestDirectChatStyle:
         async def fake_process_request(self, **kwargs):
             captured["chat_history"] = list(kwargs.get("chat_history", []))
             return LLM_Response(
-                text="ok", stats=_make_stats(), call_requests=None)
+                step_data=LLM_StepData(text="ok", call_requests=None),
+                stats=_make_stats(),
+            )
 
         history = [_asst_code("warmup_code()"), _console("> result")]
 
@@ -2093,7 +2100,9 @@ class TestProcessRequestDirectChatStyle:
         async def fake_process_request(self, **kwargs):
             captured["chat_history"] = list(kwargs.get("chat_history", []))
             return LLM_Response(
-                text="ok", stats=_make_stats(), call_requests=None)
+                step_data=LLM_StepData(text="ok", call_requests=None),
+                stats=_make_stats(),
+            )
 
         history = [
             _user("prompt"),

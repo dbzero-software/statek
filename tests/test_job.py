@@ -19,7 +19,7 @@ from statek.executors.job import (
     TaskDifficulty,
     parse_model_metadata,
 )
-from statek.llm_api import LLM_Response, LLM_Stats, OpenRouter_API
+from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, OpenRouter_API
 from statek.model_pricing import set_model_pricing
 from statek.model_name import ModelName, parse_model_name
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
@@ -1323,18 +1323,16 @@ class TestJobGetRequestData:
         job.py_env.console_append("Step 1 output")
         request1 = job.get_next_request()
         job.append_chat_log(request1, LLM_Response(
-            text="code_block_1",
+            step_data=LLM_StepData(text="code_block_1", call_requests=None),
             stats=LLM_Stats(0, 0, None),
-            call_requests=None,
         ))
 
         job.py_env.console_append("Step 2 output")
         job.py_env.console_append("Step 2 more output")
         request2 = job.get_next_request()
         job.append_chat_log(request2, LLM_Response(
-            text="code_block_2",
+            step_data=LLM_StepData(text="code_block_2", call_requests=None),
             stats=LLM_Stats(0, 0, None),
-            call_requests=None,
         ))
 
         historical_1 = job.get_request_data(0)
@@ -1360,9 +1358,8 @@ class TestJobGetRequestData:
 
         request = job.get_next_request()
         job.append_chat_log(request, LLM_Response(
-            text="resp",
+            step_data=LLM_StepData(text="resp", call_requests=None),
             stats=LLM_Stats(0, 0, None),
-            call_requests=None,
         ))
 
         with pytest.raises(IndexError, match="turn_num"):
@@ -1856,9 +1853,8 @@ class TestJobAppendChatLog:
 
         request = job.get_next_request()
         llm_resp = LLM_Response(
-            text="print('hello')",
+            step_data=LLM_StepData(text="print('hello')", call_requests=None),
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
         )
         job.append_chat_log(request, llm_resp)
 
@@ -1876,9 +1872,8 @@ class TestJobAppendChatLog:
 
         request = job.get_next_request()
         llm_resp = LLM_Response(
-            text="x = 5",
+            step_data=LLM_StepData(text="x = 5", call_requests=None),
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
         )
         job.append_chat_log(request, llm_resp)
 
@@ -1893,23 +1888,23 @@ class TestJobAppendChatLog:
         job.py_env.console_append("Step 1 output")
         request1 = job.get_next_request()
         job.append_chat_log(request1, LLM_Response(
-            text="code_block_1",
-            stats=LLM_Stats(0, 0, None), call_requests=None,
+            step_data=LLM_StepData(text="code_block_1", call_requests=None),
+            stats=LLM_Stats(0, 0, None),
         ))
 
         job.py_env.console_append("Step 2 output")
         job.py_env.console_append("Step 2 more output")
         request2 = job.get_next_request()
         job.append_chat_log(request2, LLM_Response(
-            text="code_block_2",
-            stats=LLM_Stats(0, 0, None), call_requests=None,
+            step_data=LLM_StepData(text="code_block_2", call_requests=None),
+            stats=LLM_Stats(0, 0, None),
         ))
 
         job.py_env.console_append("Step 3 output")
         request3 = job.get_next_request()
         job.append_chat_log(request3, LLM_Response(
-            text="code_block_3",
-            stats=LLM_Stats(0, 0, None), call_requests=None,
+            step_data=LLM_StepData(text="code_block_3", call_requests=None),
+            stats=LLM_Stats(0, 0, None),
         ))
 
         assert len(job.chat_log) == 3
@@ -1936,9 +1931,11 @@ class TestAppendChatLogDirect:
 
         request = job.get_next_request()
         llm_resp = LLM_Response(
-            text="Oto Twoj grafik na kwiecien 2026 roku.",
+            step_data=LLM_StepData(
+                text="Oto Twoj grafik na kwiecien 2026 roku.",
+                call_requests=None,
+            ),
             stats=LLM_Stats(0, 0, None),
-            call_requests=None,
         )
         with patch(
             'statek.executors.job.get_statek_settings',
@@ -1956,9 +1953,11 @@ class TestAppendChatLogDirect:
 
         request = job.get_next_request()
         llm_resp = LLM_Response(
-            text="```python\nx = 42\n```\nHello user!",
+            step_data=LLM_StepData(
+                text="```python\nx = 42\n```\nHello user!",
+                call_requests=None,
+            ),
             stats=LLM_Stats(0, 0, None),
-            call_requests=None,
         )
         with patch(
             'statek.executors.job.get_statek_settings',
@@ -1978,9 +1977,8 @@ class TestAppendChatLogDirect:
         request = job.get_next_request()
         call = CallParams(call_id="c1", name="python_cli", args=[], kwargs={"code": "x=1"})
         llm_resp = LLM_Response(
-            text="```python\nx = 42\n```",
+            step_data=LLM_StepData(text="```python\nx = 42\n```", call_requests=[call]),
             stats=LLM_Stats(0, 0, None),
-            call_requests=[call],
         )
         with patch(
             'statek.executors.job.get_statek_settings',
@@ -2010,9 +2008,11 @@ class TestAppendChatLogDirect:
         call = CallParams(call_id="c1", name="python_cli", args=[],
                           kwargs={"code": "x=1"})
         llm_resp = LLM_Response(
-            text="You have 3 preference points remaining for April.",
+            step_data=LLM_StepData(
+                text="You have 3 preference points remaining for April.",
+                call_requests=[call],
+            ),
             stats=LLM_Stats(0, 0, None),
-            call_requests=[call],
         )
         with patch(
             'statek.executors.job.get_statek_settings',
@@ -2033,9 +2033,8 @@ class TestAppendChatLogDirect:
 
         request = job.get_next_request()
         llm_resp = LLM_Response(
-            text="Hello, how can I help?",
+            step_data=LLM_StepData(text="Hello, how can I help?", call_requests=None),
             stats=LLM_Stats(0, 0, None),
-            call_requests=None,
         )
         with patch(
             'statek.executors.job.get_statek_settings',
