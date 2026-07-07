@@ -3,6 +3,7 @@
 # pylint: disable=unused-argument,no-member,too-few-public-methods
 
 import dbzero as db0
+import pytest
 
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.agent import SupervisedAgent
@@ -29,6 +30,79 @@ class IdentityPostProcessor(PostProcessor):
         return llm_step
 
 
+@db0.memo
+class StaticReturnPostProcessor(PostProcessor):
+    """Post-processor returning a fixed value for result-normalization tests."""
+
+    def __init__(self, result):
+        self.result = result
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return the configured result."""
+        del llm_step, job
+        return self.result
+
+
+@db0.memo
+class ReplacementPostProcessor(PostProcessor):
+    """Post-processor returning a replacement LLM step."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return a replacement step."""
+        del llm_step, job
+        return LLM_StepData(text=self.text, call_requests=None)
+
+
+@db0.memo
+class ClonePostProcessor(PostProcessor):
+    """Post-processor returning a value-equal replacement LLM step."""
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return a new step with the same values as the input step."""
+        del job
+        return LLM_StepData(text=llm_step.text, call_requests=llm_step.call_requests)
+
+
+@db0.memo
+class TupleMessageAndStepPostProcessor(PostProcessor):
+    """Post-processor returning a system message and replacement step."""
+
+    def __init__(self, message: str, text: str):
+        self.message = message
+        self.text = text
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return a message and replacement step."""
+        del llm_step, job
+        return self.message, LLM_StepData(text=self.text, call_requests=None)
+
+
+@db0.memo
+class MultipleStepPostProcessor(PostProcessor):
+    """Post-processor returning two LLM steps."""
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return an invalid multiple-step tuple."""
+        del llm_step, job
+        return (
+            LLM_StepData(text="First", call_requests=None),
+            LLM_StepData(text="Second", call_requests=None),
+        )
+
+
+@db0.memo
+class TupleMessagesPostProcessor(PostProcessor):
+    """Post-processor returning multiple system messages."""
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return two messages without an LLM step."""
+        del llm_step, job
+        return "Review once.", "Review twice."
+
+
 def _supervised_agent(role: str = "post_processor_agent") -> SupervisedAgent:
     """Create a supervised agent with required model metadata."""
     return SupervisedAgent(
@@ -36,6 +110,15 @@ def _supervised_agent(role: str = "post_processor_agent") -> SupervisedAgent:
         _system_prompt=make_system_prompt("Test agent"),
         _metadata={"MODEL": "test-model"},
         _tools=[],
+    )
+
+
+def _job() -> Job:
+    """Create a job for post-processor method tests."""
+    agent = _supervised_agent()
+    return Job(
+        job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}),
+        job_status=JobStatus.READY,
     )
 
 
@@ -176,3 +259,114 @@ def test_post_processed_item_delimits_previous_console_output(db0_fixture):
     ]
     assert history[1].content == "Out 1\nOut 2"
     assert history[2].content == "Review the draft answer."
+
+
+def test_handle_post_processor_passes_through_llm_step(db0_fixture):
+    """An LLM_StepData result continues without activating the processor."""
+    job = _job()
+    llm_step = LLM_StepData(text="Draft answer", call_requests=None)
+    processor = IdentityPostProcessor("identity")
+
+    result = job.handle_post_processor(processor, llm_step)
+
+    assert result == (llm_step, False)
+    assert job.chat_log == []
+
+
+def test_handle_post_processor_replaces_llm_step(db0_fixture):
+    """A replacement LLM_StepData result becomes the next chained step."""
+    job = _job()
+    llm_step = LLM_StepData(text="Draft answer", call_requests=None)
+    processor = ReplacementPostProcessor("Better answer")
+
+    result = job.handle_post_processor(processor, llm_step)
+
+    assert result == (LLM_StepData(text="Better answer", call_requests=None), True)
+    assert job.chat_log == []
+
+
+def test_handle_post_processor_value_equal_replacement_activates(db0_fixture):
+    """A new LLM_StepData instance activates even when it has equal values."""
+    job = _job()
+    llm_step = LLM_StepData(text="Draft answer", call_requests=None)
+    processor = ClonePostProcessor()
+
+    processed_step, activated = job.handle_post_processor(processor, llm_step)
+
+    assert processed_step == llm_step
+    assert processed_step is not llm_step
+    assert activated is True
+    assert job.chat_log == []
+
+
+def test_handle_post_processor_message_only_suppresses_llm_step(db0_fixture):
+    """A string result records a system message and drops the current LLM step."""
+    job = _job()
+    job.py_env.console = ["existing output"]
+    processor = StaticReturnPostProcessor("Review the draft answer.")
+
+    result = job.handle_post_processor(
+        processor,
+        LLM_StepData(text="Draft answer", call_requests=None),
+    )
+
+    assert result == (None, True)
+    assert len(job.chat_log) == 1
+    assert isinstance(job.chat_log[0], PostProcessedItem)
+    assert job.chat_log[0].post_processor is processor
+    assert job.chat_log[0].message == "Review the draft answer."
+    assert job.chat_log[0].console_pos == 1
+
+
+def test_handle_post_processor_tuple_message_and_step(db0_fixture):
+    """Tuple results may combine a system message with one LLM step."""
+    job = _job()
+    processor = TupleMessageAndStepPostProcessor("Review the draft answer.", "Better answer")
+
+    result = job.handle_post_processor(
+        processor,
+        LLM_StepData(text="Draft answer", call_requests=None),
+    )
+
+    assert result == (LLM_StepData(text="Better answer", call_requests=None), True)
+    assert len(job.chat_log) == 1
+    assert isinstance(job.chat_log[0], PostProcessedItem)
+    assert job.chat_log[0].message == "Review the draft answer."
+
+
+def test_handle_post_processor_tuple_message_without_step_suppresses(db0_fixture):
+    """Tuple results without LLM_StepData suppress the current LLM step."""
+    job = _job()
+    processor = TupleMessagesPostProcessor()
+
+    result = job.handle_post_processor(
+        processor,
+        LLM_StepData(text="Draft answer", call_requests=None),
+    )
+
+    assert result == (None, True)
+    assert [item.message for item in job.chat_log] == ["Review once.", "Review twice."]
+
+
+def test_handle_post_processor_rejects_invalid_return_value(db0_fixture):
+    """Unsupported processor return values fail clearly."""
+    job = _job()
+    processor = StaticReturnPostProcessor(42)
+
+    with pytest.raises(TypeError, match="Unsupported post-processor return value"):
+        job.handle_post_processor(
+            processor,
+            LLM_StepData(text="Draft answer", call_requests=None),
+        )
+
+
+def test_handle_post_processor_rejects_multiple_llm_steps(db0_fixture):
+    """A tuple cannot contain more than one replacement LLM step."""
+    job = _job()
+    processor = MultipleStepPostProcessor()
+
+    with pytest.raises(ValueError, match="at most one LLM_StepData"):
+        job.handle_post_processor(
+            processor,
+            LLM_StepData(text="Draft answer", call_requests=None),
+        )

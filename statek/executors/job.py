@@ -46,7 +46,7 @@ from statek.executors.chat_log_item import (
     WarmupLogItem,
     UserLogItem,
 )
-from statek.llm_api import LLM_API, LLM_Response
+from statek.llm_api import LLM_API, LLM_Response, LLM_StepData
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (
     _STATEK_TOOL_MARKER,
@@ -54,6 +54,7 @@ from statek.utils import (
     CallSpecWrapper,
     CodeBlock,
     ParsedWarmupBlock,
+    _is_empty_code,
     _is_hidden_warmup_block,
     _find_locals_in_context,
     build_warmup_code,
@@ -71,6 +72,7 @@ from statek.model_name import ensure_model_name, format_model_for_provider, sele
 from statek.model_pricing import get_model_pricing
 from statek.settings import get_statek_settings, ChatStyle
 from statek.executors.post_processor import (
+    PostProcessor,
     PostProcessingInput,
     post_processing_identity,
     stored_post_processing,
@@ -1583,6 +1585,64 @@ class Job:
         self.py_env.console_append(reminder.text)
         return True
 
+    def handle_post_processor(
+        self,
+        post_processor: PostProcessor,
+        llm_step: LLM_StepData,
+    ) -> Tuple[Optional[LLM_StepData], bool]:
+        """Run one post-processor and normalize its return value.
+
+        Args:
+            post_processor: Processor to run against the uncommitted LLM step.
+            llm_step: LLM response that has not yet been appended to chat_log.
+
+        Returns:
+            A tuple containing the next LLM step, or None when the step is
+            suppressed, plus whether the processor emitted a system message or
+            replaced the input LLM step.
+
+        Raises:
+            TypeError: If the processor returns an unsupported value.
+            ValueError: If a tuple return contains more than one LLM step.
+        """
+        result = post_processor.process(llm_step, self)
+        if isinstance(result, LLM_StepData):
+            return result, result is not llm_step
+
+        if isinstance(result, str):
+            self.chat_log.append(PostProcessedItem(
+                console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                post_processor=post_processor,
+                message=result,
+            ))
+            return None, True
+
+        if not isinstance(result, tuple):
+            raise TypeError("Unsupported post-processor return value")
+
+        processed_step: Optional[LLM_StepData] = None
+        activated = False
+        for item in result:
+            if isinstance(item, LLM_StepData):
+                if processed_step is not None:
+                    raise ValueError("Post-processor tuple may contain at most one LLM_StepData")
+                processed_step = item
+                activated = activated or item is not llm_step
+                continue
+
+            if isinstance(item, str):
+                self.chat_log.append(PostProcessedItem(
+                    console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                    post_processor=post_processor,
+                    message=item,
+                ))
+                activated = True
+                continue
+
+            raise TypeError("Unsupported post-processor return value")
+
+        return processed_step, activated
+
     @property
     def last_response(self) -> Union[str, CodeBlock, None]:
         """
@@ -1979,6 +2039,59 @@ class Job:
     def num_turns(self) -> int:
         """Returns the number of LLM turns (excludes warmup code blocks)."""
         return sum(1 for item in self.chat_log if isinstance(item, LLM_LogItem))
+
+    def count_llm_actions(self) -> int:
+        """Return the number of LLM actions recorded in chat_log.
+
+        This differs from ``num_turns``: ``num_turns`` counts LLM log items,
+        while this method counts finer-grained work inside those items. One
+        non-empty executable code block, one requested tool call, and one
+        user-facing response each count as one action. Framework-generated
+        messages such as warmup, reminder, subtask, user, and post-processor
+        items are ignored.
+
+        Returns:
+            The total number of recorded LLM actions.
+        """
+        action_count = 0
+        for item in self.chat_log:
+            if not isinstance(item, LLM_LogItem):
+                continue
+
+            response = item.llm_resp
+            if isinstance(response, CodeBlock):
+                if response.code and response.code.strip():
+                    action_count += 1
+                if response.tool_calls:
+                    action_count += len(response.tool_calls)
+                continue
+
+            if isinstance(response, str) and self._is_user_facing_llm_response(item):
+                action_count += 1
+
+        return action_count
+
+    def is_step_final(self, llm_step: LLM_StepData) -> bool:
+        """Return whether accepting an LLM step would naturally finish the job.
+
+        Args:
+            llm_step: Uncommitted LLM step to classify.
+
+        Returns:
+            True for DIRECT text-only steps and MD_DIALOG steps with no tool
+            calls or executable fenced Python code. Other chat styles do not
+            have auto-finalization semantics here.
+        """
+        chat_style = self.job_def.chat_style
+        if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
+            return not llm_step.call_requests
+
+        if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+            return not llm_step.call_requests and _is_empty_code(
+                strip_markup(llm_step.text, strict=True)
+            )
+
+        return False
 
     @property
     def _warmup_console_positions(self) -> set:

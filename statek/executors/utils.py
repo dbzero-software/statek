@@ -42,7 +42,7 @@ from statek.executors.job import (
 from statek.executors.chat_log_item import ToolError, WarmupLogItem
 from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
-from statek.llm_api import LLM_API
+from statek.llm_api import LLM_API, LLM_Response
 from statek.llm_harness import get_llm_harness
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.settings import get_statek_settings, statek_log, ChatStyle
@@ -58,8 +58,8 @@ from statek.utils import (
     get_current_agent,
     perm_ctx_set,
     parse_dialog,
-    strip_markup,
     _is_hidden_warmup_block,
+    _is_empty_code,
     statek_ctx_get,
     _statek_ctx_for_job,
     _statek_ctx_scope,
@@ -339,27 +339,6 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
                 global_context.pop('_PERM_CTX', None)
             else:
                 global_context['_PERM_CTX'] = previous_global_perm_ctx
-
-
-def _is_empty_code(code_str: Optional[str]) -> bool:
-    """Check if code string contains no executable statements.
-
-    Returns True when code_str is None, empty, whitespace-only, or contains
-    only comments and/or string literals (block comments).
-    """
-    if not code_str or not code_str.strip():
-        return True
-    try:
-        tree = ast.parse(code_str)
-    except SyntaxError:
-        return False
-    # After parsing, only Expr nodes with Constant values (string literals / block comments)
-    # remain — everything else is a real statement.
-    for node in tree.body:
-        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)):
-            return False
-    return True
 
 
 def _value_changed(before, after) -> bool:
@@ -1171,15 +1150,27 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     if response.stats.cost is not None:
         job.usage.total_reported_cost = (job.usage.total_reported_cost or 0.0) + response.stats.cost
 
-    # Step 14: Add new log item using append_chat_log
-    job.append_chat_log(request, response)
-    step_data = response.step_data
+    # Step 14: Apply post-processors before committing the response to chat_log.
+    processed_step = response.step_data
+    post_processor_activated = False
+    for post_processor in job.job_def.post_processing or ():
+        if processed_step is None:
+            break
+        processed_step, activated = job.handle_post_processor(post_processor, processed_step)
+        post_processor_activated = post_processor_activated or activated
+
+    if processed_step is None:
+        harness.check_after_step(job)
+        return False
+
+    processed_response = LLM_Response(step_data=processed_step, stats=response.stats)
+    job.append_chat_log(request, processed_response)
 
     # Step 15: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
     dialog_error = False
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         try:
-            await handle_dialog(step_data.text, _local_context=local_context)
+            await handle_dialog(processed_step.text, _local_context=local_context)
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
             job.console_append(error_msg, error_message=error_msg)
@@ -1189,25 +1180,21 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # unhandled reminders and pending notifications have been processed.
     # If LLM returned code (MD_DIALOG) or tool calls (DIRECT), continue the loop.
     # If send_message raised, always continue so the LLM can react to the error.
-    if not dialog_error and job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
-        if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-            has_code = bool(step_data.call_requests)
-        else:
-            has_code = (
-                step_data.call_requests
-                or not _is_empty_code(strip_markup(step_data.text, strict=True))
-            )
-        if not has_code:
-            reminder = getattr(job.job_def.agent, "reminder", None)
-            if reminder is not None and job.handle_reminder(reminder):
-                harness.check_after_step(job)
-                return False
-            if _process_pending_notification_follow_up(job, harness):
-                return False
-            custom_exit(job)
-            job.set_status(JobStatus.DONE)
-            _log_pending_console(job)
-            return True
+    if (
+        not dialog_error
+        and not post_processor_activated
+        and job.is_step_final(processed_step)
+    ):
+        reminder = getattr(job.job_def.agent, "reminder", None)
+        if reminder is not None and job.handle_reminder(reminder):
+            harness.check_after_step(job)
+            return False
+        if _process_pending_notification_follow_up(job, harness):
+            return False
+        custom_exit(job)
+        job.set_status(JobStatus.DONE)
+        _log_pending_console(job)
+        return True
 
     # Harness post-check outside the design step count
     harness.check_after_step(job)

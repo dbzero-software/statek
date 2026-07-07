@@ -26,11 +26,13 @@ from statek.chat_history import ChatRole, ContentSource, format_chat_history_ite
 from statek.agents.dialog_agent import RecurringReminder
 from statek.executors.chat_log_item import (
     LLM_LogItem,
+    PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
     UserLogItem,
     WarmupLogItem,
 )
+from statek.executors.post_processor import PostProcessor
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
@@ -72,6 +74,16 @@ class MessageForAdapter:
 
     def __str__(self):
         return f"fallback-{self.value}"
+
+
+@db0.memo
+class CountActionsPostProcessor(PostProcessor):
+    """Post-processor test double used for count_llm_actions exclusions."""
+
+    def process(self, llm_step: LLM_StepData, job: Job) -> LLM_StepData:
+        """Return the input step unchanged."""
+        del job
+        return llm_step
 
 
 class TestJobDefError:
@@ -2383,6 +2395,177 @@ class TestUserLogItem:
         """UserLogItem allows empty string for message."""
         item = UserLogItem(message="")
         assert item.message == ""
+
+
+class TestJobCountLLMActions:
+    """Tests for Job.count_llm_actions."""
+
+    def test_empty_job_counts_zero_actions(self, job_factory):
+        """An empty chat log has no LLM actions."""
+        job = job_factory()
+
+        assert job.count_llm_actions() == 0
+
+    def test_direct_user_facing_response_counts_one_action(self, job_factory):
+        """A visible DIRECT response counts as one LLM action."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="Final answer"))
+
+        assert job.count_llm_actions() == 1
+
+    def test_empty_direct_response_is_not_counted(self, job_factory):
+        """An empty plain response is not a user-facing LLM action."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="  \n"))
+
+        assert job.count_llm_actions() == 0
+
+    def test_md_dialog_internal_response_is_not_counted(self, job_factory):
+        """Internal MD_DIALOG text is not a user-facing response action."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="thinking out loud"))
+
+        assert job.count_llm_actions() == 0
+
+    def test_md_dialog_user_facing_response_counts_one_action(self, job_factory):
+        """A visible MD_DIALOG response counts as one LLM action."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="# Answer\nDone"))
+
+        assert job.count_llm_actions() == 1
+
+    def test_code_block_counts_code_and_tool_calls(self, job_factory):
+        """CodeBlock entries count non-empty code plus each tool call."""
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(
+                code="x = 1",
+                tool_calls=[CallSpec(id="call-1", func_name="python_cli")],
+            ),
+        ))
+
+        assert job.count_llm_actions() == 2
+
+    def test_code_block_without_code_counts_only_tool_calls(self, job_factory):
+        """CodeBlock entries with blank code count only their tool calls."""
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(
+            console_pos=0,
+            llm_resp=CodeBlock(
+                code="  \n",
+                tool_calls=[
+                    CallSpec(id="call-1", func_name="list_examples"),
+                    CallSpec(id="call-2", func_name="show_example"),
+                ],
+            ),
+        ))
+
+        assert job.count_llm_actions() == 2
+
+    def test_mixed_llm_items_sum_individual_actions(self, job_factory):
+        """Multiple LLM entries are summed at action granularity."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="First answer"))
+        job.chat_log.append(create_chat_log_item(
+            console_pos=1,
+            llm_resp=CodeBlock(
+                code="x = 1",
+                tool_calls=[
+                    CallSpec(id="call-1", func_name="python_cli"),
+                    CallSpec(id="call-2", func_name="render_chart"),
+                ],
+            ),
+        ))
+        job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="Second answer"))
+
+        assert job.count_llm_actions() == 5
+
+    def test_non_llm_log_items_are_not_counted(self, job_factory):
+        """Warmup and framework/user messages do not count as LLM actions."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child-1", result="done")
+        processor = CountActionsPostProcessor()
+        job.chat_log.extend([
+            WarmupLogItem(console_pos=0, warmup_block_num=0),
+            PostProcessedItem(console_pos=1, post_processor=processor, message="Review it."),
+            ReminderLogItem(console_pos=2, reminder=RecurringReminder(text="Use the tool.")),
+            SubTaskLogItem(console_pos=3, handler=handler),
+            UserLogItem(message="user follow-up"),
+        ])
+
+        assert job.count_llm_actions() == 0
+
+
+class TestJobIsStepFinal:
+    """Tests for Job.is_step_final."""
+
+    def test_direct_text_only_step_is_final(self, job_factory):
+        """DIRECT text-only responses naturally finish the job."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        step = LLM_StepData(text="Final answer", call_requests=None)
+
+        assert job.is_step_final(step) is True
+
+    def test_direct_tool_call_step_is_not_final(self, job_factory):
+        """DIRECT tool calls require another loop iteration."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        step = LLM_StepData(
+            text="I need data",
+            call_requests=[CallSpec(id="call-1", func_name="python_cli")],
+        )
+
+        assert job.is_step_final(step) is False
+
+    def test_md_dialog_text_only_step_is_final(self, job_factory):
+        """MD_DIALOG text-only responses naturally finish the job."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(text="# Answer\nDone", call_requests=None)
+
+        assert job.is_step_final(step) is True
+
+    def test_md_dialog_fenced_code_step_is_not_final(self, job_factory):
+        """MD_DIALOG executable fenced code requires another loop iteration."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(text="```python\nx = 1\n```", call_requests=None)
+
+        assert job.is_step_final(step) is False
+
+    def test_md_dialog_comment_only_fenced_code_step_is_final(self, job_factory):
+        """MD_DIALOG fenced comments are not executable code."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(text="```python\n# no executable code\n```", call_requests=None)
+
+        assert job.is_step_final(step) is True
+
+    def test_md_dialog_tool_call_step_is_not_final(self, job_factory):
+        """MD_DIALOG tool calls require another loop iteration."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(
+            text="# Answer",
+            call_requests=[CallSpec(id="call-1", func_name="show_example")],
+        )
+
+        assert job.is_step_final(step) is False
+
+    def test_non_dialog_style_step_is_not_final(self, job_factory):
+        """Only DIRECT and MD_DIALOG have auto-finalization semantics."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MARKDOWN)  # pylint: disable=no-member
+        step = LLM_StepData(text="Final answer", call_requests=None)
+
+        assert job.is_step_final(step) is False
 
 
 class TestJobHandleReminder:
