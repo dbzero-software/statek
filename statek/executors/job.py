@@ -46,7 +46,7 @@ from statek.executors.chat_log_item import (
     WarmupLogItem,
     UserLogItem,
 )
-from statek.llm_api import LLM_API, LLM_Response
+from statek.llm_api import LLM_API, LLM_Response, LLM_StepData
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (
     _STATEK_TOOL_MARKER,
@@ -71,6 +71,7 @@ from statek.model_name import ensure_model_name, format_model_for_provider, sele
 from statek.model_pricing import get_model_pricing
 from statek.settings import get_statek_settings, ChatStyle
 from statek.executors.post_processor import (
+    PostProcessor,
     PostProcessingInput,
     post_processing_identity,
     stored_post_processing,
@@ -1582,6 +1583,62 @@ class Job:
         ))
         self.py_env.console_append(reminder.text)
         return True
+
+    def handle_post_processor(
+        self,
+        post_processor: PostProcessor,
+        llm_step: LLM_StepData,
+    ) -> Tuple[Optional[LLM_StepData], bool]:
+        """Run one post-processor and normalize its return value.
+
+        Args:
+            post_processor: Processor to run against the uncommitted LLM step.
+            llm_step: LLM response that has not yet been appended to chat_log.
+
+        Returns:
+            A tuple containing the next LLM step, or None when the step is
+            suppressed, plus whether the processor emitted a system message.
+
+        Raises:
+            TypeError: If the processor returns an unsupported value.
+            ValueError: If a tuple return contains more than one LLM step.
+        """
+        result = post_processor.process(llm_step, self)
+        if isinstance(result, LLM_StepData):
+            return result, False
+
+        if isinstance(result, str):
+            self.chat_log.append(PostProcessedItem(
+                console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                post_processor=post_processor,
+                message=result,
+            ))
+            return None, True
+
+        if not isinstance(result, tuple):
+            raise TypeError("Unsupported post-processor return value")
+
+        processed_step: Optional[LLM_StepData] = None
+        activated = False
+        for item in result:
+            if isinstance(item, LLM_StepData):
+                if processed_step is not None:
+                    raise ValueError("Post-processor tuple may contain at most one LLM_StepData")
+                processed_step = item
+                continue
+
+            if isinstance(item, str):
+                self.chat_log.append(PostProcessedItem(
+                    console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                    post_processor=post_processor,
+                    message=item,
+                ))
+                activated = True
+                continue
+
+            raise TypeError("Unsupported post-processor return value")
+
+        return processed_step, activated
 
     @property
     def last_response(self) -> Union[str, CodeBlock, None]:
