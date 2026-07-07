@@ -14,6 +14,7 @@
 
 """Post-processing contract for LLM step handling."""
 
+import ast
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
 import dbzero as db0
 
 from statek.executors.chat_log_item import PostProcessedItem
-from statek.llm_api import LLM_StepData
+from statek.llm_api import CallParams, LLM_StepData
 
 if TYPE_CHECKING:
     from statek.executors.job import Job
@@ -102,6 +103,56 @@ class FinalCheck(PostProcessor):
 
 PostProcessingInput = Optional[Union[PostProcessor, Iterable[PostProcessor]]]
 PostProcessorIdentity = Tuple[str, str, Any]
+
+
+def _parse_post_processor_call(call: ast.AST) -> CallParams:
+    """Parse one post-processor constructor AST call into CallParams."""
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        raise ValueError("Invalid post-processor metadata definition")
+    if call.args:
+        raise ValueError("Invalid post-processor metadata definition")
+
+    kwargs: dict[str, Any] = {}
+    for keyword in call.keywords:
+        if keyword.arg is None:
+            raise ValueError("Invalid post-processor metadata definition")
+        if keyword.arg in kwargs:
+            raise ValueError("Invalid post-processor metadata definition")
+        try:
+            kwargs[keyword.arg] = ast.literal_eval(keyword.value)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Invalid post-processor metadata definition") from exc
+
+    return CallParams(call_id=call.func.id, name=call.func.id, args=[], kwargs=kwargs)
+
+
+def parse_post_processors(post_processors_def: str) -> list[CallParams]:
+    """Parse comma-delimited post-processor metadata definitions.
+
+    Args:
+        post_processors_def: Comma-delimited constructor snippets.
+
+    Returns:
+        Parsed post-processor call parameters in metadata order.
+
+    Raises:
+        ValueError: If any definition is not a simple constructor call with literal
+            keyword arguments.
+    """
+    if not post_processors_def.strip():
+        return []
+
+    try:
+        expression = ast.parse(post_processors_def, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError("Invalid post-processor metadata definition") from exc
+
+    if isinstance(expression.body, ast.Tuple):
+        calls = expression.body.elts
+    else:
+        calls = [expression.body]
+
+    return [_parse_post_processor_call(call) for call in calls]
 
 
 def _freeze_identity_value(value: Any) -> Any:

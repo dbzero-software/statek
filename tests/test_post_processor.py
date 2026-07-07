@@ -9,9 +9,14 @@ from statek.chat_history import ChatRole, ContentSource, format_chat_history_ite
 from statek.agents.agent import SupervisedAgent
 from statek.executors.chat_log_item import LLM_LogItem, PostProcessedItem
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.executors.post_processor import FinalCheck, PostProcessor, post_processor_identity
+from statek.executors.post_processor import (
+    FinalCheck,
+    PostProcessor,
+    parse_post_processors,
+    post_processor_identity,
+)
 from statek.executors.utils import find_existing_job_def
-from statek.llm_api import LLM_StepData
+from statek.llm_api import CallParams, LLM_StepData
 from statek.prompt_config import make_system_prompt
 from statek.settings import ChatStyle
 from statek.task import create_new_job
@@ -127,6 +132,65 @@ def _job() -> Job:
 def _final_step(text: str = "Draft final answer") -> LLM_StepData:
     """Return a final DIRECT step for FinalCheck tests."""
     return LLM_StepData(text=text, call_requests=None)
+
+
+def test_parse_post_processors_none_returns_empty_list():
+    """Empty post-processor metadata parses to an empty call list."""
+    assert not parse_post_processors("")
+
+
+def test_parse_post_processors_single_constructor():
+    """A single constructor snippet produces one parsed call."""
+    parsed = parse_post_processors("FinalCheck()")
+
+    assert len(parsed) == 1
+    assert isinstance(parsed[0], CallParams)
+    assert parsed[0].id == "FinalCheck"
+    assert parsed[0].name == "FinalCheck"
+    assert parsed[0].args == []
+    assert parsed[0].kwargs == {}
+
+
+def test_parse_post_processors_multiple_snippets_preserve_order():
+    """Comma-delimited constructor snippets preserve metadata order."""
+    parsed = parse_post_processors("FinalCheck(max_llm_actions=3), OtherCheck(enabled=True)")
+
+    assert [item.name for item in parsed] == ["FinalCheck", "OtherCheck"]
+    assert [item.args for item in parsed] == [[], []]
+    assert [item.kwargs for item in parsed] == [{"max_llm_actions": 3}, {"enabled": True}]
+
+
+def test_parse_post_processors_literal_keyword_arguments():
+    """Keyword values are parsed as Python literals only."""
+    parsed = parse_post_processors(
+        "FinalCheck(max_llm_actions=5, label='review', flags=['a', 'b'], options={'x': 1})"
+    )
+
+    assert len(parsed) == 1
+    assert parsed[0].name == "FinalCheck"
+    assert parsed[0].args == []
+    assert parsed[0].kwargs == {
+        "max_llm_actions": 5,
+        "label": "review",
+        "flags": ["a", "b"],
+        "options": {"x": 1},
+    }
+
+
+@pytest.mark.parametrize("snippet", [
+    "FinalCheck(3)",
+    "FinalCheck(*args)",
+    "FinalCheck(**kwargs)",
+    "processors.FinalCheck()",
+    "registry['FinalCheck']()",
+    "FinalCheck(max_llm_actions=1 + 2)",
+    "FinalCheck(); FinalCheck()",
+    "import os",
+])
+def test_parse_post_processors_rejects_unsafe_snippets(snippet):
+    """Only simple constructor calls with literal keyword args are accepted."""
+    with pytest.raises(ValueError, match="post-processor"):
+        parse_post_processors(snippet)
 
 
 def test_concrete_post_processor_has_stable_value_identity(db0_fixture):
