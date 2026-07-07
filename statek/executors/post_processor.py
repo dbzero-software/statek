@@ -103,6 +103,9 @@ class FinalCheck(PostProcessor):
 
 PostProcessingInput = Optional[Union[PostProcessor, Iterable[PostProcessor]]]
 PostProcessorIdentity = Tuple[str, str, Any]
+_POST_PROCESSOR_REGISTRY: dict[str, type[PostProcessor]] = {
+    "FinalCheck": FinalCheck,
+}
 
 
 def _parse_post_processor_call(call: ast.AST) -> CallParams:
@@ -153,6 +156,35 @@ def parse_post_processors(post_processors_def: str) -> list[CallParams]:
         calls = [expression.body]
 
     return [_parse_post_processor_call(call) for call in calls]
+
+
+def _resolve_post_processor_call(call_params: CallParams) -> PostProcessor:
+    """Resolve one parsed post-processor call into an instance."""
+    processor_cls = _POST_PROCESSOR_REGISTRY.get(call_params.name)
+    if processor_cls is None:
+        raise ValueError(f"Unknown post-processor: {call_params.name}")
+    if call_params.args:
+        raise ValueError("Post-processor metadata must use keyword arguments only")
+
+    processor = processor_cls(**(call_params.kwargs or {}))
+    if not isinstance(processor, PostProcessor):
+        raise TypeError("Resolved post-processor must be a PostProcessor instance")
+    return processor
+
+
+def resolve_post_processors(call_params: list[CallParams]) -> list[PostProcessor]:
+    """Resolve parsed post-processor metadata into executable processors.
+
+    Args:
+        call_params: Parsed post-processor definitions.
+
+    Returns:
+        Resolved post-processors in input order.
+
+    Raises:
+        ValueError: If a parsed processor name is unknown or uses positional args.
+    """
+    return [_resolve_post_processor_call(call_param) for call_param in call_params]
 
 
 def _freeze_identity_value(value: Any) -> Any:

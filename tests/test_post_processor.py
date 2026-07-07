@@ -14,6 +14,7 @@ from statek.executors.post_processor import (
     PostProcessor,
     parse_post_processors,
     post_processor_identity,
+    resolve_post_processors,
 )
 from statek.executors.utils import find_existing_job_def
 from statek.llm_api import CallParams, LLM_StepData
@@ -191,6 +192,49 @@ def test_parse_post_processors_rejects_unsafe_snippets(snippet):
     """Only simple constructor calls with literal keyword args are accepted."""
     with pytest.raises(ValueError, match="post-processor"):
         parse_post_processors(snippet)
+
+
+def test_resolve_post_processors_final_check_default(db0_fixture):
+    """A parsed FinalCheck call resolves through the known registry."""
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck()"))
+
+    assert len(resolved) == 1
+    assert isinstance(resolved[0], FinalCheck)
+    assert resolved[0].max_llm_actions == 3
+
+
+def test_resolve_post_processors_final_check_kwargs(db0_fixture):
+    """Parsed keyword args are passed into the processor constructor."""
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck(max_llm_actions=5)"))
+
+    assert len(resolved) == 1
+    assert isinstance(resolved[0], FinalCheck)
+    assert resolved[0].max_llm_actions == 5
+
+
+def test_resolve_post_processors_preserves_order(db0_fixture):
+    """Multiple parsed calls resolve in metadata order."""
+    resolved = resolve_post_processors(parse_post_processors(
+        "FinalCheck(max_llm_actions=2), FinalCheck(max_llm_actions=7)"
+    ))
+
+    assert [processor.max_llm_actions for processor in resolved] == [2, 7]
+
+
+def test_resolve_post_processors_rejects_unknown_name(db0_fixture):
+    """Unknown parsed processor names fail clearly."""
+    parsed = parse_post_processors("UnknownCheck(enabled=True)")
+
+    with pytest.raises(ValueError, match="Unknown post-processor"):
+        resolve_post_processors(parsed)
+
+
+def test_create_job_def_still_rejects_raw_post_processor_metadata(db0_fixture):
+    """JobDef creation remains on the resolved-instance input path only."""
+    agent = _supervised_agent()
+
+    with pytest.raises(TypeError, match="PostProcessor instances"):
+        agent.create_job_def(post_processing="FinalCheck()")
 
 
 def test_concrete_post_processor_has_stable_value_identity(db0_fixture):
