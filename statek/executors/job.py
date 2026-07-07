@@ -39,6 +39,7 @@ from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
     LLM_LogItem,
+    PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
     ToolError,
@@ -1093,8 +1094,8 @@ class Job:
           3. The same alternating pattern for LLM turns: ASSISTANT (LLM
              response) + USER/TOOL (console / tool result), woven together
              with any USER messages from ``UserLogItem`` entries, SYSTEM
-             reminder messages, and USER messages from ``py_env.push_log``
-             keyed by console position.
+             post-processor/reminder messages, and USER messages from
+             ``py_env.push_log`` keyed by console position.
 
         ``CodeBlock`` responses with ``tool_calls`` produce an ASSISTANT item
         with ``tool_calls`` set, followed by one TOOL item per call carrying
@@ -1149,7 +1150,13 @@ class Job:
                 continue
             next_pos = console_len
             for j in range(i + 1, len(items)):
-                if isinstance(items[j], (WarmupLogItem, LLM_LogItem, ReminderLogItem, SubTaskLogItem)):
+                if isinstance(items[j], (
+                    WarmupLogItem,
+                    LLM_LogItem,
+                    PostProcessedItem,
+                    ReminderLogItem,
+                    SubTaskLogItem,
+                )):
                     next_pos = items[j].console_pos
                     break
             end_positions[i] = next_pos
@@ -1177,6 +1184,15 @@ class Job:
                         role=ChatRole.USER,
                         content=self._with_language_hint(item.message),
                         content_src=ContentSource.USER,
+                    )
+                continue
+
+            if isinstance(item, PostProcessedItem):
+                if item.message:
+                    yield ChatHistoryItem(
+                        role=ChatRole.SYSTEM,
+                        content=item.message,
+                        content_src=ContentSource.SYSTEM,
                     )
                 continue
 

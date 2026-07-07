@@ -4,12 +4,15 @@
 
 import dbzero as db0
 
+from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.agent import SupervisedAgent
-from statek.executors.job import JobDef
+from statek.executors.chat_log_item import LLM_LogItem, PostProcessedItem
+from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.post_processor import PostProcessor, post_processor_identity
 from statek.executors.utils import find_existing_job_def
 from statek.llm_api import LLM_StepData
 from statek.prompt_config import make_system_prompt
+from statek.settings import ChatStyle
 from statek.task import create_new_job
 
 
@@ -103,3 +106,73 @@ def test_create_new_job_distinguishes_different_post_processing(db0_fixture):
 
     assert different.job_def is not base.job_def
     assert len(db0.find(JobDef, db0.as_tag(agent))) == 2
+
+
+def test_post_processed_item_yields_system_chat_history_item(db0_fixture):
+    """Post-processor messages are included as system chat history."""
+    agent = _supervised_agent()
+    job = Job(
+        job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}),
+        job_status=JobStatus.READY,
+    )
+    processor = IdentityPostProcessor("check")
+
+    job.chat_log.append(PostProcessedItem(
+        console_pos=0,
+        post_processor=processor,
+        message="Review the draft answer.",
+    ))
+
+    history = list(job.get_next_request()["chat_history"])
+
+    assert len(history) == 1
+    assert history[0].role == ChatRole.SYSTEM
+    assert history[0].content_src == ContentSource.SYSTEM
+    assert history[0].content == "Review the draft answer."
+
+
+def test_post_processed_item_formats_as_system_payload(db0_fixture):
+    """The existing formatter turns post-processed history into a system payload."""
+    agent = _supervised_agent()
+    job = Job(
+        job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}),
+        job_status=JobStatus.READY,
+    )
+
+    job.chat_log.append(PostProcessedItem(
+        console_pos=0,
+        post_processor=IdentityPostProcessor("check"),
+        message="Review the draft answer.",
+    ))
+    history = list(job.get_next_request()["chat_history"])
+
+    assert format_chat_history_item(history[0], ChatStyle.DIRECT) == {
+        "role": "system",
+        "content": "Review the draft answer.",
+    }
+
+
+def test_post_processed_item_delimits_previous_console_output(db0_fixture):
+    """Post-processed items use console_pos when slicing prior console output."""
+    agent = _supervised_agent()
+    job = Job(
+        job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}),
+        job_status=JobStatus.READY,
+    )
+    job.py_env.console = ["Out 1", "Out 2", "Out 3"]
+    job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="First response"))
+    job.chat_log.append(PostProcessedItem(
+        console_pos=2,
+        post_processor=IdentityPostProcessor("check"),
+        message="Review the draft answer.",
+    ))
+
+    history = list(job.get_next_request()["chat_history"])
+
+    assert [item.role for item in history] == [
+        ChatRole.ASSISTANT,
+        ChatRole.USER,
+        ChatRole.SYSTEM,
+    ]
+    assert history[1].content == "Out 1\nOut 2"
+    assert history[2].content == "Review the draft answer."
