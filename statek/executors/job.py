@@ -54,6 +54,7 @@ from statek.utils import (
     CallSpecWrapper,
     CodeBlock,
     ParsedWarmupBlock,
+    _is_empty_code,
     _is_hidden_warmup_block,
     _find_locals_in_context,
     build_warmup_code,
@@ -2067,6 +2068,28 @@ class Job:
                 action_count += 1
 
         return action_count
+
+    def is_step_final(self, llm_step: LLM_StepData) -> bool:
+        """Return whether accepting an LLM step would naturally finish the job.
+
+        Args:
+            llm_step: Uncommitted LLM step to classify.
+
+        Returns:
+            True for DIRECT text-only steps and MD_DIALOG steps with no tool
+            calls or executable fenced Python code. Other chat styles do not
+            have auto-finalization semantics here.
+        """
+        chat_style = self.job_def.chat_style
+        if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
+            return not llm_step.call_requests
+
+        if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
+            return not llm_step.call_requests and _is_empty_code(
+                strip_markup(llm_step.text, strict=True)
+            )
+
+        return False
 
     @property
     def _warmup_console_positions(self) -> set:

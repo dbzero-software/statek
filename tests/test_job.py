@@ -2502,6 +2502,72 @@ class TestJobCountLLMActions:
         assert job.count_llm_actions() == 0
 
 
+class TestJobIsStepFinal:
+    """Tests for Job.is_step_final."""
+
+    def test_direct_text_only_step_is_final(self, job_factory):
+        """DIRECT text-only responses naturally finish the job."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        step = LLM_StepData(text="Final answer", call_requests=None)
+
+        assert job.is_step_final(step) is True
+
+    def test_direct_tool_call_step_is_not_final(self, job_factory):
+        """DIRECT tool calls require another loop iteration."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+        step = LLM_StepData(
+            text="I need data",
+            call_requests=[CallSpec(id="call-1", func_name="python_cli")],
+        )
+
+        assert job.is_step_final(step) is False
+
+    def test_md_dialog_text_only_step_is_final(self, job_factory):
+        """MD_DIALOG text-only responses naturally finish the job."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(text="# Answer\nDone", call_requests=None)
+
+        assert job.is_step_final(step) is True
+
+    def test_md_dialog_fenced_code_step_is_not_final(self, job_factory):
+        """MD_DIALOG executable fenced code requires another loop iteration."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(text="```python\nx = 1\n```", call_requests=None)
+
+        assert job.is_step_final(step) is False
+
+    def test_md_dialog_comment_only_fenced_code_step_is_final(self, job_factory):
+        """MD_DIALOG fenced comments are not executable code."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(text="```python\n# no executable code\n```", call_requests=None)
+
+        assert job.is_step_final(step) is True
+
+    def test_md_dialog_tool_call_step_is_not_final(self, job_factory):
+        """MD_DIALOG tool calls require another loop iteration."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+        step = LLM_StepData(
+            text="# Answer",
+            call_requests=[CallSpec(id="call-1", func_name="show_example")],
+        )
+
+        assert job.is_step_final(step) is False
+
+    def test_non_dialog_style_step_is_not_final(self, job_factory):
+        """Only DIRECT and MD_DIALOG have auto-finalization semantics."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.MARKDOWN)  # pylint: disable=no-member
+        step = LLM_StepData(text="Final answer", call_requests=None)
+
+        assert job.is_step_final(step) is False
+
+
 class TestJobHandleReminder:
     """Tests for Job.handle_reminder."""
 

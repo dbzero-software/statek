@@ -157,6 +157,29 @@ def _is_hidden_warmup_block(block: Any) -> bool:
     metadata = getattr(block, "metadata", None)
     return metadata is not None and metadata.get("hidden") is True
 
+
+def _is_empty_code(code_str: Optional[str]) -> bool:
+    """Return whether code contains no executable statements.
+
+    Args:
+        code_str: Python source text, or None.
+
+    Returns:
+        True when the input is None, empty, whitespace-only, or contains only
+        comments and/or string literals.
+    """
+    if not code_str or not code_str.strip():
+        return True
+    try:
+        tree = ast.parse(code_str)
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            return False
+    return True
+
 _STATEK_TOOL_MARKER = "#STATEK: as tool"
 _STATEK_METADATA_RE = re.compile(
     r'^\s*#STATEK:\s*(?P<key>[A-Za-z_]\w*)\s*=\s*(?P<value>.+?)\s*$'

@@ -58,8 +58,8 @@ from statek.utils import (
     get_current_agent,
     perm_ctx_set,
     parse_dialog,
-    strip_markup,
     _is_hidden_warmup_block,
+    _is_empty_code,
     statek_ctx_get,
     _statek_ctx_for_job,
     _statek_ctx_scope,
@@ -339,27 +339,6 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
                 global_context.pop('_PERM_CTX', None)
             else:
                 global_context['_PERM_CTX'] = previous_global_perm_ctx
-
-
-def _is_empty_code(code_str: Optional[str]) -> bool:
-    """Check if code string contains no executable statements.
-
-    Returns True when code_str is None, empty, whitespace-only, or contains
-    only comments and/or string literals (block comments).
-    """
-    if not code_str or not code_str.strip():
-        return True
-    try:
-        tree = ast.parse(code_str)
-    except SyntaxError:
-        return False
-    # After parsing, only Expr nodes with Constant values (string literals / block comments)
-    # remain — everything else is a real statement.
-    for node in tree.body:
-        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)):
-            return False
-    return True
 
 
 def _value_changed(before, after) -> bool:
@@ -1206,26 +1185,18 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     if (
         not dialog_error
         and not post_processor_activated
-        and job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT)  # pylint: disable=no-member
+        and job.is_step_final(processed_step)
     ):
-        if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-            has_code = bool(processed_step.call_requests)
-        else:
-            has_code = (
-                processed_step.call_requests
-                or not _is_empty_code(strip_markup(processed_step.text, strict=True))
-            )
-        if not has_code:
-            reminder = getattr(job.job_def.agent, "reminder", None)
-            if reminder is not None and job.handle_reminder(reminder):
-                harness.check_after_step(job)
-                return False
-            if _process_pending_notification_follow_up(job, harness):
-                return False
-            custom_exit(job)
-            job.set_status(JobStatus.DONE)
-            _log_pending_console(job)
-            return True
+        reminder = getattr(job.job_def.agent, "reminder", None)
+        if reminder is not None and job.handle_reminder(reminder):
+            harness.check_after_step(job)
+            return False
+        if _process_pending_notification_follow_up(job, harness):
+            return False
+        custom_exit(job)
+        job.set_status(JobStatus.DONE)
+        _log_pending_console(job)
+        return True
 
     # Harness post-check outside the design step count
     harness.check_after_step(job)
