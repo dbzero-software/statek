@@ -1,64 +1,78 @@
 # STATEK
 
-**STATEK** (**Stateful Agent Execution Kit**) is a Python orchestration package
-for code-first AI agents with durable workflows.
+**STATEK** (**Stateful Agent Execution Kit**) gives an LLM agent a durable
+Python workspace inside your application.
 
-STATEK lets LLM agents be embedded into a Python codebase and execute Python
-inside it. A job can start with application objects already in scope, run
-model-written code against those objects, persist its local variables and
-history, pause, and resume later from the same execution state.
+Instead of treating an agent as something outside the codebase that can only
+send JSON-shaped tool calls, STATEK lets the agent work with Python directly.
+A job can start with application objects already in scope, run model-written
+code against those objects, keep the variables it creates, pause, and resume
+later from the same execution state.
 
-The framework splits the resources of a single Python process across many
-parallel agentic jobs, potentially tens of thousands of waiting or active jobs
-per process, with dependencies and continuation state managed as durable
-workflow data.
+That makes it possible to embed agents into a Python system in a very literal
+way. The agent can use the same object model as the rest of the application,
+while STATEK keeps the job's local state, console output, chat history, tool
+calls, status, errors, and continuation state durable and inspectable.
+
+One worker process can host many independent agent jobs, including large fleets
+of jobs that wait, resume, depend on one another, or run under bounded
+concurrency. In practical deployments this is meant to support anything from a
+few long-running workflows to tens of thousands of waiting or active jobs in a
+single process.
 
 Read the full documentation at
 [docs.dbzero.io/statek](https://docs.dbzero.io/statek).
 
 ## Where STATEK Fits
 
-STATEK is designed for systems where agents need to operate inside a real
-application state model instead of only calling JSON-shaped tools.
+STATEK makes the most sense when an agent needs to work inside real application
+state, not just around it.
 
-It is a strong fit for:
+Use it for systems such as:
 
 - data-intensive agents working in complex domains
 - large-scale deployments where efficient orchestration matters
-- complex workflows such as human-in-the-loop systems and agent fleets
-- multi-model orchestration across different LLM providers
-- durable jobs that may wait for minutes, hours, or much longer before resuming
+- human-in-the-loop workflows and long-running approval flows
+- coordinated agent fleets with parent and child jobs
+- workflows that route work across multiple LLM models or providers
+- jobs that may wait for minutes, hours, or much longer before continuing
+
+If your agent only needs to answer a single prompt or call a small set of
+stateless tools, STATEK may be more machinery than you need. It is most useful
+when the agent's work has memory, durable state, dependencies, or meaningful
+application-side effects.
 
 ## Why Code-First Agents?
 
-A code-first agent is an agent that can choose, at each step, to:
+A code-first agent can choose what to do at each step:
 
-1. respond or report to a user
+1. answer or report something to the user
 2. call a tool
-3. execute a chunk of ad-hoc Python code
+3. execute a chunk of Python code
 
-STATEK focuses on the third option without removing the first two. The Python
-execution is stateful, so variables created in previous steps remain available.
-It is also durable, so execution can pause and resume in the future.
+STATEK is built around the third option, while still supporting the first two.
+The important difference is that the Python execution is stateful and durable.
+Variables created in one step can still be used later, and a job can pause and
+resume without losing its working context.
 
-Code-first agents are useful because:
+That shape has some practical advantages:
 
-- Python is often more expressive than plain JSON request payloads.
-- Agents can use handles to real application objects instead of juggling large
-  sets of opaque IDs.
-- Agents can work against durable, mutable state that remains inspectable and
-  auditable.
-- LLMs are already strong Python generators, so the orchestration layer can use
-  that capability directly.
-- Fewer integration layers are needed because agents, services, and application
-  code can share the same Python object model.
+- Python is often a better fit than plain JSON for expressing non-trivial work.
+- Agents can use handles to real application objects instead of passing around
+  large sets of opaque IDs.
+- Durable, mutable state can be inspected and audited while the workflow is
+  still in progress.
+- LLMs are already strong Python generators, so it makes sense to let them use
+  that skill directly.
+- Agents, services, and application code can share one codebase and object
+  model instead of meeting only through narrow integration layers.
 
 See [STATEK Core Concepts](https://docs.dbzero.io/statek/concepts) for the
 full mental model.
 
 ## How It Works
 
-A STATEK job is a durable Python workspace for one unit of agent work.
+A STATEK job is a persisted Python session for one unit of agent work.
 Application code, a dispatcher, or another agent can create a job with useful
 locals already available:
 
@@ -70,7 +84,12 @@ today
 timestamp
 ```
 
-The agent can then run Python against those values:
+Those names are not special framework APIs. They are just Python variables in
+the job's workspace. They can point to application objects, dbzero objects,
+service adapters, functions, or other controlled values your application
+chooses to expose.
+
+The agent can then write ordinary Python against them:
 
 ```python
 events = calendar.events_for(today)
@@ -82,7 +101,7 @@ empty_slot = calendar.find_empty_slot(
 meeting.move_to(empty_slot)
 ```
 
-STATEK persists the execution state that matters:
+STATEK persists the execution record that matters:
 
 - Python locals
 - console output
@@ -92,10 +111,14 @@ STATEK persists the execution state that matters:
 - errors and model usage where available
 - references to durable application objects
 
-The worker loop can run many jobs independently in one process while preserving
-per-job Python locals and persisted history.
+Later, the same job can continue with the variables it created earlier. Other
+jobs can run in the same process without their local Python state colliding.
 
 ## Quick Start
+
+This is the minimal shape of a STATEK worker: install the package, open dbzero
+state, define an agent, start a worker, and submit work. The full walkthrough is
+in the [STATEK Quickstart](https://docs.dbzero.io/statek/quickstart).
 
 Install STATEK with [dbzero](https://docs.dbzero.io) support:
 
@@ -197,14 +220,12 @@ job = StatekClientAPI().submit_new_job(
 print("submitted job:", job)
 ```
 
-For the complete walkthrough, see the
-[STATEK Quickstart](https://docs.dbzero.io/statek/quickstart).
-
 ## dbzero and dbzero-pro
 
-STATEK can be used as a regular orchestration framework with dialogs and tool
-calls. To get the full durable, auditable code-first model, application state
-should live in [dbzero](https://docs.dbzero.io) objects.
+STATEK can run ordinary orchestration flows with dialogs and tool calls. The
+code-first model becomes much more powerful when application state lives in
+[dbzero](https://docs.dbzero.io), because both your application and the agent
+can work with the same durable Python object graph.
 
 With dbzero, durable application objects are normal Python classes decorated
 with `@db0.memo`:
@@ -225,7 +246,7 @@ class Meeting:
         self.ends_at = slot.ends_at
 ```
 
-From the agent's point of view, this remains ordinary Python:
+From the agent's point of view, this is still just Python:
 
 ```python
 meeting.move_to(empty_slot)
@@ -262,8 +283,8 @@ import statek
 statek.init(restricted=False)
 ```
 
-Restricted mode is a defense layer, not a complete production security model.
-The host application still owns:
+Restricted mode is a useful defense layer, but it is not a complete production
+security model. The host application still owns:
 
 - authorization and tenant boundaries
 - secrets and provider credentials
@@ -277,7 +298,9 @@ before exposing workers to real users or production data.
 
 ## Documentation
 
-- [STATEK overview](https://docs.dbzero.io/statek)
+STATEK guides:
+
+- [Overview](https://docs.dbzero.io/statek)
 - [Quickstart](https://docs.dbzero.io/statek/quickstart)
 - [Core concepts](https://docs.dbzero.io/statek/concepts)
 - [Agents](https://docs.dbzero.io/statek/agents)
@@ -288,6 +311,9 @@ before exposing workers to real users or production data.
 - [Operations](https://docs.dbzero.io/statek/operations)
 - [Security](https://docs.dbzero.io/statek/security)
 - [API reference](https://docs.dbzero.io/statek/api-reference)
+
+dbzero:
+
 - [dbzero documentation](https://docs.dbzero.io)
 - [dbzero-pro documentation](https://docs.dbzero.io/dbzero-pro)
 
