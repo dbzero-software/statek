@@ -1598,7 +1598,8 @@ class Job:
 
         Returns:
             A tuple containing the next LLM step, or None when the step is
-            suppressed, plus whether the processor emitted a system message.
+            suppressed, plus whether the processor emitted a system message or
+            replaced the input LLM step.
 
         Raises:
             TypeError: If the processor returns an unsupported value.
@@ -1606,7 +1607,7 @@ class Job:
         """
         result = post_processor.process(llm_step, self)
         if isinstance(result, LLM_StepData):
-            return result, False
+            return result, result is not llm_step
 
         if isinstance(result, str):
             self.chat_log.append(PostProcessedItem(
@@ -1626,6 +1627,7 @@ class Job:
                 if processed_step is not None:
                     raise ValueError("Post-processor tuple may contain at most one LLM_StepData")
                 processed_step = item
+                activated = activated or item is not llm_step
                 continue
 
             if isinstance(item, str):

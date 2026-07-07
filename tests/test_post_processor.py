@@ -57,6 +57,16 @@ class ReplacementPostProcessor(PostProcessor):
 
 
 @db0.memo
+class ClonePostProcessor(PostProcessor):
+    """Post-processor returning a value-equal replacement LLM step."""
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return a new step with the same values as the input step."""
+        del job
+        return LLM_StepData(text=llm_step.text, call_requests=llm_step.call_requests)
+
+
+@db0.memo
 class TupleMessageAndStepPostProcessor(PostProcessor):
     """Post-processor returning a system message and replacement step."""
 
@@ -271,7 +281,21 @@ def test_handle_post_processor_replaces_llm_step(db0_fixture):
 
     result = job.handle_post_processor(processor, llm_step)
 
-    assert result == (LLM_StepData(text="Better answer", call_requests=None), False)
+    assert result == (LLM_StepData(text="Better answer", call_requests=None), True)
+    assert job.chat_log == []
+
+
+def test_handle_post_processor_value_equal_replacement_activates(db0_fixture):
+    """A new LLM_StepData instance activates even when it has equal values."""
+    job = _job()
+    llm_step = LLM_StepData(text="Draft answer", call_requests=None)
+    processor = ClonePostProcessor()
+
+    processed_step, activated = job.handle_post_processor(processor, llm_step)
+
+    assert processed_step == llm_step
+    assert processed_step is not llm_step
+    assert activated is True
     assert job.chat_log == []
 
 

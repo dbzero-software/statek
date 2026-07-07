@@ -40,7 +40,7 @@ from statek.executors.job import (
     _job_def_identity_tag,
 )
 from statek.executors.chat_log_item import ToolError, WarmupLogItem
-from statek.executors.post_processor import normalize_post_processing, post_processing_identity
+from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API, LLM_Response
 from statek.llm_harness import get_llm_harness
@@ -1155,7 +1155,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 14: Apply post-processors before committing the response to chat_log.
     processed_step = response.step_data
     post_processor_activated = False
-    for post_processor in normalize_post_processing(job.job_def.post_processing):
+    for post_processor in job.job_def.post_processing or ():
         if processed_step is None:
             break
         processed_step, activated = job.handle_post_processor(post_processor, processed_step)
