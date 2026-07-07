@@ -15,10 +15,12 @@
 """Post-processing contract for LLM step handling."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
 
 import dbzero as db0
 
+from statek.executors.chat_log_item import PostProcessedItem
 from statek.llm_api import LLM_StepData
 
 if TYPE_CHECKING:
@@ -54,6 +56,48 @@ class PostProcessor(ABC):
             - str: the message to be appended with the role = system
             - any combination of the above (as tuple)
         """
+
+
+@db0.memo
+@dataclass
+class FinalCheck(PostProcessor):
+    """Ask the LLM to review an early final answer before accepting it."""
+
+    max_llm_actions: int = 3
+
+    def process(
+        self,
+        llm_step: LLM_StepData,
+        job: "Job",
+    ) -> Union[LLM_StepData, str]:
+        """Return a reflection prompt when an early final answer is detected.
+
+        Args:
+            llm_step: Uncommitted LLM response to inspect.
+            job: Job whose history determines finality, action count, and prior
+                post-processor activation.
+
+        Returns:
+            A system message string when activated, otherwise the original LLM
+            step unchanged.
+        """
+        already_fired = any(
+            isinstance(item, PostProcessedItem) and item.post_processor is self
+            for item in job.chat_log
+        )
+        if already_fired:
+            return llm_step
+        if not job.is_step_final(llm_step):
+            return llm_step
+        if job.count_llm_actions() >= self.max_llm_actions:
+            return llm_step
+
+        return (
+            "Final check: reflect on the user's latest request and your draft answer. "
+            "Make sure it is correct, complete, and directly answers the user. "
+            "Revise if needed; otherwise return it unchanged.\n\n"
+            f"Draft answer:\n{llm_step.text}"
+        )
 
 
 PostProcessingInput = Optional[Union[PostProcessor, Iterable[PostProcessor]]]

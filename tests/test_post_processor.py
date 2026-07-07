@@ -9,7 +9,7 @@ from statek.chat_history import ChatRole, ContentSource, format_chat_history_ite
 from statek.agents.agent import SupervisedAgent
 from statek.executors.chat_log_item import LLM_LogItem, PostProcessedItem
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.executors.post_processor import PostProcessor, post_processor_identity
+from statek.executors.post_processor import FinalCheck, PostProcessor, post_processor_identity
 from statek.executors.utils import find_existing_job_def
 from statek.llm_api import LLM_StepData
 from statek.prompt_config import make_system_prompt
@@ -116,10 +116,17 @@ def _supervised_agent(role: str = "post_processor_agent") -> SupervisedAgent:
 def _job() -> Job:
     """Create a job for post-processor method tests."""
     agent = _supervised_agent()
-    return Job(
+    job = Job(
         job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}),
         job_status=JobStatus.READY,
     )
+    job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+    return job
+
+
+def _final_step(text: str = "Draft final answer") -> LLM_StepData:
+    """Return a final DIRECT step for FinalCheck tests."""
+    return LLM_StepData(text=text, call_requests=None)
 
 
 def test_concrete_post_processor_has_stable_value_identity(db0_fixture):
@@ -370,3 +377,78 @@ def test_handle_post_processor_rejects_multiple_llm_steps(db0_fixture):
             processor,
             LLM_StepData(text="Draft answer", call_requests=None),
         )
+
+
+def test_final_check_activates_for_early_final_step(db0_fixture):
+    """FinalCheck suppresses an early final answer and asks for reflection."""
+    job = _job()
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = _final_step("The answer is 42.")
+
+    result = processor.process(llm_step, job)
+
+    assert isinstance(result, str)
+    assert "The answer is 42." in result
+    assert "correct, complete, and directly answers the user" in result
+    assert "Revise if needed; otherwise return it unchanged." in result
+
+
+def test_final_check_inactive_at_action_threshold(db0_fixture):
+    """FinalCheck passes through once the job has enough LLM actions."""
+    job = _job()
+    job.chat_log.extend([
+        LLM_LogItem(console_pos=0, llm_resp="First answer"),
+        LLM_LogItem(console_pos=1, llm_resp="Second answer"),
+        LLM_LogItem(console_pos=2, llm_resp="Third answer"),
+    ])
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = _final_step()
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_inactive_for_non_final_step(db0_fixture):
+    """FinalCheck does not fire for steps that still need tool execution."""
+    job = _job()
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = LLM_StepData(
+        text="I need data.",
+        call_requests=[{"name": "python_cli"}],
+    )
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_does_not_repeat_for_same_instance(db0_fixture):
+    """A FinalCheck instance fires at most once for a job."""
+    job = _job()
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = _final_step()
+
+    assert job.handle_post_processor(processor, llm_step) == (None, True)
+    assert job.handle_post_processor(processor, llm_step) == (llm_step, False)
+
+
+def test_final_check_separate_instance_can_fire_independently(db0_fixture):
+    """Fired-once detection is per exact FinalCheck instance."""
+    job = _job()
+    first = FinalCheck(max_llm_actions=3)
+    second = FinalCheck(max_llm_actions=4)
+    llm_step = _final_step()
+
+    assert job.handle_post_processor(first, llm_step) == (None, True)
+    assert job.handle_post_processor(second, llm_step) == (None, True)
+    assert [item.post_processor for item in job.chat_log] == [first, second]
+
+
+def test_final_check_md_dialog_internal_text_activation_profile(db0_fixture):
+    """MD_DIALOG header-less final text can activate while prior action count is zero."""
+    job = _job()
+    job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+    job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="internal reasoning"))
+    processor = FinalCheck(max_llm_actions=1)
+
+    result = processor.process(LLM_StepData(text="internal final", call_requests=None), job)
+
+    assert job.count_llm_actions() == 0
+    assert isinstance(result, str)
