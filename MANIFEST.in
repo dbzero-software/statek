@@ -1,5 +1,4 @@
 prune tests
-prune experiments
 include LICENSE
 include NOTICE
 include THIRD_PARTY_NOTICES.md

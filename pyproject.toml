@@ -55,7 +55,7 @@ Repository = "https://github.com/yourusername/statek"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["statek*"]
-exclude = ["tests*", "experiments*"]
+exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 statek = ["*.json"]

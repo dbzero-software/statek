@@ -981,8 +981,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     Returns:
         True if the job has been completed (exit called), False otherwise
 
-    example:
-        see: experiments/ai/run_job_step.ipynb
     """
 
     # Harness pre-check outside the design step count
