@@ -42,8 +42,10 @@ dbzero-pro = [
 dev = [
     "dbzero>=0.4.2",
     "pytest>=7.0",
+    "pytest-asyncio==1.3.0",
     "pylint>=3.0",
     "build>=1.0.0",
+    "twine>=4.0.0",
 ]
 
 [project.urls]

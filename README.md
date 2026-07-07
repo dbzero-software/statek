@@ -332,14 +332,7 @@ Install development dependencies:
 pip install -e ".[dev]"
 ```
 
-Run lint and tests inside the Codex repository environment:
-
-```bash
-./scripts/run_lint_codex.sh
-./scripts/run_tests_codex.sh
-```
-
-Outside Codex, use the standard wrappers:
+Run lint and tests:
 
 ```bash
 ./scripts/run_lint.sh
