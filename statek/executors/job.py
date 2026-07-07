@@ -2037,6 +2037,37 @@ class Job:
         """Returns the number of LLM turns (excludes warmup code blocks)."""
         return sum(1 for item in self.chat_log if isinstance(item, LLM_LogItem))
 
+    def count_llm_actions(self) -> int:
+        """Return the number of LLM actions recorded in chat_log.
+
+        This differs from ``num_turns``: ``num_turns`` counts LLM log items,
+        while this method counts finer-grained work inside those items. One
+        non-empty executable code block, one requested tool call, and one
+        user-facing response each count as one action. Framework-generated
+        messages such as warmup, reminder, subtask, user, and post-processor
+        items are ignored.
+
+        Returns:
+            The total number of recorded LLM actions.
+        """
+        action_count = 0
+        for item in self.chat_log:
+            if not isinstance(item, LLM_LogItem):
+                continue
+
+            response = item.llm_resp
+            if isinstance(response, CodeBlock):
+                if response.code and response.code.strip():
+                    action_count += 1
+                if response.tool_calls:
+                    action_count += len(response.tool_calls)
+                continue
+
+            if isinstance(response, str) and self._is_user_facing_llm_response(item):
+                action_count += 1
+
+        return action_count
+
     @property
     def _warmup_console_positions(self) -> set:
         """Returns console_pos values that correspond to warmup blocks."""
