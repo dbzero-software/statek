@@ -11,8 +11,14 @@ import dbzero as db0
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.agents.dialog_agent import DialogAgent
-from statek.executors.chat_log_item import ReminderLogItem, SubTaskLogItem
+from statek.executors.chat_log_item import (
+    LLM_LogItem,
+    PostProcessedItem,
+    ReminderLogItem,
+    SubTaskLogItem,
+)
 from statek.executors.job import Job, JobDef, JobStatus
+from statek.executors.post_processor import PostProcessor
 from statek.executors.utils import handle_dialog, run_job_step
 from statek.future import FutureResult
 from statek.exceptions import FutureError
@@ -27,6 +33,72 @@ from statek.utils import CodeBlock, CallSpec
 @dataclass
 class MemoObject:
     value: int = 0
+
+
+@db0.memo
+class RuntimeMessagePostProcessor(PostProcessor):
+    """Test processor that suppresses the response with a system message."""
+
+    def __init__(self, message: str):
+        self.message = message
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return a message and suppress the LLM step."""
+        del llm_step, job
+        return self.message
+
+
+@db0.memo
+class RuntimeSuppressPostProcessor(PostProcessor):
+    """Test processor that suppresses the response without a message."""
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return no replacement step and no message."""
+        del llm_step, job
+        return ()
+
+
+@db0.memo
+class RuntimeReplacementPostProcessor(PostProcessor):
+    """Test processor that replaces response text."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return a replacement step."""
+        del llm_step, job
+        return LLM_StepData(text=self.text, call_requests=None)
+
+
+@db0.memo
+class RuntimeSuffixPostProcessor(PostProcessor):
+    """Test processor that appends a suffix to response text."""
+
+    def __init__(self, suffix: str):
+        self.suffix = suffix
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Append suffix to the current step text."""
+        del job
+        return LLM_StepData(
+            text=f"{llm_step.text}{self.suffix}",
+            call_requests=llm_step.call_requests,
+        )
+
+
+@db0.memo
+class RuntimeMessageAndReplacementPostProcessor(PostProcessor):
+    """Test processor that emits a message and returns a replacement step."""
+
+    def __init__(self, message: str, text: str):
+        self.message = message
+        self.text = text
+
+    def process(self, llm_step: LLM_StepData, job):
+        """Return a system message and replacement step."""
+        del llm_step, job
+        return self.message, LLM_StepData(text=self.text, call_requests=None)
 
 
 def _check_condition_false(_):
@@ -1253,6 +1325,150 @@ class TestRunJobStepCliToolCalls:
         assert job.next_instr_num is not None
         assert job.next_instr_num[0] == 0  # first CLI step
         assert job.next_instr_num[1] is not None  # instruction within CLI step
+
+
+class TestRunJobStepPostProcessing:
+    """Tests runtime post-processor integration in run_job_step."""
+
+    @staticmethod
+    def _mock_api_and_harness(response):
+        """Return a mocked LLM API and harness for one run_job_step call."""
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=response)
+
+        mock_harness = MagicMock()
+        mock_harness.check_before_step.return_value = None
+        mock_harness.check_after_step.return_value = None
+        return mock_api, mock_harness
+
+    @staticmethod
+    def _job(job_def_factory, post_processing, chat_style=None):
+        """Create a started job with optional post-processing and chat style."""
+        job_def = job_def_factory(post_processing=post_processing)
+        if chat_style is not None:
+            job_def.set_chat_style(chat_style)
+        return Job(
+            job_def=job_def,
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+
+    @pytest.mark.asyncio
+    async def test_message_suppression_skips_append_dialog_and_completion(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """Message-only post-processing suppresses the LLM response safely."""
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        processor = RuntimeMessagePostProcessor("Review before answering.")
+        job = self._job(job_def_factory, processor, chat_style=ChatStyle.DIRECT)
+        mock_api, mock_harness = self._mock_api_and_harness(_llm_response("Final answer."))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock) as mock_handle:
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        mock_handle.assert_not_called()
+        assert len(job.chat_log) == 1
+        assert isinstance(job.chat_log[0], PostProcessedItem)
+        assert job.chat_log[0].message == "Review before answering."
+        assert not any(isinstance(item, LLM_LogItem) for item in job.chat_log)
+        mock_harness.check_after_step.assert_called_once_with(job)
+
+    @pytest.mark.asyncio
+    async def test_empty_tuple_suppression_skips_append_and_dialog(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A processor can suppress a step without adding a system message."""
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        job = self._job(
+            job_def_factory,
+            RuntimeSuppressPostProcessor(),
+            chat_style=ChatStyle.DIRECT,
+        )
+        mock_api, mock_harness = self._mock_api_and_harness(_llm_response("Final answer."))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock) as mock_handle:
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        mock_handle.assert_not_called()
+        assert job.chat_log == []
+
+    @pytest.mark.asyncio
+    async def test_replacement_step_is_appended_instead_of_original(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """The processed LLM step is the response committed to chat_log."""
+        job = self._job(job_def_factory, RuntimeReplacementPostProcessor("processed = 1"))
+        mock_api, mock_harness = self._mock_api_and_harness(_llm_response("original = 1"))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert len(job.chat_log) == 1
+        assert isinstance(job.chat_log[0], LLM_LogItem)
+        assert job.chat_log[0].llm_resp == "processed = 1"
+
+    @pytest.mark.asyncio
+    async def test_chained_processors_receive_previous_processed_step(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """Post-processors run in order and chain replacement steps."""
+        processors = [
+            RuntimeSuffixPostProcessor("-first"),
+            RuntimeSuffixPostProcessor("-second"),
+        ]
+        job = self._job(job_def_factory, processors)
+        mock_api, mock_harness = self._mock_api_and_harness(_llm_response("base"))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job)
+
+        assert len(job.chat_log) == 1
+        assert job.chat_log[0].llm_resp == "base-first-second"
+
+    @pytest.mark.asyncio
+    async def test_activated_processor_with_step_does_not_auto_complete(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A processor message prevents DIRECT final-answer auto-completion."""
+        from statek.settings import ChatStyle  # pylint: disable=import-outside-toplevel
+
+        processor = RuntimeMessageAndReplacementPostProcessor(
+            "Review before completing.",
+            "Processed final answer.",
+        )
+        job = self._job(job_def_factory, processor, chat_style=ChatStyle.DIRECT)
+        mock_api, mock_harness = self._mock_api_and_harness(_llm_response("Original final answer."))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness), \
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock) as mock_handle:
+            mock_llm_api_cls.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        assert result is False
+        assert job.status == JobStatus.STARTED
+        assert isinstance(job.chat_log[0], PostProcessedItem)
+        assert isinstance(job.chat_log[1], LLM_LogItem)
+        assert job.chat_log[1].llm_resp == "Processed final answer."
+        mock_handle.assert_called_once_with("Processed final answer.", _local_context={})
 
 
 
