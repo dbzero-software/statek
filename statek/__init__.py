@@ -47,6 +47,7 @@ from .llm_api import (
 )
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
+from .executors.post_processor import PostProcessor
 from .system import (tool, subtask, docstr, get_any, get_all, error_handler,
                      is_valid_error_handler, docs_style, find_sub_task_handler,
                      find_tools)
@@ -169,6 +170,7 @@ __all__ = [
     "LLM_Harness",
     "LLM_HarnessError",
     "get_llm_harness",
+    "PostProcessor",
     "subtask",
     "SubTaskHandler",
     "SubTaskState",

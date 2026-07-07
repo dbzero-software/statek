@@ -55,6 +55,7 @@ def _find_reusable_job_def(
     agent: Agent,
     warmup_code: WarmupCodeInput,
     locale,
+    post_processing,
     kwargs: Dict[str, Any],
 ):
     """Find an existing JobDef matching create_new_job's reusable definition."""
@@ -72,6 +73,7 @@ def _find_reusable_job_def(
         job_params=_job_params_from_kwargs(agent, kwargs),
         locale=locale,
         chat_style=_dialog_chat_style(agent, kwargs) if isinstance(agent, DialogAgent) else None,
+        post_processing=post_processing,
     )
 
 
@@ -432,17 +434,25 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
     parent_job: Optional[Job] = None,
     warmup_code: WarmupCodeInput = None,
     locale=None,
+    post_processing=None,
     caller_frame=None,
     **kwargs,
 ) -> Job:
     """Create a ready job with shared locals, inherited locale, and error handlers."""
     shared_vars = shared_vars or {}
     effective_locale = _resolve_child_locale(parent_job, locale)
-    job_def = _find_reusable_job_def(agent, warmup_code, effective_locale, kwargs)
+    job_def = _find_reusable_job_def(
+        agent,
+        warmup_code,
+        effective_locale,
+        post_processing,
+        kwargs,
+    )
     if job_def is None:
         job_def = agent.create_job_def(
             warmup_code=warmup_code,
             locale=effective_locale,
+            post_processing=post_processing,
             **kwargs,
         )
 

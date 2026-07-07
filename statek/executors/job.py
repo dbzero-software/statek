@@ -69,6 +69,11 @@ from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.model_pricing import get_model_pricing
 from statek.settings import get_statek_settings, ChatStyle
+from statek.executors.post_processor import (
+    PostProcessingInput,
+    post_processing_identity,
+    stored_post_processing,
+)
 from statek.task_difficulty import (
     TaskDifficulty,
     max_task_difficulty,
@@ -344,6 +349,7 @@ def _job_def_identity_hash(
     job_params,
     locale,
     chat_style,
+    post_processing,
 ) -> str:
     payload = (
         warmup_code,
@@ -352,6 +358,7 @@ def _job_def_identity_hash(
         job_params,
         locale,
         chat_style,
+        post_processing_identity(post_processing),
     )
     encoded = str(payload).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:4]
@@ -364,10 +371,11 @@ def _job_def_identity_tag(
     job_params,
     locale,
     chat_style,
+    post_processing=None,
 ) -> str:
     return (
         f"{_JOBDEF_HASH_TAG_PREFIX}"
-        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style)}"
+        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing)}"
     )
 
 
@@ -380,6 +388,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
         job_def.job_params,
         job_def.locale,
         getattr(job_def, "_chat_style", None),
+        job_def.post_processing,
     )
 
 
@@ -401,6 +410,8 @@ class JobDef:
     _chat_style: Optional[ChatStyle] = None
     # Optional locale for language-specific behaviour
     locale: Optional["StatekLocale"] = None
+    # Optional post-processing sequence applied after LLM responses
+    post_processing: PostProcessingInput = None
 
     def __post_init__(self):
         if self.agent is not None:
@@ -420,6 +431,7 @@ class JobDef:
             )
         if not _is_model_mapping(metadata_model):
             self.metadata["MODEL"] = parse_model_metadata(metadata_model)
+        self.post_processing = stored_post_processing(self.post_processing)
         self._sync_identity_hash_tag()
 
     def _sync_identity_hash_tag(self, old_tag: Optional[str] = None) -> None:

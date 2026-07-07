@@ -490,6 +490,7 @@ class SupervisedAgent(Agent):
         warmup_code: WarmupCodeInput = None,
         shared_vars: Optional[Dict[str, Any]] = None,
         locale=None,
+        post_processing=None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -504,6 +505,8 @@ class SupervisedAgent(Agent):
                 as a ``shared_vars`` entry in ``job_params`` so they can be
                 referenced from the agent's system prompt template.
             locale: optional locale for job execution
+            post_processing: optional resolved post-processor or sequence of
+                post-processors for this job definition
             kwargs: job specific parameters for prompt formatting (i.e. job_params)
 
         Returns:
@@ -532,6 +535,7 @@ class SupervisedAgent(Agent):
             job_params=job_params,
             warmup_code=combined,
             locale=locale,
+            post_processing=post_processing,
         )
 
     def _combine_warmup_code(self, warmup_code):

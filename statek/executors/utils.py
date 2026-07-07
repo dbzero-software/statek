@@ -40,6 +40,7 @@ from statek.executors.job import (
     _job_def_identity_tag,
 )
 from statek.executors.chat_log_item import ToolError, WarmupLogItem
+from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
@@ -1466,6 +1467,7 @@ def find_existing_job_def(
     job_params: object = _MATCH_UNSET,
     locale: object = _MATCH_UNSET,
     chat_style: object = _MATCH_UNSET,
+    post_processing: object = None,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
@@ -1492,6 +1494,8 @@ def find_existing_job_def(
             and getattr(job_def, "_chat_style", None) != chat_style
         ):
             return False
+        if post_processing_identity(job_def.post_processing) != post_processing_identity(post_processing):
+            return False
         return True
 
     parsed = parse_warmup_code(warmup_code)
@@ -1510,6 +1514,7 @@ def find_existing_job_def(
             job_params,
             locale,
             chat_style,
+            post_processing,
         )
         for job_def in db0.find(JobDef, agent_tag, lookup_tag):
             if _matches(job_def):
