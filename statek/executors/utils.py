@@ -40,6 +40,7 @@ from statek.executors.job import (
     _job_def_identity_tag,
 )
 from statek.executors.chat_log_item import ToolError, WarmupLogItem
+from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API
 from statek.llm_harness import get_llm_harness
@@ -1172,12 +1173,13 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 14: Add new log item using append_chat_log
     job.append_chat_log(request, response)
+    step_data = response.step_data
 
     # Step 15: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
     dialog_error = False
     if job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         try:
-            await handle_dialog(response.text, _local_context=local_context)
+            await handle_dialog(step_data.text, _local_context=local_context)
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
             job.console_append(error_msg, error_message=error_msg)
@@ -1189,11 +1191,11 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # If send_message raised, always continue so the LLM can react to the error.
     if not dialog_error and job.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
         if job.job_def.chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-            has_code = bool(response.call_requests)
+            has_code = bool(step_data.call_requests)
         else:
             has_code = (
-                response.call_requests
-                or not _is_empty_code(strip_markup(response.text, strict=True))
+                step_data.call_requests
+                or not _is_empty_code(strip_markup(step_data.text, strict=True))
             )
         if not has_code:
             reminder = getattr(job.job_def.agent, "reminder", None)
@@ -1463,6 +1465,7 @@ def find_existing_job_def(
     job_params: object = _MATCH_UNSET,
     locale: object = _MATCH_UNSET,
     chat_style: object = _MATCH_UNSET,
+    post_processing: object = None,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
@@ -1489,6 +1492,8 @@ def find_existing_job_def(
             and getattr(job_def, "_chat_style", None) != chat_style
         ):
             return False
+        if post_processing_identity(job_def.post_processing) != post_processing_identity(post_processing):
+            return False
         return True
 
     parsed = parse_warmup_code(warmup_code)
@@ -1507,6 +1512,7 @@ def find_existing_job_def(
             job_params,
             locale,
             chat_style,
+            post_processing,
         )
         for job_def in db0.find(JobDef, agent_tag, lookup_tag):
             if _matches(job_def):

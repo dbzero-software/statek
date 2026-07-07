@@ -43,10 +43,11 @@ from .llm_api import (
     CloudflareAIGateway_API, GitHubModels_API, Bedrock_API,
     MicrosoftFoundry_API, AzureOpenAI_API, GeminiEnterprise_API, Ollama_API,
     LMStudio_API, VLLM_API, SGLang_API, LlamaCpp_API, VertexAI_API,
-    ClaudeAI_API, Claude_API, LLM_Response, LLM_Stats, add_provider,
+    ClaudeAI_API, Claude_API, LLM_Response, LLM_StepData, LLM_Stats, add_provider,
 )
 from .exceptions import LLM_HarnessError
 from .llm_harness import LLM_Harness, get_llm_harness
+from .executors.post_processor import PostProcessor
 from .system import (tool, subtask, docstr, get_any, get_all, error_handler,
                      is_valid_error_handler, docs_style, find_sub_task_handler,
                      find_tools)
@@ -163,11 +164,13 @@ __all__ = [
     "ClaudeAI_API",
     "Claude_API",
     "LLM_Response",
+    "LLM_StepData",
     "LLM_Stats",
     "add_provider",
     "LLM_Harness",
     "LLM_HarnessError",
     "get_llm_harness",
+    "PostProcessor",
     "subtask",
     "SubTaskHandler",
     "SubTaskState",

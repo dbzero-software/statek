@@ -55,10 +55,8 @@ LLM_Stats = namedtuple(
      "input_tokens", "output_tokens", "cached_tokens"],
     defaults=[0, 0, 0],
 )
-# text: response text from the LLM (empty string when the LLM made tool calls instead)
-# stats: byte/cost accounting
-# call_requests: list of CallParams when the LLM requested tool calls, else None
-LLM_Response = namedtuple("LLM_Response", ["text", "stats", "call_requests"])
+LLM_StepData = namedtuple("LLM_StepData", ["text", "call_requests"])
+LLM_Response = namedtuple("LLM_Response", ["step_data", "stats"])
 
 class CallParams:
     """Parameters for a single function/tool call requested by the LLM.
@@ -475,7 +473,7 @@ class LLM_API(ABC):
                 enabled for this request.
 
         Returns:
-            LLM_Response containing the response text, stats, and call requests.
+            LLM_Response containing step data and provider usage stats.
         """
         request_kwargs = self._prepare_request_kwargs(
             system_prompt=system_prompt,
@@ -701,7 +699,7 @@ class DefaultLLM_API_Impl(LLM_API):
                          the final element
 
         Returns:
-            LLM_Response with the generated text, stats, and tool calls
+            LLM_Response with generated step data and usage stats.
 
         Raises:
             httpx.HTTPError: If the API request fails
@@ -775,8 +773,11 @@ class DefaultLLM_API_Impl(LLM_API):
             )
 
             return LLM_Response(
-                text=response_text, stats=stats,
-                call_requests=call_requests
+                step_data=LLM_StepData(
+                    text=response_text,
+                    call_requests=call_requests,
+                ),
+                stats=stats,
             )
 
 
@@ -1224,9 +1225,11 @@ class VertexAI_API(LLM_API):
                 cached_tokens=_usage.get("cachedContentTokenCount", 0),
             )
             return LLM_Response(
-                text=response_text,
+                step_data=LLM_StepData(
+                    text=response_text,
+                    call_requests=call_requests,
+                ),
                 stats=stats,
-                call_requests=call_requests,
             )
 
 
@@ -1558,8 +1561,11 @@ class ClaudeAI_API(LLM_API):
             )
 
             return LLM_Response(
-                text=response_text, stats=stats,
-                call_requests=call_requests
+                step_data=LLM_StepData(
+                    text=response_text,
+                    call_requests=call_requests,
+                ),
+                stats=stats,
             )
 
 

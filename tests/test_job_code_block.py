@@ -5,7 +5,7 @@
 from tests.conftest import create_chat_log_item
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.chat_history import ChatRole
-from statek.llm_api import LLM_Response, LLM_Stats, CallParams
+from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, CallParams
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -86,9 +86,8 @@ class TestAppendChatLogCodeBlock:
         job = job_factory()
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={})
         llm_resp = LLM_Response(
-            text="x = 1",
+            step_data=LLM_StepData(text="x = 1", call_requests=[call_params]),
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=[call_params],
         )
 
         request = job.get_next_request()
@@ -103,9 +102,8 @@ class TestAppendChatLogCodeBlock:
         job = job_factory()
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={"x": 1})
         llm_resp = LLM_Response(
-            text="",
+            step_data=LLM_StepData(text="", call_requests=[call_params]),
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=[call_params],
         )
 
         request = job.get_next_request()
@@ -121,9 +119,8 @@ class TestAppendChatLogCodeBlock:
         """append_chat_log() stores a plain str when call_requests is None."""
         job = job_factory()
         llm_resp = LLM_Response(
-            text="x = 1",
+            step_data=LLM_StepData(text="x = 1", call_requests=None),
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=None,
         )
 
         request = job.get_next_request()
@@ -138,9 +135,8 @@ class TestAppendChatLogCodeBlock:
         job.py_env.console_append("line 2")
         call_params = CallParams(call_id="T-001", name="my_tool", args=[], kwargs={})
         llm_resp = LLM_Response(
-            text="x = 1",
+            step_data=LLM_StepData(text="x = 1", call_requests=[call_params]),
             stats=LLM_Stats(total_bytes_sent=0, total_bytes_received=0, cost=None),
-            call_requests=[call_params],
         )
 
         request = job.get_next_request()

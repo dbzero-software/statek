@@ -39,6 +39,7 @@ from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
     LLM_LogItem,
+    PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
     ToolError,
@@ -69,6 +70,11 @@ from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.model_pricing import get_model_pricing
 from statek.settings import get_statek_settings, ChatStyle
+from statek.executors.post_processor import (
+    PostProcessingInput,
+    post_processing_identity,
+    stored_post_processing,
+)
 from statek.task_difficulty import (
     TaskDifficulty,
     max_task_difficulty,
@@ -344,6 +350,7 @@ def _job_def_identity_hash(
     job_params,
     locale,
     chat_style,
+    post_processing,
 ) -> str:
     payload = (
         warmup_code,
@@ -352,6 +359,7 @@ def _job_def_identity_hash(
         job_params,
         locale,
         chat_style,
+        post_processing_identity(post_processing),
     )
     encoded = str(payload).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:4]
@@ -364,10 +372,11 @@ def _job_def_identity_tag(
     job_params,
     locale,
     chat_style,
+    post_processing=None,
 ) -> str:
     return (
         f"{_JOBDEF_HASH_TAG_PREFIX}"
-        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style)}"
+        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing)}"
     )
 
 
@@ -380,6 +389,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
         job_def.job_params,
         job_def.locale,
         getattr(job_def, "_chat_style", None),
+        job_def.post_processing,
     )
 
 
@@ -401,6 +411,8 @@ class JobDef:
     _chat_style: Optional[ChatStyle] = None
     # Optional locale for language-specific behaviour
     locale: Optional["StatekLocale"] = None
+    # Optional post-processing sequence applied after LLM responses
+    post_processing: PostProcessingInput = None
 
     def __post_init__(self):
         if self.agent is not None:
@@ -420,6 +432,7 @@ class JobDef:
             )
         if not _is_model_mapping(metadata_model):
             self.metadata["MODEL"] = parse_model_metadata(metadata_model)
+        self.post_processing = stored_post_processing(self.post_processing)
         self._sync_identity_hash_tag()
 
     def _sync_identity_hash_tag(self, old_tag: Optional[str] = None) -> None:
@@ -1081,8 +1094,8 @@ class Job:
           3. The same alternating pattern for LLM turns: ASSISTANT (LLM
              response) + USER/TOOL (console / tool result), woven together
              with any USER messages from ``UserLogItem`` entries, SYSTEM
-             reminder messages, and USER messages from ``py_env.push_log``
-             keyed by console position.
+             post-processor/reminder messages, and USER messages from
+             ``py_env.push_log`` keyed by console position.
 
         ``CodeBlock`` responses with ``tool_calls`` produce an ASSISTANT item
         with ``tool_calls`` set, followed by one TOOL item per call carrying
@@ -1137,7 +1150,13 @@ class Job:
                 continue
             next_pos = console_len
             for j in range(i + 1, len(items)):
-                if isinstance(items[j], (WarmupLogItem, LLM_LogItem, ReminderLogItem, SubTaskLogItem)):
+                if isinstance(items[j], (
+                    WarmupLogItem,
+                    LLM_LogItem,
+                    PostProcessedItem,
+                    ReminderLogItem,
+                    SubTaskLogItem,
+                )):
                     next_pos = items[j].console_pos
                     break
             end_positions[i] = next_pos
@@ -1165,6 +1184,15 @@ class Job:
                         role=ChatRole.USER,
                         content=self._with_language_hint(item.message),
                         content_src=ContentSource.USER,
+                    )
+                continue
+
+            if isinstance(item, PostProcessedItem):
+                if item.message:
+                    yield ChatHistoryItem(
+                        role=ChatRole.SYSTEM,
+                        content=item.message,
+                        content_src=ContentSource.SYSTEM,
                     )
                 continue
 
@@ -1495,8 +1523,9 @@ class Job:
         is_md_style = chat_style in (  # pylint: disable=no-member
             ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)
         is_direct = chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
+        step_data = llm_resp.step_data
 
-        if llm_resp.call_requests:
+        if step_data.call_requests:
             # When tool calls are present we build a CodeBlock and need to
             # decide what (if anything) goes into its `code` field.
             #   - DIRECT: dialog text (not Python) — stored for chat history,
@@ -1506,14 +1535,14 @@ class Job:
             #     ast.parse.
             #   - other styles: pass the response through as-is.
             if is_direct:
-                response_code = extract_dialog(llm_resp.text or "")
+                response_code = extract_dialog(step_data.text or "")
             elif is_md_style:
-                response_code = strip_markup(llm_resp.text, strict=True)
+                response_code = strip_markup(step_data.text, strict=True)
             else:
-                response_code = llm_resp.text
+                response_code = step_data.text
             tool_calls = [
                 CallSpec(id=cp.id, func_name=cp.name, args=cp.args or [], kwargs=cp.kwargs or {})
-                for cp in llm_resp.call_requests
+                for cp in step_data.call_requests
             ]
             stored_resp = CodeBlock(code=response_code or None, tool_calls=tool_calls)
         else:
@@ -1521,9 +1550,9 @@ class Job:
             # history. DIRECT keeps only the dialog text; markdown styles
             # keep the cleaned-up form; other styles store as-is.
             if is_direct:
-                stored_resp = extract_dialog(llm_resp.text or "")
+                stored_resp = extract_dialog(step_data.text or "")
             else:
-                stored_resp = strip_markup(llm_resp.text, strict=is_md_style)
+                stored_resp = strip_markup(step_data.text, strict=is_md_style)
 
         chat_item = LLM_LogItem(
             console_pos=len(self.py_env.console) if self.py_env.console else 0,
