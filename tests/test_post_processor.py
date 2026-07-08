@@ -7,6 +7,7 @@ import pytest
 
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.agent import SupervisedAgent
+from statek.executors import post_processor as post_processor_module
 from statek.executors.chat_log_item import LLM_LogItem, PostProcessedItem
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.post_processor import (
@@ -107,6 +108,15 @@ class TupleMessagesPostProcessor(PostProcessor):
         """Return two messages without an LLM step."""
         del llm_step, job
         return "Review once.", "Review twice."
+
+
+@db0.memo
+class ExplodingActivationItem:
+    """Sentinel item that fails if FinalCheck scans prior activations."""
+
+    @property
+    def post_processor(self) -> PostProcessor:
+        raise AssertionError("FinalCheck should not scan prior activations")
 
 
 def _supervised_agent(role: str = "post_processor_agent") -> SupervisedAgent:
@@ -210,6 +220,52 @@ def test_resolve_post_processors_final_check_kwargs(db0_fixture):
     assert len(resolved) == 1
     assert isinstance(resolved[0], FinalCheck)
     assert resolved[0].max_llm_actions == 5
+
+
+def test_resolve_post_processors_finds_existing_before_create(db0_fixture, monkeypatch):
+    """Resolver explicitly searches existing processors before construction."""
+    existing = FinalCheck(max_llm_actions=5)
+    find_calls = []
+
+    def fake_find(processor_cls):
+        find_calls.append(processor_cls)
+        return [existing]
+
+    monkeypatch.setattr(post_processor_module.db0, "find", fake_find)
+
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck(max_llm_actions=5)"))
+
+    assert find_calls == [FinalCheck]
+    assert resolved == [existing]
+
+
+def test_resolve_post_processors_finds_existing_with_default_kwargs(db0_fixture, monkeypatch):
+    """Resolver applies constructor defaults when matching existing processors."""
+    existing = FinalCheck()
+    find_calls = []
+
+    def fake_find(processor_cls):
+        find_calls.append(processor_cls)
+        return [existing]
+
+    monkeypatch.setattr(post_processor_module.db0, "find", fake_find)
+
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck()"))
+
+    assert find_calls == [FinalCheck]
+    assert resolved == [existing]
+
+
+def test_resolve_post_processors_rejects_unknown_kwargs_with_existing_processor(
+    db0_fixture,
+    monkeypatch,
+):
+    """Unknown kwargs do not accidentally match an existing default instance."""
+    existing = FinalCheck()
+    monkeypatch.setattr(post_processor_module.db0, "find", lambda processor_cls: [existing])
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        resolve_post_processors(parse_post_processors("FinalCheck(unknown=True)"))
 
 
 def test_resolve_post_processors_preserves_order(db0_fixture):
@@ -523,6 +579,36 @@ def test_final_check_inactive_for_non_final_step(db0_fixture):
         text="I need data.",
         call_requests=[{"name": "python_cli"}],
     )
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_checks_finality_before_prior_activation_scan(db0_fixture, monkeypatch):
+    """Non-final steps skip the prior-activation scan."""
+    job = _job()
+    monkeypatch.setattr(post_processor_module, "PostProcessedItem", ExplodingActivationItem)
+    processor = FinalCheck(max_llm_actions=3)
+    job.chat_log = [ExplodingActivationItem()]
+    llm_step = LLM_StepData(text="I need data.", call_requests=[{"name": "python_cli"}])
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_checks_action_threshold_before_prior_activation_scan(
+    db0_fixture,
+    monkeypatch,
+):
+    """Steps at the action threshold skip the prior-activation scan."""
+    job = _job()
+    monkeypatch.setattr(post_processor_module, "PostProcessedItem", ExplodingActivationItem)
+    processor = FinalCheck(max_llm_actions=3)
+    job.chat_log = [
+        LLM_LogItem(console_pos=0, llm_resp="First answer"),
+        LLM_LogItem(console_pos=1, llm_resp="Second answer"),
+        LLM_LogItem(console_pos=2, llm_resp="Third answer"),
+        ExplodingActivationItem(),
+    ]
+    llm_step = _final_step()
 
     assert processor.process(llm_step, job) is llm_step
 

@@ -15,6 +15,7 @@
 """Post-processing contract for LLM step handling."""
 
 import ast
+import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
@@ -82,15 +83,15 @@ class FinalCheck(PostProcessor):
             A system message string when activated, otherwise the original LLM
             step unchanged.
         """
+        if not job.is_step_final(llm_step):
+            return llm_step
+        if job.count_llm_actions() >= self.max_llm_actions:
+            return llm_step
         already_fired = any(
             isinstance(item, PostProcessedItem) and item.post_processor is self
             for item in job.chat_log
         )
         if already_fired:
-            return llm_step
-        if not job.is_step_final(llm_step):
-            return llm_step
-        if job.count_llm_actions() >= self.max_llm_actions:
             return llm_step
 
         return (
@@ -166,10 +167,38 @@ def _resolve_post_processor_call(call_params: CallParams) -> PostProcessor:
     if call_params.args:
         raise ValueError("Post-processor metadata must use keyword arguments only")
 
-    processor = processor_cls(**(call_params.kwargs or {}))
+    kwargs = call_params.kwargs or {}
+    expected_state = _post_processor_expected_state(processor_cls, kwargs)
+    for existing_processor in db0.find(processor_cls):  # pylint: disable=no-member
+        if _post_processor_matches_state(existing_processor, expected_state):
+            return existing_processor
+
+    processor = processor_cls(**kwargs)
     if not isinstance(processor, PostProcessor):
         raise TypeError("Resolved post-processor must be a PostProcessor instance")
     return processor
+
+
+def _post_processor_expected_state(
+    processor_cls: type[PostProcessor],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Return constructor-bound state requested by metadata."""
+    bound_kwargs = inspect.signature(processor_cls).bind(**kwargs)
+    bound_kwargs.apply_defaults()
+    return dict(bound_kwargs.arguments)
+
+
+def _post_processor_matches_state(
+    post_processor: PostProcessor,
+    expected_state: dict[str, Any],
+) -> bool:
+    """Return whether an existing processor has the requested state."""
+    missing = object()
+    return all(
+        getattr(post_processor, name, missing) == value
+        for name, value in expected_state.items()
+    )
 
 
 def resolve_post_processors(call_params: list[CallParams]) -> list[PostProcessor]:
