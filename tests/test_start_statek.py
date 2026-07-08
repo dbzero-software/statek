@@ -8,6 +8,7 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import Agent, SupervisedAgent
+from statek.executors.post_processor import FinalCheck
 from statek.prompt_config import PromptDef, make_system_prompt
 from statek.runner import start_statek, start_statek_async
 from statek.settings import StatekSettings
@@ -104,6 +105,65 @@ async def test_start_statek_updates_existing_agents_from_files(
     assert agent.description == "Configured agent"
     assert agent.warmup_def.warmup_code == "event = payload"
     assert list(db0.find(Agent)) == [agent]
+
+
+@pytest.mark.asyncio
+async def test_start_statek_applies_post_processors_to_existing_job_defs(
+    db0_fixture,
+    monkeypatch,
+):
+    """POST_PROCESSORS metadata updates existing JobDefs during startup."""
+    agent = _agent("post-configured")
+    job_def = agent.create_job_def()
+    prompt_def = PromptDef(
+        system=make_system_prompt("new prompt"),
+        metadata={
+            "MODEL": "test-model",
+            "POST_PROCESSORS": "FinalCheck(max_llm_actions=2)",
+        },
+    )
+
+    async def fake_loop(**kwargs):
+        assert kwargs["agent"] is agent
+
+    monkeypatch.setattr("statek.runner.run_agentic_loop", fake_loop)
+    monkeypatch.setattr("statek.runner.StatekClientAPI", Mock())
+
+    await start_statek_async(
+        agents=[agent],
+        settings=_settings(prompt_defs={"post-configured": prompt_def}),
+    )
+
+    assert len(job_def.post_processing) == 1
+    assert isinstance(job_def.post_processing[0], FinalCheck)
+    assert job_def.post_processing[0].max_llm_actions == 2
+
+
+@pytest.mark.asyncio
+async def test_start_statek_clears_post_processors_when_metadata_absent(
+    db0_fixture,
+    monkeypatch,
+):
+    """Prompt config without POST_PROCESSORS clears existing JobDef processors."""
+    agent = _agent("post-cleared")
+    job_def = agent.create_job_def(post_processing=FinalCheck(max_llm_actions=2))
+    prompt_def = PromptDef(
+        system=make_system_prompt("new prompt"),
+        metadata={"MODEL": "test-model"},
+    )
+
+    async def fake_loop(**kwargs):
+        assert kwargs["agent"] is agent
+
+    monkeypatch.setattr("statek.runner.run_agentic_loop", fake_loop)
+    monkeypatch.setattr("statek.runner.StatekClientAPI", Mock())
+
+    await start_statek_async(
+        agents=[agent],
+        settings=_settings(prompt_defs={"post-cleared": prompt_def}),
+    )
+
+    assert job_def.post_processing is None
 
 
 @pytest.mark.asyncio

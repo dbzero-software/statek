@@ -1,6 +1,8 @@
 # pylint: disable=no-member
 """Tests for prompt configuration parsing."""
 
+from pathlib import Path
+
 import pytest
 
 from statek.prompt_config import (
@@ -11,6 +13,7 @@ from statek.prompt_config import (
     SystemPromptData,
     compare_prompts,
     format_system_prompt,
+    parse_prompt_file,
     parse_system_prompt,
 )
 from statek.task_difficulty import TaskDifficulty
@@ -22,6 +25,22 @@ def test_parse_system_prompt_returns_intro_without_sections():
         intro="System prompt introduction",
         sections=[],
     )
+
+
+def test_parse_prompt_file_preserves_post_processors_metadata(temp_dir):
+    """POST_PROCESSORS metadata is captured from agent prompt files."""
+    prompt_file = Path(temp_dir) / "configured.md"
+    prompt_file.write_text(
+        "# MODEL: test-model\n"
+        "# POST_PROCESSORS: FinalCheck(max_llm_actions=2)\n"
+        "# System Prompt\n"
+        "You are configured.\n",
+        encoding="utf-8",
+    )
+
+    prompt_def = parse_prompt_file(prompt_file)
+
+    assert prompt_def.metadata["POST_PROCESSORS"] == "FinalCheck(max_llm_actions=2)"
 
 
 def test_parse_system_prompt_handles_all_section_styles():

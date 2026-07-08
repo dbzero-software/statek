@@ -448,6 +448,9 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
     """
     from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel,cyclic-import
     from statek.executors.job import JobDef  # pylint: disable=import-outside-toplevel,cyclic-import
+    from statek.executors.post_processor import (  # pylint: disable=import-outside-toplevel
+        resolve_post_processors_from_metadata,
+    )
     from statek.chat_style import ChatStyle  # pylint: disable=import-outside-toplevel
 
     # If agents not provided, find all agents in db0
@@ -461,6 +464,8 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
         if prompt_def is None:
             # Quietly skip agents without matching prompt definitions
             continue
+
+        job_defs = tuple(db0.find(JobDef, db0.as_tag(agent)))  # pylint: disable=no-member
 
         # Update agent's system prompt if changed
         if prompt_def.system:
@@ -478,5 +483,7 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
         # Propagate CHAT_STYLE to associated JobDefs
         chat_style_str = prompt_def.metadata.get('CHAT_STYLE') if prompt_def.metadata else None
         new_chat_style = ChatStyle[chat_style_str.upper()] if chat_style_str else None  # pylint: disable=no-member
-        for job_def in db0.find(JobDef, agent):  # pylint: disable=no-member
+        new_post_processing = resolve_post_processors_from_metadata(prompt_def.metadata)
+        for job_def in job_defs:
             job_def.set_chat_style(new_chat_style)
+            job_def.set_post_processing(new_post_processing)

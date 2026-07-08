@@ -27,6 +27,7 @@ from statek.executors.job import (
     parse_warmup_code,
     parse_warmup_code_with_metadata,
 )
+from statek.executors.post_processor import effective_post_processing
 from statek.prompt_config import (
     SystemPrompt,
     SystemPromptData,
@@ -528,6 +529,7 @@ class SupervisedAgent(Agent):
             raise ValueError(
                 f"Agent '{self.role}' is missing required metadata field 'MODEL'"
             )
+        resolved_post_processing = effective_post_processing(post_processing, metadata)
 
         return JobDef(
             agent=self,
@@ -535,7 +537,7 @@ class SupervisedAgent(Agent):
             job_params=job_params,
             warmup_code=combined,
             locale=locale,
-            post_processing=post_processing,
+            post_processing=resolved_post_processing,
         )
 
     def _combine_warmup_code(self, warmup_code):
