@@ -7,11 +7,18 @@ import pytest
 
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.agent import SupervisedAgent
+from statek.executors import post_processor as post_processor_module
 from statek.executors.chat_log_item import LLM_LogItem, PostProcessedItem
 from statek.executors.job import Job, JobDef, JobStatus
-from statek.executors.post_processor import PostProcessor, post_processor_identity
+from statek.executors.post_processor import (
+    FinalCheck,
+    PostProcessor,
+    parse_post_processors,
+    post_processor_identity,
+    resolve_post_processors,
+)
 from statek.executors.utils import find_existing_job_def
-from statek.llm_api import LLM_StepData
+from statek.llm_api import CallParams, LLM_StepData
 from statek.prompt_config import make_system_prompt
 from statek.settings import ChatStyle
 from statek.task import create_new_job
@@ -103,6 +110,15 @@ class TupleMessagesPostProcessor(PostProcessor):
         return "Review once.", "Review twice."
 
 
+@db0.memo
+class ExplodingActivationItem:
+    """Sentinel item that fails if FinalCheck scans prior activations."""
+
+    @property
+    def post_processor(self) -> PostProcessor:
+        raise AssertionError("FinalCheck should not scan prior activations")
+
+
 def _supervised_agent(role: str = "post_processor_agent") -> SupervisedAgent:
     """Create a supervised agent with required model metadata."""
     return SupervisedAgent(
@@ -116,10 +132,165 @@ def _supervised_agent(role: str = "post_processor_agent") -> SupervisedAgent:
 def _job() -> Job:
     """Create a job for post-processor method tests."""
     agent = _supervised_agent()
-    return Job(
+    job = Job(
         job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}),
         job_status=JobStatus.READY,
     )
+    job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
+    return job
+
+
+def _final_step(text: str = "Draft final answer") -> LLM_StepData:
+    """Return a final DIRECT step for FinalCheck tests."""
+    return LLM_StepData(text=text, call_requests=None)
+
+
+def test_parse_post_processors_none_returns_empty_list():
+    """Empty post-processor metadata parses to an empty call list."""
+    assert not parse_post_processors("")
+
+
+def test_parse_post_processors_single_constructor():
+    """A single constructor snippet produces one parsed call."""
+    parsed = parse_post_processors("FinalCheck()")
+
+    assert len(parsed) == 1
+    assert isinstance(parsed[0], CallParams)
+    assert parsed[0].id == "FinalCheck"
+    assert parsed[0].name == "FinalCheck"
+    assert parsed[0].args == []
+    assert parsed[0].kwargs == {}
+
+
+def test_parse_post_processors_multiple_snippets_preserve_order():
+    """Comma-delimited constructor snippets preserve metadata order."""
+    parsed = parse_post_processors("FinalCheck(max_llm_actions=3), OtherCheck(enabled=True)")
+
+    assert [item.name for item in parsed] == ["FinalCheck", "OtherCheck"]
+    assert [item.args for item in parsed] == [[], []]
+    assert [item.kwargs for item in parsed] == [{"max_llm_actions": 3}, {"enabled": True}]
+
+
+def test_parse_post_processors_literal_keyword_arguments():
+    """Keyword values are parsed as Python literals only."""
+    parsed = parse_post_processors(
+        "FinalCheck(max_llm_actions=5, label='review', flags=['a', 'b'], options={'x': 1})"
+    )
+
+    assert len(parsed) == 1
+    assert parsed[0].name == "FinalCheck"
+    assert parsed[0].args == []
+    assert parsed[0].kwargs == {
+        "max_llm_actions": 5,
+        "label": "review",
+        "flags": ["a", "b"],
+        "options": {"x": 1},
+    }
+
+
+@pytest.mark.parametrize("snippet", [
+    "FinalCheck(3)",
+    "FinalCheck(*args)",
+    "FinalCheck(**kwargs)",
+    "processors.FinalCheck()",
+    "registry['FinalCheck']()",
+    "FinalCheck(max_llm_actions=1 + 2)",
+    "FinalCheck(); FinalCheck()",
+    "import os",
+])
+def test_parse_post_processors_rejects_unsafe_snippets(snippet):
+    """Only simple constructor calls with literal keyword args are accepted."""
+    with pytest.raises(ValueError, match="post-processor"):
+        parse_post_processors(snippet)
+
+
+def test_resolve_post_processors_final_check_default(db0_fixture):
+    """A parsed FinalCheck call resolves through the known registry."""
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck()"))
+
+    assert len(resolved) == 1
+    assert isinstance(resolved[0], FinalCheck)
+    assert resolved[0].max_llm_actions == 3
+
+
+def test_resolve_post_processors_final_check_kwargs(db0_fixture):
+    """Parsed keyword args are passed into the processor constructor."""
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck(max_llm_actions=5)"))
+
+    assert len(resolved) == 1
+    assert isinstance(resolved[0], FinalCheck)
+    assert resolved[0].max_llm_actions == 5
+
+
+def test_resolve_post_processors_finds_existing_before_create(db0_fixture, monkeypatch):
+    """Resolver explicitly searches existing processors before construction."""
+    existing = FinalCheck(max_llm_actions=5)
+    find_calls = []
+
+    def fake_find(processor_cls):
+        find_calls.append(processor_cls)
+        return [existing]
+
+    monkeypatch.setattr(post_processor_module.db0, "find", fake_find)
+
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck(max_llm_actions=5)"))
+
+    assert find_calls == [FinalCheck]
+    assert resolved == [existing]
+
+
+def test_resolve_post_processors_finds_existing_with_default_kwargs(db0_fixture, monkeypatch):
+    """Resolver applies constructor defaults when matching existing processors."""
+    existing = FinalCheck()
+    find_calls = []
+
+    def fake_find(processor_cls):
+        find_calls.append(processor_cls)
+        return [existing]
+
+    monkeypatch.setattr(post_processor_module.db0, "find", fake_find)
+
+    resolved = resolve_post_processors(parse_post_processors("FinalCheck()"))
+
+    assert find_calls == [FinalCheck]
+    assert resolved == [existing]
+
+
+def test_resolve_post_processors_rejects_unknown_kwargs_with_existing_processor(
+    db0_fixture,
+    monkeypatch,
+):
+    """Unknown kwargs do not accidentally match an existing default instance."""
+    existing = FinalCheck()
+    monkeypatch.setattr(post_processor_module.db0, "find", lambda processor_cls: [existing])
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        resolve_post_processors(parse_post_processors("FinalCheck(unknown=True)"))
+
+
+def test_resolve_post_processors_preserves_order(db0_fixture):
+    """Multiple parsed calls resolve in metadata order."""
+    resolved = resolve_post_processors(parse_post_processors(
+        "FinalCheck(max_llm_actions=2), FinalCheck(max_llm_actions=7)"
+    ))
+
+    assert [processor.max_llm_actions for processor in resolved] == [2, 7]
+
+
+def test_resolve_post_processors_rejects_unknown_name(db0_fixture):
+    """Unknown parsed processor names fail clearly."""
+    parsed = parse_post_processors("UnknownCheck(enabled=True)")
+
+    with pytest.raises(ValueError, match="Unknown post-processor"):
+        resolve_post_processors(parsed)
+
+
+def test_create_job_def_still_rejects_raw_post_processor_metadata(db0_fixture):
+    """JobDef creation remains on the resolved-instance input path only."""
+    agent = _supervised_agent()
+
+    with pytest.raises(TypeError, match="PostProcessor instances"):
+        agent.create_job_def(post_processing="FinalCheck()")
 
 
 def test_concrete_post_processor_has_stable_value_identity(db0_fixture):
@@ -370,3 +541,108 @@ def test_handle_post_processor_rejects_multiple_llm_steps(db0_fixture):
             processor,
             LLM_StepData(text="Draft answer", call_requests=None),
         )
+
+
+def test_final_check_activates_for_early_final_step(db0_fixture):
+    """FinalCheck suppresses an early final answer and asks for reflection."""
+    job = _job()
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = _final_step("The answer is 42.")
+
+    result = processor.process(llm_step, job)
+
+    assert isinstance(result, str)
+    assert "The answer is 42." in result
+    assert "correct, complete, and directly answers the user" in result
+    assert "Revise if needed; otherwise return it unchanged." in result
+
+
+def test_final_check_inactive_at_action_threshold(db0_fixture):
+    """FinalCheck passes through once the job has enough LLM actions."""
+    job = _job()
+    job.chat_log.extend([
+        LLM_LogItem(console_pos=0, llm_resp="First answer"),
+        LLM_LogItem(console_pos=1, llm_resp="Second answer"),
+        LLM_LogItem(console_pos=2, llm_resp="Third answer"),
+    ])
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = _final_step()
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_inactive_for_non_final_step(db0_fixture):
+    """FinalCheck does not fire for steps that still need tool execution."""
+    job = _job()
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = LLM_StepData(
+        text="I need data.",
+        call_requests=[{"name": "python_cli"}],
+    )
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_checks_finality_before_prior_activation_scan(db0_fixture, monkeypatch):
+    """Non-final steps skip the prior-activation scan."""
+    job = _job()
+    monkeypatch.setattr(post_processor_module, "PostProcessedItem", ExplodingActivationItem)
+    processor = FinalCheck(max_llm_actions=3)
+    job.chat_log = [ExplodingActivationItem()]
+    llm_step = LLM_StepData(text="I need data.", call_requests=[{"name": "python_cli"}])
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_checks_action_threshold_before_prior_activation_scan(
+    db0_fixture,
+    monkeypatch,
+):
+    """Steps at the action threshold skip the prior-activation scan."""
+    job = _job()
+    monkeypatch.setattr(post_processor_module, "PostProcessedItem", ExplodingActivationItem)
+    processor = FinalCheck(max_llm_actions=3)
+    job.chat_log = [
+        LLM_LogItem(console_pos=0, llm_resp="First answer"),
+        LLM_LogItem(console_pos=1, llm_resp="Second answer"),
+        LLM_LogItem(console_pos=2, llm_resp="Third answer"),
+        ExplodingActivationItem(),
+    ]
+    llm_step = _final_step()
+
+    assert processor.process(llm_step, job) is llm_step
+
+
+def test_final_check_does_not_repeat_for_same_instance(db0_fixture):
+    """A FinalCheck instance fires at most once for a job."""
+    job = _job()
+    processor = FinalCheck(max_llm_actions=3)
+    llm_step = _final_step()
+
+    assert job.handle_post_processor(processor, llm_step) == (None, True)
+    assert job.handle_post_processor(processor, llm_step) == (llm_step, False)
+
+
+def test_final_check_separate_instance_can_fire_independently(db0_fixture):
+    """Fired-once detection is per exact FinalCheck instance."""
+    job = _job()
+    first = FinalCheck(max_llm_actions=3)
+    second = FinalCheck(max_llm_actions=4)
+    llm_step = _final_step()
+
+    assert job.handle_post_processor(first, llm_step) == (None, True)
+    assert job.handle_post_processor(second, llm_step) == (None, True)
+    assert [item.post_processor for item in job.chat_log] == [first, second]
+
+
+def test_final_check_md_dialog_internal_text_activation_profile(db0_fixture):
+    """MD_DIALOG header-less final text can activate while prior action count is zero."""
+    job = _job()
+    job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
+    job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="internal reasoning"))
+    processor = FinalCheck(max_llm_actions=1)
+
+    result = processor.process(LLM_StepData(text="internal final", call_requests=None), job)
+
+    assert job.count_llm_actions() == 0
+    assert isinstance(result, str)
