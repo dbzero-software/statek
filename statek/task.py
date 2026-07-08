@@ -26,6 +26,7 @@ from .agents.agent import Agent, SupervisedAgent
 from .agents.dialog_agent import DialogAgent
 from .chat_style import ChatStyle
 from .executors.job import Job, JobStatus, WarmupCodeInput
+from .executors.post_processor import effective_post_processing
 from .locale import StatekLocale
 from .pyenv import PyEnv
 from .settings import get_provider_settings as _get_provider_settings
@@ -66,6 +67,7 @@ def _find_reusable_job_def(
     else:
         combined_warmup_code = warmup_code
     metadata = agent._metadata or {}  # pylint: disable=protected-access
+    resolved_post_processing = effective_post_processing(post_processing, metadata)
     return find_existing_job_def(
         agent,
         combined_warmup_code,
@@ -73,7 +75,7 @@ def _find_reusable_job_def(
         job_params=_job_params_from_kwargs(agent, kwargs),
         locale=locale,
         chat_style=_dialog_chat_style(agent, kwargs) if isinstance(agent, DialogAgent) else None,
-        post_processing=post_processing,
+        post_processing=resolved_post_processing,
     )
 
 

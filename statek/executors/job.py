@@ -528,6 +528,13 @@ class JobDef:
             self._chat_style = chat_style
             self._sync_identity_hash_tag(old_tag)
 
+    def set_post_processing(self, post_processing: PostProcessingInput) -> None:
+        """Update post_processing only when the effective processor identity changes."""
+        if post_processing_identity(self.post_processing) != post_processing_identity(post_processing):
+            old_tag = job_def_identity_tag_for_job_def(self)
+            self.post_processing = stored_post_processing(post_processing)
+            self._sync_identity_hash_tag(old_tag)
+
     @property
     def chat_style(self) -> Optional[ChatStyle]:
         """Return the job-level chat style, or fall back to the system default from StatekSettings."""

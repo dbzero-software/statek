@@ -18,7 +18,7 @@ import ast
 import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Optional, Tuple, Union
 
 import dbzero as db0
 
@@ -214,6 +214,28 @@ def resolve_post_processors(call_params: list[CallParams]) -> list[PostProcessor
         ValueError: If a parsed processor name is unknown or uses positional args.
     """
     return [_resolve_post_processor_call(call_param) for call_param in call_params]
+
+
+def resolve_post_processors_from_metadata(
+    metadata: Optional[Mapping[str, str]],
+) -> Optional[list[PostProcessor]]:
+    """Resolve the POST_PROCESSORS metadata value into executable processors."""
+    if not metadata:
+        return None
+    post_processors_def = metadata.get("POST_PROCESSORS")
+    if post_processors_def is None or not post_processors_def.strip():
+        return None
+    return resolve_post_processors(parse_post_processors(post_processors_def))
+
+
+def effective_post_processing(
+    post_processing: PostProcessingInput,
+    metadata: Optional[Mapping[str, str]],
+) -> PostProcessingInput:
+    """Return explicit post-processing or the metadata-derived default."""
+    if post_processing is not None:
+        return post_processing
+    return resolve_post_processors_from_metadata(metadata)
 
 
 def _freeze_identity_value(value: Any) -> Any:

@@ -7,6 +7,7 @@ import pytest
 
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.agent import SupervisedAgent
+from statek.agents.dialog_agent import DialogAgent
 from statek.executors import post_processor as post_processor_module
 from statek.executors.chat_log_item import LLM_LogItem, PostProcessedItem
 from statek.executors.job import Job, JobDef, JobStatus
@@ -127,6 +128,11 @@ def _supervised_agent(role: str = "post_processor_agent") -> SupervisedAgent:
         _metadata={"MODEL": "test-model"},
         _tools=[],
     )
+
+
+def _send_message(body: str, media=None) -> None:
+    """Test dialog send callback."""
+    del body, media
 
 
 def _job() -> Job:
@@ -293,6 +299,54 @@ def test_create_job_def_still_rejects_raw_post_processor_metadata(db0_fixture):
         agent.create_job_def(post_processing="FinalCheck()")
 
 
+def test_create_job_def_inherits_post_processors_from_metadata(db0_fixture):
+    """JobDef creation resolves POST_PROCESSORS metadata when no override is passed."""
+    agent = _supervised_agent()
+    agent.update_metadata({
+        "MODEL": "test-model",
+        "POST_PROCESSORS": "FinalCheck(max_llm_actions=2)",
+    })
+
+    job_def = agent.create_job_def()
+
+    assert len(job_def.post_processing) == 1
+    assert isinstance(job_def.post_processing[0], FinalCheck)
+    assert job_def.post_processing[0].max_llm_actions == 2
+
+
+def test_dialog_agent_create_job_def_inherits_post_processors_from_super(db0_fixture):
+    """DialogAgent inherits metadata post-processors through SupervisedAgent."""
+    agent = DialogAgent(
+        send_message=_send_message,
+        role="dialog-post-processor-agent",
+        _metadata={
+            "MODEL": "test-model",
+            "POST_PROCESSORS": "FinalCheck(max_llm_actions=2)",
+        },
+    )
+
+    job_def = agent.create_job_def()
+
+    assert len(job_def.post_processing) == 1
+    assert isinstance(job_def.post_processing[0], FinalCheck)
+    assert job_def.post_processing[0].max_llm_actions == 2
+
+
+def test_explicit_post_processing_overrides_metadata(db0_fixture):
+    """An explicit post_processing argument wins over metadata defaults."""
+    agent = _supervised_agent()
+    agent.update_metadata({
+        "MODEL": "test-model",
+        "POST_PROCESSORS": "FinalCheck(max_llm_actions=2)",
+    })
+
+    job_def = agent.create_job_def(post_processing=FinalCheck(max_llm_actions=5))
+
+    assert len(job_def.post_processing) == 1
+    assert isinstance(job_def.post_processing[0], FinalCheck)
+    assert job_def.post_processing[0].max_llm_actions == 5
+
+
 def test_concrete_post_processor_has_stable_value_identity(db0_fixture):
     """Concrete processors compare by class and stored state."""
     first = IdentityPostProcessor("same")
@@ -350,6 +404,22 @@ def test_create_new_job_reuses_matching_post_processing_job_def(db0_fixture):
 
     assert second.job_def is first.job_def
     assert len(db0.find(JobDef, db0.as_tag(agent))) == 1
+
+
+def test_create_new_job_reuses_metadata_post_processing_job_def(db0_fixture):
+    """Metadata-derived post-processing is used consistently for lookup and creation."""
+    agent = _supervised_agent()
+    agent.update_metadata({
+        "MODEL": "test-model",
+        "POST_PROCESSORS": "FinalCheck(max_llm_actions=2)",
+    })
+
+    first = create_new_job(agent)
+    second = create_new_job(agent)
+
+    assert second.job_def is first.job_def
+    assert len(db0.find(JobDef, db0.as_tag(agent))) == 1
+    assert first.job_def.post_processing[0].max_llm_actions == 2
 
 
 def test_create_new_job_distinguishes_different_post_processing(db0_fixture):
