@@ -14,6 +14,7 @@
 
 """statek package."""
 
+from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
 try:
@@ -82,7 +83,10 @@ from .dbzero_restricted import (
     validate_dbzero_restricted,
 )
 
-__version__ = "0.4.1"
+try:
+    __version__ = version("statek")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
 
 
 def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> None:
