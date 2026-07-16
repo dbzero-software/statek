@@ -1310,7 +1310,7 @@ def format_llm_repr(value: Any, hide: List[str] = None,
     if isinstance(value, dict) or _is_dbzero_collection_type(value, "Dict"):
         return _format_dict_llm(value, max_len, repeated=kwargs.get('repeated', False))
 
-    members = _get_object_members(value)
+    members = _get_object_members(value, hide=hide, show_only=show_only)
     if members is not None:
         return _format_object_llm(
             _get_class_name(value), members, hide, expand, show_only, **kwargs)
@@ -1394,15 +1394,42 @@ def _get_class_name(value: Any) -> str:
     return name[5:]  # fallback: strip prefix
 
 
-def _get_object_members(value: Any) -> Optional[Dict[str, Any]]:
-    """Return an ordered dict of an object's members, or None if not applicable."""
+def _get_object_members(
+        value: Any,
+        hide: Optional[List[str]] = None,
+        show_only: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return visible object members without reading excluded member values."""
     if isinstance(value, type):
         return None
     if is_dataclass(value):
-        return {f.name: getattr(value, f.name) for f in dataclass_fields(value)}
+        member_names = [field.name for field in dataclass_fields(value)]
+        return {
+            name: getattr(value, name)
+            for name in _filter_member_names(member_names, hide, show_only)
+        }
     if hasattr(value, '__dict__'):
-        return dict(vars(value))
+        members = vars(value)
+        return {
+            name: members[name]
+            for name in _filter_member_names(members.keys(), hide, show_only)
+        }
     return None
+
+
+def _filter_member_names(
+        member_names: Iterable[str],
+        hide: Optional[List[str]],
+        show_only: Optional[List[str]],
+) -> Iterable[str]:
+    """Yield member names permitted by show_only and hide filters."""
+    shown_names = set(show_only) if show_only is not None else None
+    hidden_names = set(hide or [])
+    return (
+        name
+        for name in member_names
+        if (shown_names is None or name in shown_names) and name not in hidden_names
+    )
 
 
 def format_default_llm_repr(obj: Any, **kwargs) -> str:
@@ -1495,7 +1522,7 @@ def _format_object_llm(class_name: str, members: Dict[str, Any],
     has_omitted = False
     for name, val in shown.items():
         if expand and name in expand:
-            formatted_val = format_llm_repr(val, is_nested=True, **kwargs)
+            formatted_val = format_default_llm_repr(val, is_nested=True, **kwargs)
         else:
             formatted_val = format_value_repr(val, is_nested=True)
             if repeated and formatted_val == '<Object>':

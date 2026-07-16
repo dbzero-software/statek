@@ -267,6 +267,59 @@ def test_llm_repr_expand_kwargs_propagate_to_expanded_field():
     )
 
 
+def test_llm_repr_expand_honors_nested_object_field_hiding():
+    """Expanding a member must preserve the nested object's visibility rules."""
+    class Professional:
+        def __init__(self):
+            self.name = "Wojciech"
+            self.account = "restricted-account"
+
+        def __llm_repr__(self, **kwargs):
+            return format_default_llm_repr(self, hide=["account"], **kwargs)
+
+    class StaffMember:
+        def __init__(self, user):
+            self.user = user
+
+        def __llm_repr__(self, **kwargs):
+            return format_default_llm_repr(self, expand=["user"], **kwargs)
+
+    result = format_default_llm_repr(StaffMember(Professional()))
+
+    assert result == 'StaffMember(user=Professional(name="Wojciech"))'
+
+
+def test_llm_repr_does_not_read_hidden_member_value():
+    """Hidden members must be filtered before their values are dereferenced."""
+    class DeferredMembers:
+        def __init__(self):
+            self.values = {"name": "Wojciech", "account": "restricted-account"}
+
+        def keys(self):
+            return self.values.keys()
+
+        def __getitem__(self, name):
+            if name == "account":
+                raise AssertionError("hidden account must not be read")
+            return self.values[name]
+
+    class Professional:
+        __slots__ = ("members",)
+
+        def __init__(self):
+            self.members = DeferredMembers()
+
+        def __getattribute__(self, name):
+            if name == "__dict__":
+                return object.__getattribute__(self, "members")
+            return object.__getattribute__(self, name)
+
+        def __llm_repr__(self, **kwargs):
+            return format_default_llm_repr(self, hide=["account"], **kwargs)
+
+    assert format_default_llm_repr(Professional()) == 'Professional(name="Wojciech")'
+
+
 def test_llm_repr_recursion_guard_kwargs_forwarded():
     """kwargs passed to format_default_llm_repr propagate into the recursive fallback."""
     class Event:
