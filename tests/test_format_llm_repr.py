@@ -3,10 +3,12 @@
 # pylint: disable=too-few-public-methods
 
 import dataclasses
+import builtins
 from datetime import datetime
 from decimal import Decimal
 
 import dbzero as db0
+import statek.utils as statek_utils
 
 from statek.utils import format_llm_repr
 
@@ -342,6 +344,27 @@ def test_db0_memo_dataclass_hide(db0_fixture):  # pylint: disable=unused-argumen
     c = Config(name="alpha", value=7)
     result = format_llm_repr(c, hide=["value"])
     assert result == 'Config(name="alpha")'
+
+
+def test_db0_memo_hide_does_not_probe_instance_dict(db0_fixture, monkeypatch):  # pylint: disable=unused-argument
+    """Memo member metadata must be filtered without probing the instance dictionary."""
+    @db0.memo
+    class Config:
+        def __init__(self, name: str, secret: str):
+            self.name = name
+            self.secret = secret
+
+    config = Config(name="alpha", secret="hidden")
+    original_hasattr = builtins.hasattr
+
+    def guarded_hasattr(value, name):
+        if value is config and name == "__dict__":
+            raise AssertionError("memo instance dictionary must not be probed")
+        return original_hasattr(value, name)
+
+    monkeypatch.setattr(statek_utils, "hasattr", guarded_hasattr, raising=False)
+
+    assert format_llm_repr(config, hide=["secret"]) == 'Config(name="alpha")'
 
 
 def test_db0_memo_dataclass_expand(db0_fixture):  # pylint: disable=unused-argument
