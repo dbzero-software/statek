@@ -1402,6 +1402,12 @@ def _get_object_members(
     """Return visible object members without reading excluded member values."""
     if isinstance(value, type):
         return None
+    if db0.is_memo(value):  # pylint: disable=no-member
+        member_names = [attribute[0] for attribute in db0.get_attributes(type(value))]  # pylint: disable=no-member
+        return {
+            name: getattr(value, name)
+            for name in _filter_member_names(member_names, hide, show_only)
+        }
     if is_dataclass(value):
         member_names = [field.name for field in dataclass_fields(value)]
         return {
