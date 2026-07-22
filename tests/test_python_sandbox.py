@@ -9,7 +9,7 @@ import statek
 import statek.dbzero_restricted as dbzero_restricted_module
 import statek.python_sandbox as sandbox_module
 from statek.dbzero_restricted import DbzeroRestrictedModeError
-from statek.agents.agent import Agent
+from statek.agents.agent import Agent, SupervisedAgent
 from statek.pyenv import PyEnv
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.utils import exec_cli_step, exec_step, exec_tool
@@ -21,7 +21,7 @@ from statek.python_sandbox import (
 )
 from statek.prompt_config import make_system_prompt
 from statek.settings import StatekSettings, get_statek_settings, set_statek_settings
-from statek.system import tool
+from statek.system import subtask, tool
 from statek.utils import CallSpec
 
 
@@ -100,6 +100,27 @@ def probe_mode_tool(probe: RestrictedContextProbe, **kwargs):  # pylint: disable
 def probe_mode_then_raise_tool(probe: RestrictedContextProbe, observed_modes, **kwargs):  # pylint: disable=unused-argument
     observed_modes.append(_probe_dbzero_mode(probe))
     raise RuntimeError("tool boom")
+
+
+@subtask
+def create_child_subtask(
+    agent: SupervisedAgent,
+    probe: RestrictedContextProbe,
+    observed_modes,
+    **_kwargs,
+) -> Job:
+    observed_modes.append(_probe_dbzero_mode(probe))
+    return statek.create_new_job(agent=agent)
+
+
+@subtask
+def probe_mode_then_raise_subtask(
+    probe: RestrictedContextProbe,
+    observed_modes,
+    **_kwargs,
+) -> Job:
+    observed_modes.append(_probe_dbzero_mode(probe))
+    raise RuntimeError("subtask boom")
 
 
 @tool(hidden=True)
@@ -705,6 +726,83 @@ async def test_tool_body_unrestricted_scope_resets_after_error(db0_fixture):  # 
         },
     )
 
+    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_subtask_creates_child_job_from_restricted_python_cli(db0_fixture):  # pylint: disable=unused-argument
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    observed_modes = []
+    child_agent = SupervisedAgent(
+        role="child-agent",
+        _system_prompt=make_system_prompt("Child"),
+        _metadata={"MODEL": "test-model"},
+        _tools=[],
+    )
+    job = _job_with_tools([create_child_subtask])
+    outputs = []
+
+    await exec_cli_step(
+        "before_mode = inspect_probe(probe)\n"
+        "handler = create_child_subtask(child_agent, probe, observed_modes, id='child-1')\n"
+        "after_mode = inspect_probe(probe)",
+        job,
+        outputs.append,
+        local_context={
+            "child_agent": child_agent,
+            "inspect_probe": _probe_dbzero_mode,
+            "observed_modes": observed_modes,
+            "probe": probe,
+        },
+    )
+
+    handler = job.py_env.local_state["handler"]
+
+    assert not outputs
+    assert observed_modes == ["unrestricted"]
+    assert job.py_env.local_state["before_mode"] == "restricted"
+    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert handler.id == "child-1"
+    assert handler.job.job_def.agent is child_agent
+    assert handler.job.py_env.local_state["sub_task_handler"] is handler
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_subtask_unrestricted_scope_resets_after_error(db0_fixture):  # pylint: disable=unused-argument
+    statek.init(StatekSettings(prompt_defs={}))
+    probe = RestrictedContextProbe(123)
+    observed_modes = []
+    job = _job_with_tools([probe_mode_then_raise_subtask])
+
+    with pytest.raises(RuntimeError, match="subtask boom"):
+        await exec_cli_step(
+            "probe_mode_then_raise_subtask(probe, observed_modes)",
+            job,
+            lambda output: None,
+            local_context={
+                "observed_modes": observed_modes,
+                "probe": probe,
+            },
+        )
+
+    assert observed_modes == ["unrestricted"]
+    assert _probe_dbzero_mode(probe) == "unrestricted"
+
+    outputs = []
+    await exec_cli_step(
+        "after_mode = inspect_probe(probe)",
+        job,
+        outputs.append,
+        local_context={
+            "inspect_probe": _probe_dbzero_mode,
+            "probe": probe,
+        },
+    )
+
+    assert not outputs
     assert job.py_env.local_state["after_mode"] == "restricted"
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
