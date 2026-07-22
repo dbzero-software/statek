@@ -277,7 +277,7 @@ def test_env_off_disables_mode(monkeypatch):
 
 def test_default_allowed_imports_match_supported_stdlib_surface():
     expected = (
-        "datetime,calendar,re,math,decimal,fractions,statistics,collections,"
+        "datetime,calendar,time,re,math,decimal,fractions,statistics,collections,"
         "itertools,functools,operator,json"
     )
 
@@ -324,6 +324,47 @@ async def test_allowed_imports_work(job_factory):
     )
 
     assert job.py_env.console == ["31"]
+
+
+@pytest.mark.asyncio
+async def test_restricted_mode_allows_datetime_f_string_formatting(job_factory):
+    job = job_factory()
+
+    await exec_step(
+        "from datetime import datetime\n"
+        "formatted_datetime = f\"{datetime(2026, 7, 22, 14, 30):%Y-%m-%d %H:%M}\"",
+        job,
+    )
+
+    assert job.py_env.local_state["formatted_datetime"] == "2026-07-22 14:30"
+
+
+@pytest.mark.asyncio
+async def test_exec_cli_step_allows_datetime_f_string_formatting(job_factory):
+    job = job_factory()
+    outputs = []
+
+    await exec_cli_step(
+        "from datetime import datetime\n"
+        "f\"{datetime(2026, 7, 22, 14, 30):%Y-%m-%d %H:%M}\"",
+        job,
+        outputs.append,
+    )
+
+    assert outputs == ["2026-07-22 14:30"]
+
+
+@pytest.mark.asyncio
+async def test_restricted_mode_allows_time_strftime(job_factory):
+    job = job_factory()
+
+    await exec_step(
+        "import time\n"
+        "formatted_time = time.strftime('%Y-%m-%d', (2026, 7, 22, 0, 0, 0, 2, 203, -1))",
+        job,
+    )
+
+    assert job.py_env.local_state["formatted_time"] == "2026-07-22"
 
 
 @pytest.mark.asyncio
@@ -435,9 +476,13 @@ async def test_restricted_mode_blocks_non_sandbox_imports(job_factory, source):
         "import calendar as cal\ncal.__class__",
         "import calendar as cal\ncal._monthlen",
         "import calendar as cal\ncal.HTMLCalendar",
+        "import time\ntime.sleep",
+        "import time\ntime.tzset",
+        "import time\ntime.clock_settime",
         "from calendar import __dict__",
         "from calendar import _monthlen",
         "from datetime import __spec__",
+        "from time import sleep",
         "dir(__import__('calendar'))",
         "getattr(__import__('datetime'), 'date')",
     ],

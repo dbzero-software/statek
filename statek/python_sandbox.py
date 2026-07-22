@@ -31,6 +31,7 @@ import math
 import operator
 import re
 import statistics
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -148,7 +149,7 @@ _INPLACE_OPERATORS = {
 }
 
 DEFAULT_ALLOWED_IMPORTS = (
-    "datetime,calendar,re,math,decimal,fractions,statistics,collections,"
+    "datetime,calendar,time,re,math,decimal,fractions,statistics,collections,"
     "itertools,functools,operator,json"
 )
 
@@ -265,6 +266,10 @@ _SAFE_IMPORTS = {
             "month_name": calendar.month_name,
             "month_abbr": calendar.month_abbr,
         },
+    ),
+    "time": _SandboxModule(
+        "time",
+        {"strftime": time.strftime}
     ),
     "re": _SandboxModule(
         "re",
