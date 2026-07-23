@@ -107,7 +107,7 @@ class StatekSettings(MultiSourceBaseSettings):
     python_sandbox_max_ast_nodes: int = 20_000
     """Comma-separated import roots allowed in sandboxed Python."""
     python_sandbox_allowed_imports: str = (
-        "datetime,calendar,re,math,decimal,fractions,statistics,collections,"
+        "datetime,calendar,time,re,math,decimal,fractions,statistics,collections,"
         "itertools,functools,operator,json"
     )
     """Comma-separated additional hidden/internal tool names allowed in sandboxed Python."""

@@ -410,13 +410,14 @@ def subtask(f=None, *, system: bool = False, target=None):  # pylint: disable=W0
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            task_id = kwargs.pop("id", None)
-            args, kwargs = _prepare_decorated_call(func, args, kwargs)
-            if inspect.iscoroutinefunction(func):
-                result = _run_coroutine_result(func(*args, **kwargs))
-            else:
-                result = func(*args, **kwargs)
-            return _wrap_subtask_result(result, task_id)
+            with as_unrestricted():
+                task_id = kwargs.pop("id", None)
+                args, kwargs = _prepare_decorated_call(func, args, kwargs)
+                if inspect.iscoroutinefunction(func):
+                    result = _run_coroutine_result(func(*args, **kwargs))
+                else:
+                    result = func(*args, **kwargs)
+                return _wrap_subtask_result(result, task_id)
 
         annotations = dict(getattr(func, "__annotations__", {}))
         annotations["id"] = str
