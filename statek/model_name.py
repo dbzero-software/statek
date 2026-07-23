@@ -16,15 +16,16 @@
 
 from collections import namedtuple
 from typing import Optional, Union
+from urllib.parse import parse_qsl
 
 
-ModelName = namedtuple("ModelName", ["provider", "model_family", "model"])
+ModelName = namedtuple("ModelName", ["provider", "model_family", "model", "params"])
 
 _PROVIDERS_REQUIRING_MODEL_FAMILY = {"OPENROUTER"}
 
 
 def parse_model_name(input: str) -> ModelName:  # pylint: disable=redefined-builtin
-    """Parse ``provider/model_family/model`` strings into normalized components."""
+    """Parse a model selection string into routing components and URL-style parameters."""
     if input is None:
         raise ValueError("model name must be provided")
 
@@ -32,12 +33,20 @@ def parse_model_name(input: str) -> ModelName:  # pylint: disable=redefined-buil
     if not value:
         raise ValueError("model name must not be empty")
 
-    parts = [(part.strip() or None) for part in value.split("/", 2)]
+    params = {}
+    path_parts = value.split("/")
+    if "=" in path_parts[-1]:
+        try:
+            params = dict(parse_qsl(path_parts.pop(), keep_blank_values=True, strict_parsing=True))
+        except ValueError as exc:
+            raise ValueError("model parameters must use URL query syntax") from exc
+
+    parts = [(part.strip() or None) for part in "/".join(path_parts).split("/", 2)]
     if len(parts) == 1:
-        return ModelName(None, None, parts[0])
+        return ModelName(None, None, parts[0], params)
     if len(parts) == 2:
-        return ModelName(None, parts[0], parts[1])
-    return ModelName(parts[0], parts[1], parts[2])
+        return ModelName(None, parts[0], parts[1], params)
+    return ModelName(parts[0], parts[1], parts[2], params)
 
 
 def ensure_model_name(
@@ -49,7 +58,7 @@ def ensure_model_name(
     model_name = value if isinstance(value, ModelName) else parse_model_name(value)
     if model_name.model_family is not None or model_family is None:
         return model_name
-    return ModelName(model_name.provider, model_family, model_name.model)
+    return ModelName(model_name.provider, model_family, model_name.model, model_name.params)
 
 
 def select_model_provider(
