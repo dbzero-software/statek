@@ -88,6 +88,40 @@ def resolve_provider_config(provider_config: Mapping[str, Any]) -> ProviderConfi
     return resolved_config
 
 
+def load_provider_config(path: str) -> Dict[str, Any]:
+    """Load a provider configuration JSON object from a UTF-8 file."""
+    with open(path, encoding="utf-8") as config_file:
+        provider_config = json.load(config_file)
+    if not _is_mapping(provider_config):
+        raise ValueError("Provider configuration JSON must contain a top-level mapping")
+    return _plain_json_value(provider_config)
+
+
+def resolve_settings_provider_config(settings: Any) -> Optional[ProviderConfig]:
+    """Resolve the provider configuration selected by a settings snapshot."""
+    config_path = getattr(settings, "statek_provider_config", None)
+    if config_path is None:
+        return None
+    return resolve_provider_config(load_provider_config(config_path))
+
+
+def provider_config_identity(provider_config: Optional[ProviderConfig]) -> Optional[str]:
+    """Return content identity for a durable provider configuration snapshot."""
+    if provider_config is None:
+        return None
+    return _provider_config_identity_tag(_plain_json_value(provider_config.provider_config))
+
+
+def provider_configs_match(
+    first: Optional[ProviderConfig],
+    second: Optional[ProviderConfig],
+) -> bool:
+    """Return whether two optional provider snapshots have equal full content."""
+    if first is None or second is None:
+        return first is second
+    return _has_same_content(first, _plain_json_value(second.provider_config))
+
+
 def _matching_payload(config: Mapping[str, Any], reasoning_level: int) -> Optional[Dict[str, Any]]:
     """Return the first payload matching a reasoning level at one config hierarchy level."""
     definitions = config.get("reasoning_level")
@@ -154,11 +188,9 @@ def _canonical_provider_config(config: Mapping[str, Any]) -> str:
 
 
 def _has_same_content(provider_config: ProviderConfig, config: Mapping[str, Any]) -> bool:
-    """Return whether a durable configuration has the requested canonical content."""
-    stored_config = getattr(provider_config, "provider_config", None)
+    """Return whether a tagged durable configuration has the requested canonical content."""
     return (
-        _is_mapping(stored_config)
-        and _canonical_provider_config(_plain_json_value(stored_config))
+        _canonical_provider_config(_plain_json_value(provider_config.provider_config))
         == _canonical_provider_config(config)
     )
 

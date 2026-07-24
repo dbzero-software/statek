@@ -39,6 +39,12 @@ from statek.executors.job import (
     parse_warmup_code,
     _job_def_identity_tag,
 )
+from statek.provider_config import (
+    ProviderConfig,
+    provider_config_identity,
+    provider_configs_match,
+    resolve_settings_provider_config,
+)
 from statek.executors.chat_log_item import ToolError, WarmupLogItem
 from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
@@ -1453,6 +1459,7 @@ def find_existing_job_def(
     locale: object = _MATCH_UNSET,
     chat_style: object = _MATCH_UNSET,
     post_processing: object = None,
+    provider_config: Optional[ProviderConfig] = None,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
@@ -1481,6 +1488,8 @@ def find_existing_job_def(
             return False
         if post_processing_identity(job_def.post_processing) != post_processing_identity(post_processing):
             return False
+        if not provider_configs_match(job_def.provider_config, provider_config):
+            return False
         return True
 
     parsed = parse_warmup_code(warmup_code)
@@ -1500,6 +1509,7 @@ def find_existing_job_def(
             locale,
             chat_style,
             post_processing,
+            provider_config,
         )
         for job_def in db0.find(JobDef, agent_tag, lookup_tag):
             if _matches(job_def):
@@ -1651,6 +1661,7 @@ async def run_agentic_loop(agent: 'Agent',
 
     # Reuse an existing matching job definition or create a new one
     model_family, model_to_use = _resolve_job_def_model(agent, provider)
+    provider_config = resolve_settings_provider_config(get_statek_settings())
     job_def = find_existing_job_def(
         agent,
         warmup_code,
@@ -1659,6 +1670,7 @@ async def run_agentic_loop(agent: 'Agent',
         job_params=None,
         locale=None,
         chat_style=None,
+        provider_config=provider_config,
     )
     if job_def:
         # Clear any previous errors on the job definition they might'be been fixed after process restart
@@ -1671,6 +1683,7 @@ async def run_agentic_loop(agent: 'Agent',
             metadata=metadata,
             job_params=None,
             warmup_code=parsed_warmup_code,
+            provider_config=provider_config,
         )
     
     start_jobs_func = _make_start_jobs_func(agent, job_def, task_queue_size_func, provider)
@@ -1714,6 +1727,7 @@ async def run_agentic_fleet(
         task_queue_size_func = loop_def.task_queue_size_func
 
         model_family, model_to_use = _resolve_job_def_model(agent, provider)
+        provider_config = resolve_settings_provider_config(get_statek_settings())
         job_def = find_existing_job_def(
             agent,
             warmup_code,
@@ -1722,6 +1736,7 @@ async def run_agentic_fleet(
             job_params=None,
             locale=None,
             chat_style=None,
+            provider_config=provider_config,
         )
         if job_def:
             job_def.clear_errors()
@@ -1733,6 +1748,7 @@ async def run_agentic_fleet(
                 metadata=metadata,
                 job_params=None,
                 warmup_code=parsed_warmup_code,
+                provider_config=provider_config,
             )
 
         start_jobs_funcs.append(_make_start_jobs_func(agent, job_def, task_queue_size_func, provider))

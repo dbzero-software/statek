@@ -152,19 +152,19 @@ def test_resolve_provider_config_checks_content_after_identity_tag_collision(
     assert first is not second
 
 
-def test_resolve_provider_config_reuses_and_tags_matching_legacy_snapshot(
+def test_resolve_provider_config_reuses_and_tags_matching_untagged_snapshot(
     db0_fixture,
 ):
-    """A matching untagged snapshot is preserved and receives its identity tag."""
+    """An equal untagged snapshot is reused rather than duplicated."""
     del db0_fixture
     config = {"openrouter": {"timeout": 10}}
-    legacy_snapshot = ProviderConfig(config)
+    untagged_snapshot = ProviderConfig(config)
     identity_tag = _provider_config_identity_tag(config)
 
     resolved = resolve_provider_config(config)
 
-    assert resolved is legacy_snapshot
-    assert legacy_snapshot in db0.find(ProviderConfig, identity_tag)
+    assert resolved is untagged_snapshot
+    assert untagged_snapshot in db0.find(ProviderConfig, identity_tag)
 
 
 def test_resolve_provider_config_snapshots_the_source_mapping(db0_fixture):

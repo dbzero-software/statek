@@ -237,6 +237,7 @@ class DialogAgent(SupervisedAgent):
         chat_style=None,
         locale=None,
         post_processing=None,
+        provider_config=None,
         **kwargs
     ):
         """Create a JobDef with a dialog chat style.
@@ -263,6 +264,7 @@ class DialogAgent(SupervisedAgent):
             shared_vars=shared_vars,
             locale=locale,
             post_processing=post_processing,
+            provider_config=provider_config,
             **kwargs
         )
         job_def.set_chat_style(chat_style or ChatStyle.MD_DIALOG)  # pylint: disable=no-member

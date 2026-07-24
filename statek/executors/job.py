@@ -47,6 +47,7 @@ from statek.executors.chat_log_item import (
     UserLogItem,
 )
 from statek.llm_api import LLM_API, LLM_Response, LLM_StepData
+from statek.provider_config import ProviderConfig, provider_config_identity
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (
     _STATEK_TOOL_MARKER,
@@ -353,6 +354,7 @@ def _job_def_identity_hash(
     locale,
     chat_style,
     post_processing,
+    provider_config=None,
 ) -> str:
     payload = (
         warmup_code,
@@ -362,6 +364,7 @@ def _job_def_identity_hash(
         locale,
         chat_style,
         post_processing_identity(post_processing),
+        provider_config_identity(provider_config),
     )
     encoded = str(payload).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:4]
@@ -375,10 +378,11 @@ def _job_def_identity_tag(
     locale,
     chat_style,
     post_processing=None,
+    provider_config=None,
 ) -> str:
     return (
         f"{_JOBDEF_HASH_TAG_PREFIX}"
-        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing)}"
+        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing, provider_config)}"
     )
 
 
@@ -392,6 +396,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
         job_def.locale,
         getattr(job_def, "_chat_style", None),
         job_def.post_processing,
+        job_def.provider_config,
     )
 
 
@@ -415,6 +420,8 @@ class JobDef:
     locale: Optional["StatekLocale"] = None
     # Optional post-processing sequence applied after LLM responses
     post_processing: PostProcessingInput = None
+    # Durable provider configuration snapshot used to create this job definition.
+    provider_config: Optional[ProviderConfig] = None
 
     def __post_init__(self):
         if self.agent is not None:

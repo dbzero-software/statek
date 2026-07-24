@@ -14,6 +14,7 @@ from statek.executors.job import (
 )
 from statek.executors.utils import _make_start_jobs_func, find_existing_job_def, run_agentic_loop
 from statek.pyenv import PyEnv
+from statek.provider_config import ProviderConfig
 
 
 def _make_job_def(agent, warmup_code=None):
@@ -152,7 +153,7 @@ class TestMakeStartJobsFunc:
         assert len(agent_a_jobs) == 4
 
 
-def _make_tagged_job_def(agent, warmup_code=None):
+def _make_tagged_job_def(agent, warmup_code=None, provider_config=None):
     """Create a JobDef (automatically tagged with its agent via __post_init__)."""
     parsed = parse_warmup_code(warmup_code)
     return JobDef(
@@ -160,6 +161,7 @@ def _make_tagged_job_def(agent, warmup_code=None):
         metadata={"MODEL": "test-model"},
         job_params=None,
         warmup_code=parsed,
+        provider_config=provider_config,
     )
 
 
@@ -263,6 +265,39 @@ class TestFindExistingJobDef:
         )
 
         assert result is matching
+
+    def test_provider_config_hash_collision_still_uses_exact_comparison(
+        self, db0_fixture, agent, monkeypatch  # pylint: disable=unused-argument
+    ):
+        """A provider-config hash collision cannot reuse unequal configuration content."""
+        monkeypatch.setattr(
+            "statek.executors.job.provider_config_identity",
+            lambda provider_config: "collision" if provider_config is not None else None,
+        )
+        monkeypatch.setattr(
+            "statek.executors.utils.provider_config_identity",
+            lambda provider_config: "collision" if provider_config is not None else None,
+        )
+        mismatching_config = ProviderConfig({"openrouter": {"timeout": 10}})
+        requested_config = ProviderConfig({"openrouter": {"timeout": 20}})
+        mismatching = _make_tagged_job_def(
+            agent,
+            "print('config')",
+            provider_config=mismatching_config,
+        )
+
+        result = find_existing_job_def(
+            agent,
+            "print('config')",
+            model_family=mismatching.model_family,
+            model="test-model",
+            job_params=None,
+            locale=None,
+            chat_style=None,
+            provider_config=requested_config,
+        )
+
+        assert result is None
 
     def test_legacy_untagged_match_falls_back_and_syncs_hash_tag(
         self, db0_fixture, agent  # pylint: disable=unused-argument

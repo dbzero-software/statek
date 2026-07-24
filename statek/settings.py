@@ -97,6 +97,8 @@ class StatekSettings(MultiSourceBaseSettings):
     statek_default_difficulty: str = "M"
     """Directory containing model pricing files (.csv/.txt); scanned recursively on init."""
     statek_model_info_dir: Optional[str] = None
+    """Path to a UTF-8 JSON file containing provider-specific request configuration."""
+    statek_provider_config: Optional[str] = None
     """Directory containing agent warmup definition .py files."""
     warmup_defs_dir: Optional[str] = None
     """Python sandbox mode: restricted or off."""
