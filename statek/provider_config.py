@@ -1,0 +1,138 @@
+# Copyright 2026 Statek authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Durable provider-specific mappings for Statek model parameters."""
+
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any, Dict, Mapping, Optional
+
+import dbzero as db0
+
+
+def _is_mapping(value: Any) -> bool:
+    """Return whether a regular or dbzero persistent value exposes mapping items."""
+    return isinstance(value, Mapping) or callable(getattr(value, "items", None))
+
+
+def _is_sequence(value: Any) -> bool:
+    """Return whether a regular or dbzero persistent value is a JSON array."""
+    return (
+        not isinstance(value, (str, bytes))
+        and not _is_mapping(value)
+        and callable(getattr(value, "__iter__", None))
+    )
+
+
+def _plain_json_value(value: Any) -> Any:
+    """Copy a JSON-like regular or dbzero persistent value into plain Python objects."""
+    if _is_mapping(value):
+        return {key: _plain_json_value(item) for key, item in value.items()}
+    if _is_sequence(value):
+        return [_plain_json_value(item) for item in value]
+    return value
+
+
+def _reasoning_level(value: Any) -> int:
+    """Return a validated Statek reasoning level from an integer or numeric string."""
+    if isinstance(value, bool):
+        raise ValueError("reasoning_level must be an integer from 0 through 100")
+    if isinstance(value, str):
+        if not value.strip() or not value.strip().lstrip("+-").isdigit():
+            raise ValueError("reasoning_level must be an integer from 0 through 100")
+        value = int(value)
+    if not isinstance(value, int) or not 0 <= value <= 100:
+        raise ValueError("reasoning_level must be an integer from 0 through 100")
+    return value
+
+
+def _find_child(config: Mapping[str, Any], path_part: str) -> Optional[Mapping[str, Any]]:
+    """Return a case-insensitive matching nested provider configuration mapping."""
+    if path_part in config and _is_mapping(config[path_part]):
+        return config[path_part]
+    normalized_path_part = path_part.casefold()
+    for key, value in config.items():
+        if isinstance(key, str) and key.casefold() == normalized_path_part:
+            if not _is_mapping(value):
+                raise ValueError(f"Provider configuration for {path_part!r} must be a mapping")
+            return value
+    return None
+
+
+def _matching_payload(config: Mapping[str, Any], reasoning_level: int) -> Optional[Dict[str, Any]]:
+    """Return the first payload matching a reasoning level at one config hierarchy level."""
+    definitions = config.get("reasoning_level")
+    if definitions is None:
+        return None
+    if not _is_sequence(definitions):
+        raise ValueError("Provider configuration reasoning_level must be a sequence")
+
+    for definition in definitions:
+        if not _is_mapping(definition):
+            raise ValueError("Provider configuration reasoning-level entry must be a mapping")
+        range_config = definition.get("range")
+        payload = definition.get("payload")
+        if not _is_mapping(range_config) or not _is_mapping(payload):
+            raise ValueError(
+                "Provider configuration reasoning-level entry requires range and payload objects"
+            )
+
+        lower_bound = _reasoning_level(range_config.get("from", 0))
+        upper_bound = _reasoning_level(range_config.get("to", 100))
+        if lower_bound > upper_bound:
+            raise ValueError("Provider configuration reasoning-level range from must not exceed to")
+        if lower_bound <= reasoning_level <= upper_bound:
+            return deepcopy(_plain_json_value(payload))
+    return None
+
+
+@db0.memo
+@dataclass
+class ProviderConfig:
+    """Durable snapshot of provider-specific model parameter payload mappings."""
+
+    provider_config: Dict[str, Any]
+
+    def __post_init__(self) -> None:
+        """Snapshot a plain mapping so callers cannot mutate this durable configuration."""
+        if not _is_mapping(self.provider_config):
+            raise ValueError("provider_config must be an object")
+        self.provider_config = _plain_json_value(self.provider_config)
+
+    def find_payload(self, *args: Optional[str], **kwargs: Any) -> Optional[Dict[str, Any]]:
+        """Find the deepest matching provider payload for a model-parameter query.
+
+        ``args`` identify the configured provider, optional model family, and
+        model. The only current query parameter is ``reasoning_level``.
+        """
+        if set(kwargs) != {"reasoning_level"}:
+            raise ValueError("Unsupported provider configuration query")
+        reasoning_level = _reasoning_level(kwargs["reasoning_level"])
+
+        nodes = [self.provider_config]
+        current_node: Mapping[str, Any] = self.provider_config
+        for path_part in args:
+            if path_part is None:
+                continue
+            next_node = _find_child(current_node, str(path_part))
+            if next_node is None:
+                break
+            nodes.append(next_node)
+            current_node = next_node
+
+        for node in reversed(nodes):
+            payload = _matching_payload(node, reasoning_level)
+            if payload is not None:
+                return payload
+        return None
