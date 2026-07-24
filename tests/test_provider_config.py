@@ -5,7 +5,11 @@
 import pytest
 import dbzero as db0
 
-from statek.provider_config import ProviderConfig
+from statek.provider_config import (
+    ProviderConfig,
+    _provider_config_identity_tag,
+    resolve_provider_config,
+)
 
 
 @pytest.fixture
@@ -111,3 +115,66 @@ def test_find_payload_rejects_unknown_query_parameters(provider_config):
     """Only the currently designed reasoning-level query is accepted."""
     with pytest.raises(ValueError, match="Unsupported provider configuration query"):
         provider_config.find_payload("openrouter", type="pro")
+
+
+def test_resolve_provider_config_reuses_equal_content_despite_mapping_order(db0_fixture):
+    """Equivalent configuration mappings share one durable snapshot."""
+    del db0_fixture
+    first = resolve_provider_config({"openrouter": {"timeout": 10, "retries": 2}})
+    second = resolve_provider_config({"openrouter": {"retries": 2, "timeout": 10}})
+
+    assert first is second
+
+
+def test_resolve_provider_config_creates_distinct_snapshots_for_different_content(db0_fixture):
+    """Different configuration content must not reuse an existing snapshot."""
+    del db0_fixture
+    first = resolve_provider_config({"openrouter": {"timeout": 10}})
+    second = resolve_provider_config({"openrouter": {"timeout": 20}})
+
+    assert first is not second
+
+
+def test_resolve_provider_config_checks_content_after_identity_tag_collision(
+    db0_fixture,
+    monkeypatch,
+):
+    """A colliding identity tag only widens candidates; content remains authoritative."""
+    del db0_fixture
+    monkeypatch.setattr(
+        "statek.provider_config._provider_config_identity_hash",
+        lambda config: "collision",
+    )
+
+    first = resolve_provider_config({"openrouter": {"timeout": 10}})
+    second = resolve_provider_config({"openrouter": {"timeout": 20}})
+
+    assert first is not second
+
+
+def test_resolve_provider_config_reuses_and_tags_matching_legacy_snapshot(
+    db0_fixture,
+):
+    """A matching untagged snapshot is preserved and receives its identity tag."""
+    del db0_fixture
+    config = {"openrouter": {"timeout": 10}}
+    legacy_snapshot = ProviderConfig(config)
+    identity_tag = _provider_config_identity_tag(config)
+
+    resolved = resolve_provider_config(config)
+
+    assert resolved is legacy_snapshot
+    assert legacy_snapshot in db0.find(ProviderConfig, identity_tag)
+
+
+def test_resolve_provider_config_snapshots_the_source_mapping(db0_fixture):
+    """Mutating the caller's mapping cannot change the durable configuration snapshot."""
+    del db0_fixture
+    config = {"openrouter": {"reasoning": {"effort": "low"}}}
+
+    resolved = resolve_provider_config(config)
+    config["openrouter"]["reasoning"]["effort"] = "high"
+
+    assert resolved.provider_config == {
+        "openrouter": {"reasoning": {"effort": "low"}},
+    }

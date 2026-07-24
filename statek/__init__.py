@@ -36,6 +36,7 @@ from .multi_source_settings import (
     SettingValuesSource,
 )
 from .prompt_config import PromptDef, update_prompt_config
+from .provider_config import ProviderConfig, resolve_provider_config
 from .llm_api import (
     LLM_API, OpenRouter_API, OpenAI_API, Groq_API, MistralAI_API,
     DeepSeek_API, XAI_API, TogetherAI_API, FireworksAI_API, Cerebras_API,
@@ -135,6 +136,8 @@ __all__ = [
     "SettingValuesSource",
     "PromptDef",
     "update_prompt_config",
+    "ProviderConfig",
+    "resolve_provider_config",
     "LLM_API",
     "OpenRouter_API",
     "OpenAI_API",
