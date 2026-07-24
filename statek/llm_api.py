@@ -29,6 +29,7 @@ from .chat_history import (
     ChatHistoryItem, ChatRole, format_chat_history_item,
 )
 from .llm_tools_scope import LLM_ToolsScope, parse_llm_tools_scope
+from .provider_config import ProviderConfig
 
 _CUSTOM_LLM_API_PROVIDERS: Dict[str, Dict[str, Any]] = {}
 _SETTINGS_KWARGS = {
@@ -384,7 +385,7 @@ class LLM_API(ABC):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> Dict[str, Any]:
         """Resolve shared request parameters used by preview and execution."""
         if metadata is not None:
@@ -407,7 +408,7 @@ class LLM_API(ABC):
             "chat_history": chat_history,
             "chat_style": chat_style,
             "temperature": temperature,
-            "enable_reasoning": enable_reasoning,
+            "provider_config": provider_config,
         }
 
     def preview_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -419,7 +420,7 @@ class LLM_API(ABC):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> Dict:
         """Return the provider JSON payload that would be sent for a request."""
         return self._build_request_payload(**self._prepare_request_kwargs(
@@ -430,7 +431,7 @@ class LLM_API(ABC):
             chat_history=chat_history,
             chat_style=chat_style,
             temperature=temperature,
-            enable_reasoning=enable_reasoning,
+            provider_config=provider_config,
         ))
 
     async def process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -442,7 +443,7 @@ class LLM_API(ABC):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> LLM_Response:
         """Process a request to the LLM API.
 
@@ -469,8 +470,7 @@ class LLM_API(ABC):
                 and message formatting; in DIRECT mode the history is rewritten
                 so assistant code becomes ``python_cli`` tool calls.
             temperature: Optional provider temperature.
-            enable_reasoning: Whether provider reasoning / thinking should be
-                enabled for this request.
+            provider_config: Optional durable provider-configuration snapshot.
 
         Returns:
             LLM_Response containing step data and provider usage stats.
@@ -483,7 +483,7 @@ class LLM_API(ABC):
             chat_history=chat_history,
             chat_style=chat_style,
             temperature=temperature,
-            enable_reasoning=enable_reasoning,
+            provider_config=provider_config,
         )
 
         response = await self._process_request(**request_kwargs)
@@ -499,7 +499,7 @@ class LLM_API(ABC):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> Dict:
         """Provider-specific payload builder shared by preview and execution."""
 
@@ -513,7 +513,7 @@ class LLM_API(ABC):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> LLM_Response:
         """Provider-specific request implementation. Called by process_request."""
 
@@ -534,16 +534,6 @@ class LLM_API(ABC):
         if not model:
             raise ValueError("model must be provided to process_request")
         return model
-
-    @staticmethod
-    def parse_enable_reasoning(value: Optional[str]) -> bool:
-        """Convert metadata REASONING values into a boolean flag."""
-        if value is None:
-            return False
-        normalized = value.strip().upper()
-        if normalized in ("", "FALSE", "0", "NO", "OFF", "DISABLED", "NONE"):
-            return False
-        return True
 
     @staticmethod
     def _load_response_format(settings: LLM_API_Settings) -> Optional[dict]:
@@ -651,12 +641,12 @@ class DefaultLLM_API_Impl(LLM_API):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> Dict:
         """Build the OpenAI-compatible JSON payload."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
-        del metadata
+        del metadata, provider_config
         payload = {
             "model": self.require_model(model),
             "messages": self.build_messages(
@@ -671,8 +661,6 @@ class DefaultLLM_API_Impl(LLM_API):
             payload["response_format"] = self.response_format
         if temperature is not None:
             payload["temperature"] = temperature
-        if enable_reasoning:
-            payload["reasoning"] = {}
         payload.update(self.kwargs)
         return payload
 
@@ -685,7 +673,7 @@ class DefaultLLM_API_Impl(LLM_API):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> LLM_Response:
         """Process a request to an OpenAI-compatible API.
 
@@ -713,7 +701,7 @@ class DefaultLLM_API_Impl(LLM_API):
             chat_history=chat_history,
             chat_style=chat_style,
             temperature=temperature,
-            enable_reasoning=enable_reasoning,
+            provider_config=provider_config,
         )
         # Prepare headers
         headers = {
@@ -1120,12 +1108,12 @@ class VertexAI_API(LLM_API):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> Dict:
         """Build the Vertex AI GenerateContent JSON payload."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
-        del metadata, enable_reasoning
+        del metadata, provider_config
         payload = {"contents": self.build_contents(chat_history, chat_style=chat_style)}
         system_instruction = self._build_system_instruction(system_prompt)
         if system_instruction:
@@ -1183,7 +1171,7 @@ class VertexAI_API(LLM_API):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> LLM_Response:
         """Process a request to Vertex AI Gemini GenerateContent."""
         payload = self._build_request_payload(
@@ -1194,7 +1182,7 @@ class VertexAI_API(LLM_API):
             chat_history=chat_history,
             chat_style=chat_style,
             temperature=temperature,
-            enable_reasoning=enable_reasoning,
+            provider_config=provider_config,
         )
         model = self.require_model(model)
 
@@ -1449,12 +1437,12 @@ class ClaudeAI_API(LLM_API):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> Dict:
         """Build the Anthropic Messages API JSON payload."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
-        del metadata
+        del metadata, provider_config
         payload = {
             "model": self.require_model(model),
             "messages": self.build_messages(chat_history, chat_style=chat_style),
@@ -1468,11 +1456,6 @@ class ClaudeAI_API(LLM_API):
             payload["system"] = self._build_system_prompt(system_prompt)
         if temperature is not None:
             payload["temperature"] = temperature
-        if enable_reasoning:
-            payload["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": 1024,
-            }
         return payload
 
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
@@ -1484,7 +1467,7 @@ class ClaudeAI_API(LLM_API):
         chat_history: Optional[Iterable["ChatHistoryItem"]] = None,
         chat_style=None,
         temperature: Optional[float] = None,
-        enable_reasoning: bool = False,
+        provider_config: Optional[ProviderConfig] = None,
     ) -> LLM_Response:
         """Process a request to the Claude API using the Messages API."""
         payload = self._build_request_payload(
@@ -1495,7 +1478,7 @@ class ClaudeAI_API(LLM_API):
             chat_history=chat_history,
             chat_style=chat_style,
             temperature=temperature,
-            enable_reasoning=enable_reasoning,
+            provider_config=provider_config,
         )
 
         # Prepare headers for Claude API

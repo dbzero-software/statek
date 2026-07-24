@@ -1375,7 +1375,6 @@ class Job:
                 provider,
             ))
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
-        enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
         system_prompt = self.system_prompt()
 
         if (
@@ -1396,12 +1395,10 @@ class Job:
             "model": model,
             "metadata": metadata,
             "available_tools": self.job_def.agent.all_tools,
+            "provider_config": self.job_def.provider_config,
         }
         if temperature is not None:
             request_params["temperature"] = temperature
-        if enable_reasoning:
-            request_params["enable_reasoning"] = True
-
         chat_style = self.job_def.chat_style
         if chat_style is not None:
             request_params["chat_style"] = chat_style
@@ -1419,7 +1416,7 @@ class Job:
             Dict[str, Any]: With keys ``chat_history`` (Iterable[ChatHistoryItem]),
             ``system_prompt`` (str), ``model`` (str), ``metadata`` (dict),
             ``available_tools`` (list), and optionally ``chat_style``,
-            ``temperature``, and ``enable_reasoning``.
+            ``temperature``, and ``provider_config``.
         """
         return self._build_request_data()
 

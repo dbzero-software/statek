@@ -1279,10 +1279,10 @@ class TestJobGetNextRequest:
         assert request["temperature"] == 0.3
         assert request["metadata"]["TEMPERATURE"] == "0.3"
 
-    def test_get_next_request_extracts_enable_reasoning_from_metadata(
+    def test_get_next_request_ignores_legacy_reasoning_metadata(
         self, job_def_factory
     ):
-        """REASONING metadata is exposed as an explicit boolean request parameter."""
+        """Legacy REASONING metadata does not alter the LLM request contract."""
         job_def = job_def_factory(metadata={"MODEL": "test-model", "REASONING": "true"})
         job = Job(
             job_def=job_def, model_family="test",
@@ -1291,14 +1291,15 @@ class TestJobGetNextRequest:
 
         request = job.get_next_request()
 
-        assert request["enable_reasoning"] is True
+        assert "enable_reasoning" not in request
         assert request["metadata"]["REASONING"] == "true"
 
-    def test_get_next_request_uses_job_def_metadata_snapshot_after_agent_update(
+    def test_get_next_request_includes_job_def_provider_config(
         self, db0_fixture  # pylint: disable=unused-argument
     ):
-        """Existing jobs keep the metadata captured by their JobDef."""
+        """Requests carry the durable provider-config snapshot from their JobDef."""
         from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+        from statek.provider_config import ProviderConfig  # pylint: disable=import-outside-toplevel
 
         agent = SupervisedAgent(
             role="test",
@@ -1306,14 +1307,16 @@ class TestJobGetNextRequest:
             _metadata={"MODEL": "test-model", "TEMPERATURE": "0.3", "REASONING": "true"},
             _tools=[],
         )
-        job_def = agent.create_job_def()
+        provider_config = ProviderConfig({"openrouter": {"timeout": 10}})
+        job_def = agent.create_job_def(provider_config=provider_config)
         agent.update_metadata({"MODEL": "test-model", "TEMPERATURE": "0.1"})
 
         job = Job(job_def=job_def, job_status=JobStatus.READY)
         request = job.get_next_request()
 
         assert request["temperature"] == 0.3
-        assert request["enable_reasoning"] is True
+        assert request["provider_config"] is provider_config
+        assert "enable_reasoning" not in request
         assert request["metadata"]["TEMPERATURE"] == "0.3"
         assert request["metadata"]["REASONING"] == "true"
 
