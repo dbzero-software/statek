@@ -88,6 +88,8 @@ class ChatLogItem:
 class LLM_LogItem(ChatLogItem):
     # Response received from the LLM — plain code string or CodeBlock with tool calls
     llm_resp: Union[str, CodeBlock] = None
+    # Opaque provider continuation material replayed only by its matching formatter.
+    llm_reasoning_payload: Optional[dict] = None
 
 
 @db0.memo(no_default_tags=True)

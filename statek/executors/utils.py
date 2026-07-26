@@ -1135,10 +1135,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 12: Get next request parameters — log pending console batch first
     _log_pending_console(job)
     request = job.get_next_request()
-    request["model"] = format_model_for_provider(
-        job.get_current_model(),
-        provider_to_use,
-    )
     # Materialize chat_history generator so it can be consumed by process_request
     if 'chat_history' in request:
         request['chat_history'] = list(request['chat_history'])

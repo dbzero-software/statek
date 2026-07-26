@@ -46,7 +46,7 @@ from statek.executors.chat_log_item import (
     WarmupLogItem,
     UserLogItem,
 )
-from statek.llm_api import LLM_API, LLM_Response, LLM_StepData
+from statek.llm_api import LLM_API, LLM_Response, LLM_StepData, resolve_reasoning_payload
 from statek.provider_config import ProviderConfig, provider_config_identity
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (
@@ -1305,6 +1305,10 @@ class Job:
                         content=block_code if block_code else None,
                         content_src=asst_src,
                         tool_calls=tool_calls,
+                        provider_reasoning_payload=(
+                            getattr(item, "llm_reasoning_payload", None)
+                            if isinstance(item, LLM_LogItem) else None
+                        ),
                     )
                     for j, cs in enumerate(tool_calls):
                         try:
@@ -1333,6 +1337,10 @@ class Job:
                         role=ChatRole.ASSISTANT,
                         content=block_code,
                         content_src=asst_src,
+                        provider_reasoning_payload=(
+                            getattr(item, "llm_reasoning_payload", None)
+                            if isinstance(item, LLM_LogItem) else None
+                        ),
                     )
                 # block_code empty + no tool_calls — nothing to yield.
 
@@ -1362,18 +1370,13 @@ class Job:
     ) -> Dict[str, Any]:
         """Build request params for the provided append-only job state."""
         metadata = dict(self.job_def.metadata or {})
-        raw_model = self.get_current_model()
-        provider = select_model_provider(
+        raw_model = LLM_API.require_model(self.get_current_model())
+        provider = select_model_provider(raw_model, default_provider=metadata.get("PROVIDER"))
+        model, reasoning_payload = resolve_reasoning_payload(
             raw_model,
-            default_provider=metadata.get("PROVIDER"),
+            getattr(self.job_def, "provider_config", None),
+            provider,
         )
-        if provider is None:
-            model = LLM_API.require_model(raw_model)
-        else:
-            model = LLM_API.require_model(format_model_for_provider(
-                raw_model,
-                provider,
-            ))
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         system_prompt = self.system_prompt()
 
@@ -1397,6 +1400,8 @@ class Job:
             "available_tools": self.job_def.agent.all_tools,
             "provider_config": self.job_def.provider_config,
         }
+        if reasoning_payload is not None:
+            request_params["reasoning_payload"] = reasoning_payload
         if temperature is not None:
             request_params["temperature"] = temperature
         chat_style = self.job_def.chat_style
@@ -1569,7 +1574,8 @@ class Job:
 
         chat_item = LLM_LogItem(
             console_pos=len(self.py_env.console) if self.py_env.console else 0,
-            llm_resp=stored_resp
+            llm_resp=stored_resp,
+            llm_reasoning_payload=step_data.reasoning_payload,
         )
         self.chat_log.append(chat_item)
 

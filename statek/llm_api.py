@@ -30,6 +30,7 @@ from .chat_history import (
 )
 from .llm_tools_scope import LLM_ToolsScope, parse_llm_tools_scope
 from .provider_config import ProviderConfig
+from .model_name import ensure_model_name, format_model_for_provider, select_model_provider
 
 _CUSTOM_LLM_API_PROVIDERS: Dict[str, Dict[str, Any]] = {}
 _SETTINGS_KWARGS = {
@@ -50,13 +51,69 @@ def _func_name_from_tool_calls(tool_calls) -> str:
     cs = tool_calls if not isinstance(tool_calls, list) else (tool_calls[0] if tool_calls else None)
     return cs.func_name if cs is not None else ""
 
+
+def _deep_merge(base: Dict, override: Dict) -> Dict:
+    """Return a recursive merge where provider configuration wins conflicts."""
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def resolve_reasoning_payload(
+    model: str,
+    provider_config: Optional[ProviderConfig],
+    default_provider: Optional[str],
+) -> Tuple[str, Optional[Dict]]:
+    """Resolve model parameters into an upstream model ID and provider payload."""
+    model_name = ensure_model_name(model)
+    provider = select_model_provider(model_name, default_provider=default_provider)
+    aliases = [
+        model_name.params[key]
+        for key in ("rl", "reasoning_level")
+        if key in model_name.params
+    ]
+    payload = None
+    if aliases:
+        if len(aliases) == 2 and aliases[0] != aliases[1]:
+            raise ValueError("rl and reasoning_level specify conflicting values")
+        try:
+            level = int(aliases[0])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("reasoning level must be an integer from 0 through 100") from exc
+        if not 0 <= level <= 100 or str(level) != aliases[0].strip():
+            raise ValueError("reasoning level must be an integer from 0 through 100")
+        if level > 0:
+            if provider_config is None:
+                raise ValueError("positive reasoning level requires a provider configuration")
+            payload = provider_config.find_payload(
+                provider, model_name.model_family, model_name.model, reasoning_level=level)
+            if payload is None:
+                raise ValueError(
+                    "positive reasoning level has no matching provider configuration payload")
+    upstream_model = (
+        format_model_for_provider(model_name, provider)
+        if provider is not None else (
+            f"{model_name.model_family}/{model_name.model}"
+            if model_name.model_family else model_name.model
+        )
+    )
+    return upstream_model, payload
+
 LLM_Stats = namedtuple(
     "LLM_Stats",
     ["total_bytes_sent", "total_bytes_received", "cost",
      "input_tokens", "output_tokens", "cached_tokens"],
     defaults=[0, 0, 0],
 )
-LLM_StepData = namedtuple("LLM_StepData", ["text", "call_requests"])
+LLM_StepData = namedtuple(
+    "LLM_StepData",
+    ["text", "call_requests", "reasoning_payload"],
+    defaults=[None],
+)
 LLM_Response = namedtuple("LLM_Response", ["step_data", "stats"])
 
 class CallParams:
@@ -375,7 +432,6 @@ class LLM_API(ABC):
     provider specifics and match them with Statek's requirements.
     A single LLM_API instance is intended for a single session with the LLM agent.
     """
-
     def _prepare_request_kwargs(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         system_prompt: Optional[str] = None,
@@ -386,6 +442,7 @@ class LLM_API(ABC):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """Resolve shared request parameters used by preview and execution."""
         if metadata is not None:
@@ -394,13 +451,20 @@ class LLM_API(ABC):
             available_tools = list(available_tools)
         if chat_history is not None and not isinstance(chat_history, list):
             chat_history = list(chat_history)
-        model = self.require_model(model)
+        if reasoning_payload is None:
+            model, reasoning_payload = resolve_reasoning_payload(
+                self.require_model(model),
+                provider_config,
+                None,
+            )
+        else:
+            model = self.require_model(model)
         tools = select_request_tools(
             metadata=metadata,
             available_tools=available_tools,
             chat_style=chat_style,
         )
-        return {
+        result = {
             "system_prompt": system_prompt,
             "model": model,
             "metadata": metadata,
@@ -410,6 +474,9 @@ class LLM_API(ABC):
             "temperature": temperature,
             "provider_config": provider_config,
         }
+        if reasoning_payload is not None:
+            result["reasoning_payload"] = reasoning_payload
+        return result
 
     def preview_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
@@ -421,6 +488,7 @@ class LLM_API(ABC):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> Dict:
         """Return the provider JSON payload that would be sent for a request."""
         return self._build_request_payload(**self._prepare_request_kwargs(
@@ -432,6 +500,7 @@ class LLM_API(ABC):
             chat_style=chat_style,
             temperature=temperature,
             provider_config=provider_config,
+            reasoning_payload=reasoning_payload,
         ))
 
     async def process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -444,6 +513,7 @@ class LLM_API(ABC):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> LLM_Response:
         """Process a request to the LLM API.
 
@@ -484,6 +554,7 @@ class LLM_API(ABC):
             chat_style=chat_style,
             temperature=temperature,
             provider_config=provider_config,
+            reasoning_payload=reasoning_payload,
         )
 
         response = await self._process_request(**request_kwargs)
@@ -642,6 +713,7 @@ class DefaultLLM_API_Impl(LLM_API):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> Dict:
         """Build the OpenAI-compatible JSON payload."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
@@ -662,6 +734,8 @@ class DefaultLLM_API_Impl(LLM_API):
         if temperature is not None:
             payload["temperature"] = temperature
         payload.update(self.kwargs)
+        if reasoning_payload is not None:
+            payload = _deep_merge(payload, reasoning_payload)
         return payload
 
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
@@ -674,6 +748,7 @@ class DefaultLLM_API_Impl(LLM_API):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> LLM_Response:
         """Process a request to an OpenAI-compatible API.
 
@@ -702,6 +777,7 @@ class DefaultLLM_API_Impl(LLM_API):
             chat_style=chat_style,
             temperature=temperature,
             provider_config=provider_config,
+            reasoning_payload=reasoning_payload,
         )
         # Prepare headers
         headers = {
@@ -764,6 +840,19 @@ class DefaultLLM_API_Impl(LLM_API):
                 step_data=LLM_StepData(
                     text=response_text,
                     call_requests=call_requests,
+                    reasoning_payload={
+                        "format": "openai",
+                        "fields": {
+                            key: message[key]
+                            for key in ("reasoning_details", "reasoning", "reasoning_content")
+                            if key in message
+                        },
+                    }
+                    if any(
+                        key in message
+                        for key in ("reasoning_details", "reasoning", "reasoning_content")
+                    )
+                    else None,
                 ),
                 stats=stats,
             )
@@ -1029,6 +1118,10 @@ class VertexAI_API(LLM_API):
                     contents.append({"role": "user", "parts": [{"text": text}]})
                 continue
             if item.role == ChatRole.ASSISTANT:
+                reasoning_payload = getattr(item, "provider_reasoning_payload", None)
+                if reasoning_payload and reasoning_payload.get("format") == "vertex":
+                    contents.append({"role": "model", "parts": reasoning_payload["parts"]})
+                    continue
                 parts = []
                 if item.content:
                     parts.append({"text": self._content_text_for_item(item, chat_style, settings)})
@@ -1099,7 +1192,7 @@ class VertexAI_API(LLM_API):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
@@ -1109,6 +1202,7 @@ class VertexAI_API(LLM_API):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> Dict:
         """Build the Vertex AI GenerateContent JSON payload."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
@@ -1134,10 +1228,14 @@ class VertexAI_API(LLM_API):
             if key not in ("project", "location", "publisher", "auth", "generation_config"):
                 payload[key] = value
         self.require_model(model)
+        if reasoning_payload is not None:
+            payload = _deep_merge(payload, reasoning_payload)
         return payload
 
     @staticmethod
-    def _parse_response(data: Dict) -> Tuple[str, Optional[List[CallParams]]]:
+    def _parse_response(  # pylint: disable=too-many-locals
+        data: Dict,
+    ) -> Tuple[str, Optional[List[CallParams]], Optional[Dict]]:
         candidates = data.get("candidates") or []
         if not candidates:
             error_detail = data.get("error", {}).get("message", str(data))
@@ -1146,7 +1244,7 @@ class VertexAI_API(LLM_API):
         response_text = ""
         call_requests = []
         for part in parts:
-            if "text" in part:
+            if "text" in part and not part.get("thought"):
                 response_text += part.get("text", "")
             if "functionCall" in part:
                 function_call = part["functionCall"]
@@ -1160,7 +1258,10 @@ class VertexAI_API(LLM_API):
                         kwargs=kwargs if isinstance(kwargs, dict) else {},
                     )
                 )
-        return response_text, call_requests or None
+        reasoning_payload = {"format": "vertex", "parts": parts} if any(
+            part.get("thought") or "thoughtSignature" in part for part in parts
+        ) else None
+        return response_text, call_requests or None, reasoning_payload
 
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
@@ -1172,6 +1273,7 @@ class VertexAI_API(LLM_API):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> LLM_Response:
         """Process a request to Vertex AI Gemini GenerateContent."""
         payload = self._build_request_payload(
@@ -1183,6 +1285,7 @@ class VertexAI_API(LLM_API):
             chat_style=chat_style,
             temperature=temperature,
             provider_config=provider_config,
+            reasoning_payload=reasoning_payload,
         )
         model = self.require_model(model)
 
@@ -1199,7 +1302,7 @@ class VertexAI_API(LLM_API):
             total_bytes_received = len(response.content)
             data = response.json()
 
-            response_text, call_requests = self._parse_response(data)
+            response_text, call_requests, response_reasoning_payload = self._parse_response(data)
             if self.response_format and response_text:
                 response_text = json.loads(response_text)["python_code"]
             _usage = data.get("usageMetadata", {})
@@ -1216,6 +1319,7 @@ class VertexAI_API(LLM_API):
                 step_data=LLM_StepData(
                     text=response_text,
                     call_requests=call_requests,
+                    reasoning_payload=response_reasoning_payload,
                 ),
                 stats=stats,
             )
@@ -1336,6 +1440,11 @@ class ClaudeAI_API(LLM_API):
                 continue
 
             if item.role == ChatRole.ASSISTANT:
+                reasoning_payload = getattr(item, "provider_reasoning_payload", None)
+                if reasoning_payload and reasoning_payload.get("format") == "claude":
+                    messages.append({"role": "assistant", "content": reasoning_payload["content"]})
+                    i += 1
+                    continue
                 is_last_asst = i == last_asst_idx
                 if item.tool_calls:
                     asst_content: List[Dict] = []
@@ -1438,6 +1547,7 @@ class ClaudeAI_API(LLM_API):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> Dict:
         """Build the Anthropic Messages API JSON payload."""
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
@@ -1456,6 +1566,8 @@ class ClaudeAI_API(LLM_API):
             payload["system"] = self._build_system_prompt(system_prompt)
         if temperature is not None:
             payload["temperature"] = temperature
+        if reasoning_payload is not None:
+            payload = _deep_merge(payload, reasoning_payload)
         return payload
 
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
@@ -1468,6 +1580,7 @@ class ClaudeAI_API(LLM_API):
         chat_style=None,
         temperature: Optional[float] = None,
         provider_config: Optional[ProviderConfig] = None,
+        reasoning_payload: Optional[Dict] = None,
     ) -> LLM_Response:
         """Process a request to the Claude API using the Messages API."""
         payload = self._build_request_payload(
@@ -1479,6 +1592,7 @@ class ClaudeAI_API(LLM_API):
             chat_style=chat_style,
             temperature=temperature,
             provider_config=provider_config,
+            reasoning_payload=reasoning_payload,
         )
 
         # Prepare headers for Claude API
@@ -1547,6 +1661,14 @@ class ClaudeAI_API(LLM_API):
                 step_data=LLM_StepData(
                     text=response_text,
                     call_requests=call_requests,
+                    reasoning_payload={
+                        "format": "claude", "content": content_blocks,
+                    }
+                    if any(
+                        block.get("type") in ("thinking", "redacted_thinking")
+                        for block in content_blocks
+                    )
+                    else None,
                 ),
                 stats=stats,
             )
