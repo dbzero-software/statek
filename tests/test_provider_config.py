@@ -94,6 +94,25 @@ def test_find_payload_ignores_missing_model_path_components(provider_config):
     ) == {"reasoning": {"effort": "low"}}
 
 
+def test_find_payload_resolves_provider_model_path_when_family_is_redundant(db0_fixture):
+    """Provider/model mappings remain reachable from a family/model selection."""
+    del db0_fixture
+    config = ProviderConfig({
+        "openai": {
+            "gpt-5": {
+                "reasoning_level": [{
+                    "range": {"from": 1},
+                    "payload": {"reasoning_effort": "high"},
+                }],
+            },
+        },
+    })
+
+    assert config.find_payload(
+        "openai", "openai", "gpt-5", reasoning_level=50,
+    ) == {"reasoning_effort": "high"}
+
+
 def test_find_payload_returns_a_defensive_copy(provider_config):
     """Request formatting cannot mutate the durable provider configuration."""
     payload = provider_config.find_payload("openrouter", reasoning_level=10)

@@ -31,7 +31,7 @@ with assistant tool-call messages using the OpenAI ``tool_calls`` array.
 
 import json
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import dbzero as db0
 
@@ -82,7 +82,7 @@ class ChatHistoryItem:
     content: Optional[str] = None
     content_src: Optional["ContentSource"] = None
     tool_calls: Optional[Union[CallSpec, List[CallSpec]]] = None
-    provider_reasoning_payload: Optional[Dict] = None
+    provider_reasoning_payload: Optional[Any] = None
 
 
 def _wrap_console(content: str, style: "ChatStyle",
@@ -207,7 +207,6 @@ def format_chat_history_item(
         return msg
 
     if role == ChatRole.ASSISTANT:
-        reasoning_payload = getattr(item, "provider_reasoning_payload", None)
         if item.tool_calls is not None:
             tcs = _normalise_tool_calls(item.tool_calls)
             tool_calls_payload = [_format_tool_call(cs) for cs in tcs]
@@ -217,8 +216,6 @@ def format_chat_history_item(
                 "content": content,
                 "tool_calls": tool_calls_payload,
             }
-            if reasoning_payload and reasoning_payload.get("format") == "openai":
-                msg.update(reasoning_payload["fields"])
             return msg
         if item.content is None:
             raise ValueError(
@@ -230,8 +227,6 @@ def format_chat_history_item(
         # content is left as-is — for LLM responses the spec calls for plain
         # text in that case anyway.
         msg = {"role": "assistant", "content": _wrap_python_code(item.content, style)}
-        if reasoning_payload and reasoning_payload.get("format") == "openai":
-            msg.update(reasoning_payload["fields"])
         return msg
 
     raise ValueError(f"Unsupported ChatRole: {role!r}")

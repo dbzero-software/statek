@@ -18,7 +18,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import dbzero as db0
 
@@ -49,18 +49,10 @@ class ProviderConfig:
             raise ValueError("Unsupported provider configuration query")
         reasoning_level = _reasoning_level(kwargs["reasoning_level"])
 
-        nodes = [self.provider_config]
-        current_node: Mapping[str, Any] = self.provider_config
-        for path_part in args:
-            if path_part is None:
+        for path in _candidate_paths(args):
+            node = _find_path_node(self.provider_config, path)
+            if node is None:
                 continue
-            next_node = _find_child(current_node, str(path_part))
-            if next_node is None:
-                break
-            nodes.append(next_node)
-            current_node = next_node
-
-        for node in reversed(nodes):
             payload = _matching_payload(node, reasoning_level)
             if payload is not None:
                 return payload
@@ -219,3 +211,33 @@ def _find_child(config: Mapping[str, Any], path_part: str) -> Optional[Mapping[s
                 raise ValueError(f"Provider configuration for {path_part!r} must be a mapping")
             return value
     return None
+
+
+def _candidate_paths(args: Tuple[Optional[str], ...]) -> List[Tuple[str, ...]]:
+    """Return provider-config paths ordered from most to least specific."""
+    path = tuple(str(part) for part in args if part is not None)
+    if not path:
+        return [path]
+    candidates = [path]
+    if len(path) == 3:
+        candidates.extend([
+            (path[0], path[2]),
+            path[:2],
+            path[:1],
+        ])
+    elif len(path) == 2:
+        candidates.append(path[:1])
+    return list(dict.fromkeys(candidates))
+
+
+def _find_path_node(
+    root: Mapping[str, Any],
+    path: Tuple[str, ...],
+) -> Optional[Mapping[str, Any]]:
+    """Return the exact configuration node for one candidate path."""
+    current_node = root
+    for path_part in path:
+        current_node = _find_child(current_node, path_part)
+        if current_node is None:
+            return None
+    return current_node

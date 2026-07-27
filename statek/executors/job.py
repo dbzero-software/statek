@@ -46,7 +46,7 @@ from statek.executors.chat_log_item import (
     WarmupLogItem,
     UserLogItem,
 )
-from statek.llm_api import LLM_API, LLM_Response, LLM_StepData, resolve_reasoning_payload
+from statek.llm_api import LLM_API, LLM_Response, LLM_StepData
 from statek.provider_config import ProviderConfig, provider_config_identity
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (
@@ -1342,7 +1342,11 @@ class Job:
                             if isinstance(item, LLM_LogItem) else None
                         ),
                     )
-                # block_code empty + no tool_calls — nothing to yield.
+                elif isinstance(item, LLM_LogItem) and item.llm_reasoning_payload is not None:
+                    yield ChatHistoryItem(
+                        role=ChatRole.ASSISTANT,
+                        provider_reasoning_payload=item.llm_reasoning_payload,
+                    )
 
             # Console output produced by this block (USER + CONSOLE).
             from_pos = item.console_pos
@@ -1370,13 +1374,7 @@ class Job:
     ) -> Dict[str, Any]:
         """Build request params for the provided append-only job state."""
         metadata = dict(self.job_def.metadata or {})
-        raw_model = LLM_API.require_model(self.get_current_model())
-        provider = select_model_provider(raw_model, default_provider=metadata.get("PROVIDER"))
-        model, reasoning_payload = resolve_reasoning_payload(
-            raw_model,
-            getattr(self.job_def, "provider_config", None),
-            provider,
-        )
+        model = LLM_API.require_model(self.get_current_model())
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
         system_prompt = self.system_prompt()
 
@@ -1400,8 +1398,6 @@ class Job:
             "available_tools": self.job_def.agent.all_tools,
             "provider_config": self.job_def.provider_config,
         }
-        if reasoning_payload is not None:
-            request_params["reasoning_payload"] = reasoning_payload
         if temperature is not None:
             request_params["temperature"] = temperature
         chat_style = self.job_def.chat_style

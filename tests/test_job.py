@@ -1092,7 +1092,7 @@ def test_get_next_request_does_not_rewrite_model_metadata(job_def_factory):
 
 
 def test_get_next_request_uses_provider_from_model_name(job_def_factory):
-    """The model string can override provider selection and preserve the family when needed."""
+    """Job requests retain model routing for the provider-specific payload builder."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "openrouter/openai/gpt-5.4",
@@ -1103,11 +1103,11 @@ def test_get_next_request_uses_provider_from_model_name(job_def_factory):
 
     request = _run_with_current_job(job, job.get_next_request)
 
-    assert request["model"] == "openai/gpt-5.4"
+    assert request["model"] == "openrouter/openai/gpt-5.4"
 
 
 def test_get_next_request_discards_model_family_for_non_family_provider(job_def_factory):
-    """Providers such as OpenAI receive only the concrete model identifier."""
+    """Job requests retain the selection before provider-specific formatting."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "openai/openai/gpt-5.4",
@@ -1117,7 +1117,7 @@ def test_get_next_request_discards_model_family_for_non_family_provider(job_def_
 
     request = _run_with_current_job(job, job.get_next_request)
 
-    assert request["model"] == "gpt-5.4"
+    assert request["model"] == "openai/openai/gpt-5.4"
 
 
 class TestJobGetNextRequest:

@@ -9,6 +9,10 @@ codebase, especially Codex-style agents and GPT-5.4.
 
 [Statek Design Document](https://docs.google.com/document/d/1GUI872TsYcSR2xs4PQBrXcl0MkVeM_jti43SDkDeEzc/edit?usp=sharing)
 
+### Canonical Requirements
+
+`AI_Docs/` contains non-canonical implementation plans, summaries, review notes, and completion records. Always follow the assigned task and applicable official specifications instead. Statek's canonical specification is `../statek_design.md`; `../selltime-docs/` is the canonical specification source for Selltime work. If an AI document conflicts with a task or specification, follow the task/specification and report the conflict. Do not modify a canonical specification unless the user explicitly requests it.
+
 ### Design Review
 
 Before implementing any non-trivial feature or change, critically review the proposed design:
