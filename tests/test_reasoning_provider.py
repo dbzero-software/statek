@@ -2,6 +2,7 @@
 
 # pylint: disable=protected-access,no-member,unused-argument,arguments-differ,too-many-arguments,too-many-positional-arguments
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.llm_api import (
     ClaudeAI_API, DefaultLLM_API_Impl, LLM_API, LLM_API_Settings, OpenAI_API,
-    LLM_Response, LLM_StepData, LLM_Stats, VertexAI_API,
+    OpenRouter_API, LLM_Response, LLM_StepData, LLM_Stats, VertexAI_API,
 )
 from statek.executors.job import Job, JobStatus
 from statek.provider_config import ProviderConfig
@@ -269,6 +270,68 @@ def test_reasoning_only_response_is_reconstructed_for_provider_history(
         assert VertexAI_API(_settings()).build_contents(history, provider=provider) == [{
             "role": "model", "parts": reasoning_payload["parts"],
         }]
+
+
+@pytest.mark.parametrize(
+    ("api_class", "api_kwargs", "model", "provider", "reasoning_payload"),
+    [
+        (
+            OpenRouter_API,
+            {},
+            "openrouter/openai/gpt-5",
+            "openrouter",
+            {
+                "provider": "openrouter",
+                "format": "openai",
+                "fields": {"reasoning_details": [{"data": "opaque"}]},
+            },
+        ),
+        (
+            ClaudeAI_API,
+            {"use_prompt_caching": False},
+            "claudeai//claude-4",
+            "claudeai",
+            {
+                "provider": "claudeai",
+                "format": "claude",
+                "content": [{"type": "thinking", "thinking": "opaque", "signature": "sig"}],
+            },
+        ),
+        (
+            VertexAI_API,
+            {},
+            "vertexai//gemini-2.5",
+            "vertexai",
+            {
+                "provider": "vertexai",
+                "format": "vertex",
+                "parts": [{"text": "hidden", "thought": True, "thoughtSignature": "sig"}],
+            },
+        ),
+    ],
+)
+def test_persisted_reasoning_payload_builds_json_serializable_request(
+    job_def_factory,
+    api_class,
+    api_kwargs,
+    model,
+    provider,
+    reasoning_payload,
+):
+    """Matching provider replay converts nested dbzero collections before JSON encoding."""
+    job = Job(job_def_factory(), job_status=JobStatus.STARTED)
+    job.append_chat_log({}, LLM_Response(
+        LLM_StepData("visible", None, reasoning_payload),
+        LLM_Stats(0, 0, None),
+    ))
+
+    payload = api_class(_settings(), **api_kwargs).preview_request(
+        model=model,
+        metadata={"PROVIDER": provider},
+        chat_history=list(job.get_chat_history()),
+    )
+
+    json.dumps(payload)
 
 
 def test_custom_provider_receives_documented_provider_config_contract(db0_fixture):

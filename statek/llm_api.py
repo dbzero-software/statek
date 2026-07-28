@@ -80,18 +80,30 @@ def _matching_reasoning_payload(
     return payload
 
 
+def _request_ready_reasoning_value(value: Any) -> Any:
+    """Recursively copy durable provider continuation collections for JSON requests."""
+    if callable(getattr(value, "items", None)):
+        return {
+            key: _request_ready_reasoning_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (str, bytes)) or not callable(getattr(value, "__iter__", None)):
+        return value
+    return [_request_ready_reasoning_value(item) for item in value]
+
+
 def _reasoning_mapping(value: Any) -> Optional[Dict]:
-    """Copy a regular or durable mapping into a plain request-ready dictionary."""
+    """Copy a regular or durable mapping into plain nested request-ready values."""
     if not callable(getattr(value, "items", None)):
         return None
-    return dict(value.items())
+    return _request_ready_reasoning_value(value)
 
 
 def _reasoning_sequence(value: Any) -> Optional[List]:
-    """Copy a regular or durable provider block sequence while preserving order."""
+    """Copy a regular or durable provider block sequence with nested plain values."""
     if isinstance(value, (str, bytes)) or not callable(getattr(value, "__iter__", None)):
         return None
-    return list(value)
+    return _request_ready_reasoning_value(value)
 
 
 def resolve_reasoning_payload(
