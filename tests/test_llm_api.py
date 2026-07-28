@@ -214,13 +214,13 @@ class TestLLMAPIGetFactory:
             def _build_request_payload(
                     self, system_prompt=None, model=None, metadata=None,
                     tools=None, chat_history=None, chat_style=None,
-                    temperature=None, enable_reasoning=False):
-                return {"model": model}
+                    temperature=None, provider_config=None):
+                return {"model": model, "provider_config": provider_config}
 
             async def _process_request(
                     self, system_prompt=None, model=None, metadata=None,
                     tools=None, chat_history=None, chat_style=None,
-                    temperature=None, enable_reasoning=False):
+                    temperature=None, provider_config=None):
                 return _make_response()
 
         add_provider(
@@ -239,6 +239,43 @@ class TestLLMAPIGetFactory:
             "registered_arg": "registered",
             "call_arg": "call",
         }
+
+    def test_request_apis_do_not_accept_enable_reasoning(self, openrouter_api):
+        """The obsolete reasoning flag is absent from Statek's public API."""
+        with pytest.raises(TypeError, match="enable_reasoning"):
+            openrouter_api.preview_request(model="gpt-4o", enable_reasoning=True)
+
+    @pytest.mark.asyncio
+    async def test_custom_provider_receives_provider_config(self, db0_fixture):
+        """Custom providers receive the durable configuration through both request paths."""
+        del db0_fixture
+        from statek.provider_config import ProviderConfig  # pylint: disable=import-outside-toplevel
+
+        class CustomAPI(LLM_API):
+            def __init__(self):
+                self.process_provider_config = None
+
+            def _build_request_payload(
+                    self, system_prompt=None, model=None, metadata=None,
+                    tools=None, chat_history=None, chat_style=None,
+                    temperature=None, provider_config=None):
+                return {"provider_config": provider_config}
+
+            async def _process_request(
+                    self, system_prompt=None, model=None, metadata=None,
+                    tools=None, chat_history=None, chat_style=None,
+                    temperature=None, provider_config=None):
+                self.process_provider_config = provider_config
+                return _make_response()
+
+        api = CustomAPI()
+        provider_config = ProviderConfig({"openrouter": {"timeout": 10}})
+
+        assert api.preview_request(model="custom-model", provider_config=provider_config) == {
+            "provider_config": provider_config,
+        }
+        await api.process_request(model="custom-model", provider_config=provider_config)
+        assert api.process_provider_config is provider_config
 
     def test_add_provider_get_kwargs_override_registered_kwargs(self):
         add_provider(
@@ -308,7 +345,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -329,7 +366,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -354,7 +391,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -375,7 +412,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -400,7 +437,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -458,7 +495,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -483,7 +520,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -516,7 +553,7 @@ class TestProcessRequestToolScope:
 
         async def fake_process(self_, *, system_prompt=None, model=None, metadata=None,
                                tools=None, chat_history=None, chat_style=None,
-                               temperature=None, enable_reasoning=False):
+                                temperature=None, provider_config=None):
             captured["tools"] = tools
             return _make_response()
 
@@ -669,8 +706,11 @@ class TestOpenRouterTemperature:
             await openrouter_api._process_request(metadata=None)
 
     @pytest.mark.asyncio
-    async def test_reasoning_added_to_payload(self, openrouter_api):
-        """REASONING in metadata is forwarded as 'reasoning' in the payload."""
+    async def test_provider_config_does_not_change_payload_yet(self, openrouter_api, db0_fixture):
+        """Provider configuration is deferred until reasoning payload handling."""
+        from statek.provider_config import ProviderConfig  # pylint: disable=import-outside-toplevel
+
+        del db0_fixture
         captured_payload = {}
 
         async def fake_post(self_, url, json=None, headers=None):
@@ -685,9 +725,12 @@ class TestOpenRouterTemperature:
 
         with patch("httpx.AsyncClient.post", fake_post):
             await openrouter_api._process_request(
-                model="gpt-4o", enable_reasoning=True, metadata={})
+                model="gpt-4o",
+                metadata={},
+                provider_config=ProviderConfig({"openrouter": {"timeout": 10}}),
+            )
 
-        assert captured_payload["reasoning"] == {}
+        assert "reasoning" not in captured_payload
 
 
 class TestClaudeTemperature:
@@ -747,8 +790,11 @@ class TestClaudeTemperature:
             await claude_api._process_request(metadata=None)
 
     @pytest.mark.asyncio
-    async def test_reasoning_added_to_payload(self, claude_api):
-        """REASONING in metadata is forwarded as 'thinking' in the payload."""
+    async def test_provider_config_does_not_change_payload_yet(self, claude_api, db0_fixture):
+        """Provider configuration is deferred until reasoning payload handling."""
+        from statek.provider_config import ProviderConfig  # pylint: disable=import-outside-toplevel
+
+        del db0_fixture
         captured_payload = {}
 
         async def fake_post(self_, url, json=None, headers=None):
@@ -763,9 +809,12 @@ class TestClaudeTemperature:
 
         with patch("httpx.AsyncClient.post", fake_post):
             await claude_api._process_request(
-                model="claude-3", enable_reasoning=True, metadata={})
+                model="claude-3",
+                metadata={},
+                provider_config=ProviderConfig({"claude": {"timeout": 10}}),
+            )
 
-        assert captured_payload["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+        assert "thinking" not in captured_payload
 
 
 # ---------------------------------------------------------------------------
@@ -865,9 +914,9 @@ class TestPreviewRequest:
                 chat_history=None,
                 chat_style=None,
                 temperature=None,
-                enable_reasoning=False,
+                provider_config=None,
             ):
-                del system_prompt, model, metadata, tools, chat_style, temperature, enable_reasoning
+                del system_prompt, model, metadata, tools, chat_style, temperature, provider_config
                 first_pass = list(chat_history or [])
                 second_pass = list(chat_history or [])
                 return {"first_pass": first_pass, "second_pass": second_pass}
@@ -881,11 +930,11 @@ class TestPreviewRequest:
                 chat_history=None,
                 chat_style=None,
                 temperature=None,
-                enable_reasoning=False,
+                provider_config=None,
             ):
                 del (
                     system_prompt, model, metadata, tools, chat_history, chat_style,
-                    temperature, enable_reasoning,
+                    temperature, provider_config,
                 )
                 return LLM_Response(
                     step_data=LLM_StepData(text="ok", call_requests=None),
@@ -930,7 +979,6 @@ class TestPreviewRequest:
             chat_history=[_user("hello")],
             chat_style=_MD(),
             temperature=0.3,
-            enable_reasoning=True,
         )
 
         with patch("httpx.AsyncClient.post", fake_post):
@@ -942,7 +990,6 @@ class TestPreviewRequest:
                 chat_history=[_user("hello")],
                 chat_style=_MD(),
                 temperature=0.3,
-                enable_reasoning=True,
             )
 
         assert preview == captured_payload
@@ -972,7 +1019,6 @@ class TestPreviewRequest:
             chat_history=[_user("hello")],
             chat_style=_MD(),
             temperature=0.2,
-            enable_reasoning=True,
         )
 
         with patch("httpx.AsyncClient.post", fake_post):
@@ -984,7 +1030,6 @@ class TestPreviewRequest:
                 chat_history=[_user("hello")],
                 chat_style=_MD(),
                 temperature=0.2,
-                enable_reasoning=True,
             )
 
         assert preview == captured_payload
@@ -1014,7 +1059,6 @@ class TestPreviewRequest:
             chat_history=[_user("hello")],
             chat_style=_MD(),
             temperature=0.7,
-            enable_reasoning=True,
         )
 
         with patch("httpx.AsyncClient.post", fake_post):
@@ -1026,7 +1070,6 @@ class TestPreviewRequest:
                 chat_history=[_user("hello")],
                 chat_style=_MD(),
                 temperature=0.7,
-                enable_reasoning=True,
             )
 
         assert preview == captured_payload

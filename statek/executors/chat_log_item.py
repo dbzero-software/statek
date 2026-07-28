@@ -14,7 +14,7 @@
 
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 import dbzero as db0
 
 from statek.utils import CodeBlock
@@ -88,6 +88,8 @@ class ChatLogItem:
 class LLM_LogItem(ChatLogItem):
     # Response received from the LLM — plain code string or CodeBlock with tool calls
     llm_resp: Union[str, CodeBlock] = None
+    # Opaque provider continuation material replayed only by its matching formatter.
+    llm_reasoning_payload: Optional[Any] = None
 
 
 @db0.memo(no_default_tags=True)

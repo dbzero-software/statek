@@ -1,5 +1,6 @@
 # pylint: disable=no-member,too-few-public-methods,unused-argument,unused-variable
 import builtins
+import json
 from unittest.mock import Mock, patch
 import dbzero as db0
 import pytest
@@ -19,6 +20,7 @@ from statek.chat_style import ChatStyle
 from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt
+from statek.settings import StatekSettings
 from statek.utils import CodeBlock, _statek_ctx_scope
 
 def _noop_error_handler(context, error=None):
@@ -33,6 +35,29 @@ def _run_with_current_job(job, func):
     """Run func while job is visible through Statek context."""
     with _statek_ctx_scope({"job": job}):
         return func()
+
+
+def test_create_new_job_snapshots_configured_provider_config(
+    db0_fixture,
+    supervised_agent,
+    monkeypatch,
+    tmp_path,
+):
+    """New JobDefs retain their resolved provider configuration after the source file changes."""
+    config_path = tmp_path / "provider-config.json"
+    config_path.write_text(json.dumps({"openrouter": {"timeout": 10}}), encoding="utf-8")
+    monkeypatch.setattr(
+        "statek.task._get_statek_settings",
+        lambda: StatekSettings(statek_provider_config=str(config_path)),
+    )
+
+    first_job = create_new_job(supervised_agent)
+    config_path.write_text(json.dumps({"openrouter": {"timeout": 20}}), encoding="utf-8")
+    second_job = create_new_job(supervised_agent)
+
+    assert first_job.job_def.provider_config.provider_config == {"openrouter": {"timeout": 10}}
+    assert second_job.job_def.provider_config.provider_config == {"openrouter": {"timeout": 20}}
+    assert second_job.job_def is not first_job.job_def
 
 
 @db0.memo

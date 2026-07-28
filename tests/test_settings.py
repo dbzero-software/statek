@@ -4,7 +4,11 @@
 
 import os
 import tempfile
+import json
 from pathlib import Path
+import pytest
+from statek.provider_config import load_provider_config
+from statek.multi_source_settings import SettingValuesSource
 from statek.settings import StatekSettings, get_provider_settings
 from statek.docstring import ACL_Item, Statek_ACL
 from statek.prompt_config import format_system_prompt
@@ -58,6 +62,49 @@ def test_statek_settings_parses_environment_variables():
         del os.environ['OPENAI_API_KEY']
         del os.environ['OPENROUTER_API_URL']
         del os.environ['OPENROUTER_API_KEY']
+
+
+def test_statek_provider_config_path_supports_explicit_and_environment_values(monkeypatch):
+    """Provider configuration paths can be supplied directly or through Statek's environment."""
+    monkeypatch.setenv("STATEK_PROVIDER_CONFIG", "/tmp/from-environment.json")
+
+    assert StatekSettings().statek_provider_config == "/tmp/from-environment.json"
+    assert (
+        StatekSettings(statek_provider_config="/tmp/explicit.json").statek_provider_config
+        == "/tmp/explicit.json"
+    )
+
+
+def test_statek_provider_config_path_supports_configured_value_sources():
+    """Provider configuration paths participate in Statek's ordered value sources."""
+    class ProviderConfigSource(SettingValuesSource):
+        """Provide one configured provider-configuration path for the test."""
+
+        def get_value(self, field_name):
+            if field_name == "statek_provider_config":
+                return "/tmp/from-source.json"
+            return None
+
+    settings = StatekSettings(sources=[ProviderConfigSource()])
+
+    assert settings.statek_provider_config == "/tmp/from-source.json"
+
+
+def test_load_provider_config_reads_a_json_object(tmp_path):
+    """The provider configuration loader returns parsed JSON object content."""
+    config_path = tmp_path / "provider-config.json"
+    config_path.write_text(json.dumps({"openrouter": {"timeout": 10}}), encoding="utf-8")
+
+    assert load_provider_config(str(config_path)) == {"openrouter": {"timeout": 10}}
+
+
+def test_load_provider_config_rejects_a_non_object_json_document(tmp_path):
+    """Provider configuration files must have an object at their top level."""
+    config_path = tmp_path / "provider-config.json"
+    config_path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="top-level mapping"):
+        load_provider_config(str(config_path))
 
 
 def test_get_provider_settings_cached_function():

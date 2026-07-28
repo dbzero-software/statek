@@ -28,6 +28,7 @@ from statek.executors.job import (
     parse_warmup_code_with_metadata,
 )
 from statek.executors.post_processor import effective_post_processing
+from statek.provider_config import ProviderConfig
 from statek.prompt_config import (
     SystemPrompt,
     SystemPromptData,
@@ -492,6 +493,7 @@ class SupervisedAgent(Agent):
         shared_vars: Optional[Dict[str, Any]] = None,
         locale=None,
         post_processing=None,
+        provider_config: Optional[ProviderConfig] = None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -538,6 +540,7 @@ class SupervisedAgent(Agent):
             warmup_code=combined,
             locale=locale,
             post_processing=resolved_post_processing,
+            provider_config=provider_config,
         )
 
     def _combine_warmup_code(self, warmup_code):

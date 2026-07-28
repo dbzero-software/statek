@@ -31,6 +31,7 @@ from .locale import StatekLocale
 from .pyenv import PyEnv
 from .settings import get_provider_settings as _get_provider_settings
 from .settings import get_statek_settings as _get_statek_settings
+from .provider_config import ProviderConfig, resolve_settings_provider_config
 from .utils import CodeBlock, get_current_job
 
 
@@ -58,6 +59,7 @@ def _find_reusable_job_def(
     locale,
     post_processing,
     kwargs: Dict[str, Any],
+    provider_config: Optional[ProviderConfig],
 ):
     """Find an existing JobDef matching create_new_job's reusable definition."""
     from statek.executors.utils import find_existing_job_def  # pylint: disable=import-outside-toplevel
@@ -76,6 +78,7 @@ def _find_reusable_job_def(
         locale=locale,
         chat_style=_dialog_chat_style(agent, kwargs) if isinstance(agent, DialogAgent) else None,
         post_processing=resolved_post_processing,
+        provider_config=provider_config,
     )
 
 
@@ -443,18 +446,21 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
     """Create a ready job with shared locals, inherited locale, and error handlers."""
     shared_vars = shared_vars or {}
     effective_locale = _resolve_child_locale(parent_job, locale)
+    provider_config = resolve_settings_provider_config(_get_statek_settings())
     job_def = _find_reusable_job_def(
         agent,
         warmup_code,
         effective_locale,
         post_processing,
         kwargs,
+        provider_config,
     )
     if job_def is None:
         job_def = agent.create_job_def(
             warmup_code=warmup_code,
             locale=effective_locale,
             post_processing=post_processing,
+            provider_config=provider_config,
             **kwargs,
         )
 

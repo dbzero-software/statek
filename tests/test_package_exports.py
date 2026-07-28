@@ -26,3 +26,15 @@ def test_shared_context_public_helpers_are_exported_from_package_root():
     assert init_shared_context is module_init_shared_context
     assert print_locals is module_print_locals
     assert shared_context_set_var is module_shared_context_set_var
+
+
+def test_provider_config_helpers_are_exported_from_package_root():
+    """Provider configuration setup can use the documented package-root imports."""
+    from statek import ProviderConfig, resolve_provider_config  # pylint: disable=import-outside-toplevel
+    from statek.provider_config import (  # pylint: disable=import-outside-toplevel
+        ProviderConfig as ModuleProviderConfig,
+        resolve_provider_config as module_resolve_provider_config,
+    )
+
+    assert ProviderConfig is ModuleProviderConfig
+    assert resolve_provider_config is module_resolve_provider_config

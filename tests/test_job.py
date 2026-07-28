@@ -21,7 +21,13 @@ from statek.executors.job import (
 )
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, OpenRouter_API
 from statek.model_pricing import set_model_pricing
-from statek.model_name import ModelName, parse_model_name
+from statek.model_name import (
+    ModelName,
+    ensure_model_name,
+    format_model_for_provider,
+    parse_model_name,
+    select_model_provider,
+)
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.dialog_agent import RecurringReminder
 from statek.executors.chat_log_item import (
@@ -174,21 +180,47 @@ class TestJobDef:
 
     def test_parse_model_name_returns_bare_model(self):
         """Bare model names populate only the model component."""
-        assert parse_model_name("gpt-5.4") == ModelName(None, None, "gpt-5.4")
+        assert parse_model_name("gpt-5.4") == ModelName(None, None, "gpt-5.4", {})
 
     def test_parse_model_name_returns_model_family_and_model(self):
         """Two-part names are interpreted as model-family/model."""
-        assert parse_model_name("openai/gpt-5.4") == ModelName(None, "openai", "gpt-5.4")
+        assert parse_model_name("openai/gpt-5.4") == ModelName(None, "openai", "gpt-5.4", {})
 
     def test_parse_model_name_returns_provider_family_and_model(self):
         """Three-part names are interpreted as provider/family/model."""
         assert parse_model_name("openrouter/openai/gpt-5.4") == ModelName(
-            "openrouter", "openai", "gpt-5.4"
+            "openrouter", "openai", "gpt-5.4", {}
         )
 
     def test_parse_model_name_converts_empty_components_to_none(self):
         """Empty path components become None."""
-        assert parse_model_name("openai//gpt-5.4") == ModelName("openai", None, "gpt-5.4")
+        assert parse_model_name("openai//gpt-5.4") == ModelName("openai", None, "gpt-5.4", {})
+
+    def test_parse_model_name_returns_url_style_parameters(self):
+        """Model parameter suffixes are separated from the provider model identifier."""
+        assert parse_model_name("openrouter/openai/gpt-5.4/rl=50&type=pro") == ModelName(
+            "openrouter", "openai", "gpt-5.4", {"rl": "50", "type": "pro"}
+        )
+
+    def test_parse_model_name_returns_parameters_after_a_two_part_model_path(self):
+        """A parameter suffix works when the provider is omitted."""
+        assert parse_model_name("openai/gpt-5.4/reasoning_level=50") == ModelName(
+            None, "openai", "gpt-5.4", {"reasoning_level": "50"}
+        )
+
+    def test_parse_model_name_decodes_url_style_parameter_values(self):
+        """URL-style parameters preserve decoded values for later model-specific handling."""
+        assert parse_model_name("gpt-5.4/type=pro%2Bmax") == ModelName(
+            None, None, "gpt-5.4", {"type": "pro+max"}
+        )
+
+    def test_model_name_helpers_preserve_and_exclude_parameters_as_appropriate(self):
+        """Routing keeps params while the provider-facing identifier excludes them."""
+        parsed = parse_model_name("openrouter/openai/gpt-5.4/rl=50")
+
+        assert ensure_model_name(parsed).params == {"rl": "50"}
+        assert select_model_provider(parsed, default_provider="OPENAI") == "openrouter"
+        assert format_model_for_provider(parsed, "OPENROUTER") == "openai/gpt-5.4"
 
     @pytest.mark.usefixtures("db0_fixture")
     def test_parse_model_metadata_returns_complete_difficulty_mapping(self):
@@ -1060,7 +1092,7 @@ def test_get_next_request_does_not_rewrite_model_metadata(job_def_factory):
 
 
 def test_get_next_request_uses_provider_from_model_name(job_def_factory):
-    """The model string can override provider selection and preserve the family when needed."""
+    """Job requests retain model routing for the provider-specific payload builder."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "openrouter/openai/gpt-5.4",
@@ -1071,11 +1103,11 @@ def test_get_next_request_uses_provider_from_model_name(job_def_factory):
 
     request = _run_with_current_job(job, job.get_next_request)
 
-    assert request["model"] == "openai/gpt-5.4"
+    assert request["model"] == "openrouter/openai/gpt-5.4"
 
 
 def test_get_next_request_discards_model_family_for_non_family_provider(job_def_factory):
-    """Providers such as OpenAI receive only the concrete model identifier."""
+    """Job requests retain the selection before provider-specific formatting."""
     job_def = job_def_factory(
         metadata={
             "MODEL": "openai/openai/gpt-5.4",
@@ -1085,7 +1117,7 @@ def test_get_next_request_discards_model_family_for_non_family_provider(job_def_
 
     request = _run_with_current_job(job, job.get_next_request)
 
-    assert request["model"] == "gpt-5.4"
+    assert request["model"] == "openai/openai/gpt-5.4"
 
 
 class TestJobGetNextRequest:
@@ -1247,10 +1279,10 @@ class TestJobGetNextRequest:
         assert request["temperature"] == 0.3
         assert request["metadata"]["TEMPERATURE"] == "0.3"
 
-    def test_get_next_request_extracts_enable_reasoning_from_metadata(
+    def test_get_next_request_ignores_legacy_reasoning_metadata(
         self, job_def_factory
     ):
-        """REASONING metadata is exposed as an explicit boolean request parameter."""
+        """Legacy REASONING metadata does not alter the LLM request contract."""
         job_def = job_def_factory(metadata={"MODEL": "test-model", "REASONING": "true"})
         job = Job(
             job_def=job_def, model_family="test",
@@ -1259,14 +1291,15 @@ class TestJobGetNextRequest:
 
         request = job.get_next_request()
 
-        assert request["enable_reasoning"] is True
+        assert "enable_reasoning" not in request
         assert request["metadata"]["REASONING"] == "true"
 
-    def test_get_next_request_uses_job_def_metadata_snapshot_after_agent_update(
+    def test_get_next_request_includes_job_def_provider_config(
         self, db0_fixture  # pylint: disable=unused-argument
     ):
-        """Existing jobs keep the metadata captured by their JobDef."""
+        """Requests carry the durable provider-config snapshot from their JobDef."""
         from statek.agents.agent import SupervisedAgent  # pylint: disable=import-outside-toplevel
+        from statek.provider_config import ProviderConfig  # pylint: disable=import-outside-toplevel
 
         agent = SupervisedAgent(
             role="test",
@@ -1274,14 +1307,16 @@ class TestJobGetNextRequest:
             _metadata={"MODEL": "test-model", "TEMPERATURE": "0.3", "REASONING": "true"},
             _tools=[],
         )
-        job_def = agent.create_job_def()
+        provider_config = ProviderConfig({"openrouter": {"timeout": 10}})
+        job_def = agent.create_job_def(provider_config=provider_config)
         agent.update_metadata({"MODEL": "test-model", "TEMPERATURE": "0.1"})
 
         job = Job(job_def=job_def, job_status=JobStatus.READY)
         request = job.get_next_request()
 
         assert request["temperature"] == 0.3
-        assert request["enable_reasoning"] is True
+        assert request["provider_config"] is provider_config
+        assert "enable_reasoning" not in request
         assert request["metadata"]["TEMPERATURE"] == "0.3"
         assert request["metadata"]["REASONING"] == "true"
 

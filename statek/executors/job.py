@@ -47,6 +47,7 @@ from statek.executors.chat_log_item import (
     UserLogItem,
 )
 from statek.llm_api import LLM_API, LLM_Response, LLM_StepData
+from statek.provider_config import ProviderConfig, provider_config_identity
 from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
 from statek.utils import (
     _STATEK_TOOL_MARKER,
@@ -353,6 +354,7 @@ def _job_def_identity_hash(
     locale,
     chat_style,
     post_processing,
+    provider_config=None,
 ) -> str:
     payload = (
         warmup_code,
@@ -362,6 +364,7 @@ def _job_def_identity_hash(
         locale,
         chat_style,
         post_processing_identity(post_processing),
+        provider_config_identity(provider_config),
     )
     encoded = str(payload).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:4]
@@ -375,10 +378,11 @@ def _job_def_identity_tag(
     locale,
     chat_style,
     post_processing=None,
+    provider_config=None,
 ) -> str:
     return (
         f"{_JOBDEF_HASH_TAG_PREFIX}"
-        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing)}"
+        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing, provider_config)}"
     )
 
 
@@ -392,6 +396,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
         job_def.locale,
         getattr(job_def, "_chat_style", None),
         job_def.post_processing,
+        job_def.provider_config,
     )
 
 
@@ -415,6 +420,8 @@ class JobDef:
     locale: Optional["StatekLocale"] = None
     # Optional post-processing sequence applied after LLM responses
     post_processing: PostProcessingInput = None
+    # Durable provider configuration snapshot used to create this job definition.
+    provider_config: Optional[ProviderConfig] = None
 
     def __post_init__(self):
         if self.agent is not None:
@@ -1298,6 +1305,10 @@ class Job:
                         content=block_code if block_code else None,
                         content_src=asst_src,
                         tool_calls=tool_calls,
+                        provider_reasoning_payload=(
+                            getattr(item, "llm_reasoning_payload", None)
+                            if isinstance(item, LLM_LogItem) else None
+                        ),
                     )
                     for j, cs in enumerate(tool_calls):
                         try:
@@ -1326,8 +1337,16 @@ class Job:
                         role=ChatRole.ASSISTANT,
                         content=block_code,
                         content_src=asst_src,
+                        provider_reasoning_payload=(
+                            getattr(item, "llm_reasoning_payload", None)
+                            if isinstance(item, LLM_LogItem) else None
+                        ),
                     )
-                # block_code empty + no tool_calls — nothing to yield.
+                elif isinstance(item, LLM_LogItem) and item.llm_reasoning_payload is not None:
+                    yield ChatHistoryItem(
+                        role=ChatRole.ASSISTANT,
+                        provider_reasoning_payload=item.llm_reasoning_payload,
+                    )
 
             # Console output produced by this block (USER + CONSOLE).
             from_pos = item.console_pos
@@ -1355,20 +1374,8 @@ class Job:
     ) -> Dict[str, Any]:
         """Build request params for the provided append-only job state."""
         metadata = dict(self.job_def.metadata or {})
-        raw_model = self.get_current_model()
-        provider = select_model_provider(
-            raw_model,
-            default_provider=metadata.get("PROVIDER"),
-        )
-        if provider is None:
-            model = LLM_API.require_model(raw_model)
-        else:
-            model = LLM_API.require_model(format_model_for_provider(
-                raw_model,
-                provider,
-            ))
+        model = LLM_API.require_model(self.get_current_model())
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
-        enable_reasoning = LLM_API.parse_enable_reasoning(metadata.get("REASONING"))
         system_prompt = self.system_prompt()
 
         if (
@@ -1389,12 +1396,10 @@ class Job:
             "model": model,
             "metadata": metadata,
             "available_tools": self.job_def.agent.all_tools,
+            "provider_config": self.job_def.provider_config,
         }
         if temperature is not None:
             request_params["temperature"] = temperature
-        if enable_reasoning:
-            request_params["enable_reasoning"] = True
-
         chat_style = self.job_def.chat_style
         if chat_style is not None:
             request_params["chat_style"] = chat_style
@@ -1412,7 +1417,7 @@ class Job:
             Dict[str, Any]: With keys ``chat_history`` (Iterable[ChatHistoryItem]),
             ``system_prompt`` (str), ``model`` (str), ``metadata`` (dict),
             ``available_tools`` (list), and optionally ``chat_style``,
-            ``temperature``, and ``enable_reasoning``.
+            ``temperature``, and ``provider_config``.
         """
         return self._build_request_data()
 
@@ -1565,7 +1570,8 @@ class Job:
 
         chat_item = LLM_LogItem(
             console_pos=len(self.py_env.console) if self.py_env.console else 0,
-            llm_resp=stored_resp
+            llm_resp=stored_resp,
+            llm_reasoning_payload=step_data.reasoning_payload,
         )
         self.chat_log.append(chat_item)
 

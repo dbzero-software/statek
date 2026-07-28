@@ -2047,7 +2047,7 @@ class TestProviderRouting:
 
     @pytest.mark.asyncio
     async def test_provider_param_used_as_default_when_metadata_provider_missing(self, db0_fixture):
-        """The loop provider is used only when the frozen job metadata has no PROVIDER."""
+        """The loop provider is used for API selection and request construction."""
         job = self._make_job(db0_fixture, {"MODEL": "test-model"})
         mock_api, mock_harness = self._make_mock_api()
 
@@ -2058,6 +2058,8 @@ class TestProviderRouting:
 
         call_kwargs = mock_llm_api_cls.get.call_args
         assert call_kwargs.kwargs.get("provider_name") == "OPENROUTER"
+        request = mock_api.process_request.await_args.kwargs
+        assert request["metadata"]["PROVIDER"] == "OPENROUTER"
 
     @pytest.mark.asyncio
     async def test_frozen_provider_used_after_agent_metadata_changes(
