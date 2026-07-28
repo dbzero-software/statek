@@ -272,6 +272,32 @@ class TestJobDef:
         )
         assert job_def.model_family == "openai"
 
+    def test_job_def_agent_tag_follows_assignment(self, agent, agent_factory):
+        """JobDef agent lookup tracks its current agent field."""
+        job_def = JobDef(agent=agent, metadata={"MODEL": "test-model"})
+        other_agent = agent_factory(role="other")
+
+        assert list(db0.find(JobDef, db0.as_tag(agent))) == [job_def]
+
+        job_def.agent = other_agent
+
+        assert not list(db0.find(JobDef, db0.as_tag(agent)))
+        assert list(db0.find(JobDef, db0.as_tag(other_agent))) == [job_def]
+
+        job_def.agent = None
+
+        assert not list(db0.find(JobDef, db0.as_tag(other_agent)))
+
+
+def test_job_stores_and_tags_agent_and_job_def(job_def_factory):
+    """Job exposes agent/job_def fields and both are queryable tags."""
+    job_def = job_def_factory()
+    job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
+
+    assert job.agent is job_def.agent
+    assert list(db0.find(Job, db0.as_tag(job_def.agent))) == [job]
+    assert list(db0.find(Job, db0.as_tag(job_def))) == [job]
+
 def test_job_system_prompt_delegates_to_agent(agent_factory, job_def_factory):
     """system_prompt delegates to agent.system_prompt with job params and difficulty."""
     agent = agent_factory(system_prompt="You are a {role} assistant")
@@ -1878,6 +1904,7 @@ class TestJobSetStatus:  # pylint: disable=too-few-public-methods
 
         # Initial status should be READY
         assert job.status == JobStatus.READY  # pylint: disable=no-member
+        assert job.job_status == JobStatus.READY  # pylint: disable=no-member
         assert len(db0.find(Job, JobStatus.READY)) == 1  # pylint: disable=no-member
 
         # Change status to STARTED
@@ -1885,6 +1912,7 @@ class TestJobSetStatus:  # pylint: disable=too-few-public-methods
 
         # Verify status is updated
         assert job.status == JobStatus.STARTED  # pylint: disable=no-member
+        assert job.job_status == JobStatus.STARTED  # pylint: disable=no-member
 
         # Verify tags are updated
         assert len(db0.find(Job, JobStatus.READY)) == 0  # pylint: disable=no-member

@@ -344,6 +344,7 @@ class JobDefError:
 
 
 _JOBDEF_HASH_TAG_PREFIX = "STATEK_JOBDEF:H:"
+_JOB_LIFETIME_TAG = "STATEK_JOB"
 
 
 def _job_def_identity_hash(
@@ -401,6 +402,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
 
 
 @memo
+@db0.tag_fields("agent")
 @dataclass
 class JobDef:
     """
@@ -424,8 +426,6 @@ class JobDef:
     provider_config: Optional[ProviderConfig] = None
 
     def __post_init__(self):
-        if self.agent is not None:
-            db0.tags(self).add(self.agent)
         if self.metadata is None:
             self.metadata = (
                 self.agent._metadata
@@ -568,6 +568,7 @@ class ErrorHandler:
 
 
 @memo
+@db0.tag_fields("agent", "job_def", "job_status")
 class Job:
     """
     A single "job" is a stateful class representing the current state of a single unit-of-work, being performed end-to-end by a single agent. By a "job" we might mean either a very simple operation such as answering a basic question ("Hey, what day of week is today") or a complex task involving retrieving information from external systems, communicating with external actors, waiting for approvals etc. - before the final response is generated.
@@ -590,12 +591,10 @@ class Job:
     ):
         del model_family, model  # backward-compatible init args; source of truth is JobDef
         self.job_def = job_def
+        self.agent = self.job_def.agent
         self.parent_job = parent_job
-        if self.job_def.agent is not None:
-            db0.tags(self).add(self.job_def.agent)
-        # Private job status attribute
-        self.__job_status = None
-        self.set_status(job_status)
+        self.job_status = job_status
+        db0.tags(self).add(_JOB_LIFETIME_TAG)
         # LLM program's execution environment
         self.py_env = py_env if py_env is not None else PyEnv()
         # Current chat state
@@ -920,20 +919,17 @@ class Job:
         Returns:
             JobStatus: The current status of the job
         """
-        return self.__job_status
+        return self.job_status
 
     def set_status(self, new_status: JobStatus):
         """
-        Sets or updates job status. If state is updated - existing tag is removed
-        and new status tag applied.
+        Sets or updates job status. The job_status tag field keeps lookup tags
+        synchronized with the persisted status field.
 
         Args:
             new_status: The status/tag to be assigned or updated
         """
-        if self.__job_status is not None:
-            db0.tags(self).remove(self.__job_status)
-        db0.tags(self).add(new_status)
-        self.__job_status = new_status
+        self.job_status = new_status
 
     def _language_hint_suffix(self) -> str:
         """Return the language hint suffix for push_log messages, or empty string.
