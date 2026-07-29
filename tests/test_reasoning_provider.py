@@ -17,9 +17,12 @@ from statek.executors.job import Job, JobStatus
 from statek.provider_config import ProviderConfig
 
 
-def _config(provider, family=None, model=None, payload=None):
+def _config(provider, family=None, model=None, payload=None, ignored_parameters=None):
     """Create a single reasoning-level mapping at an optional model path."""
-    node = {"reasoning_level": [{"range": {"from": 1}, "payload": payload or {}}]}
+    reasoning = {"reasoning_level": [{"range": {"from": 1}, "payload": payload or {}}]}
+    if ignored_parameters is not None:
+        reasoning["ignore_parameters"] = ignored_parameters
+    node = {"reasoning": reasoning}
     if model is not None:
         node = {family: {model: node}}
     elif family is not None:
@@ -81,10 +84,12 @@ def test_metadata_provider_resolves_model_specific_reasoning(db0_fixture):
     config = ProviderConfig({
         "openai": {
             "gpt-5": {
-                "reasoning_level": [{
-                    "range": {"from": 1},
-                    "payload": {"reasoning": {"effort": "high"}},
-                }],
+                "reasoning": {
+                    "reasoning_level": [{
+                        "range": {"from": 1},
+                        "payload": {"reasoning": {"effort": "high"}},
+                    }],
+                },
             },
         },
     })
@@ -106,6 +111,104 @@ def test_provider_payload_deep_merges_after_provider_defaults(db0_fixture):
     payload = api.preview_request(model="openai//gpt-5/rl=1", provider_config=config)
 
     assert payload["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.parametrize(
+    ("api_class", "api_kwargs", "model", "expected_container"),
+    [
+        (DefaultLLM_API_Impl, {}, "openrouter/openai/gpt-5/rl=1", None),
+        (ClaudeAI_API, {"use_prompt_caching": False}, "claudeai//claude-4/rl=1", None),
+        (VertexAI_API, {}, "vertexai//gemini-3/rl=1", "generationConfig"),
+    ],
+)
+def test_positive_reasoning_removes_configured_temperature_from_final_payload(
+    db0_fixture,
+    api_class,
+    api_kwargs,
+    model,
+    expected_container,
+):
+    """Configured conflicts are removed after every provider payload source is merged."""
+    api = api_class(_settings(), temperature=0.7, **api_kwargs)
+    config = _config(
+        model.split("/", 1)[0],
+        payload={"temperature": 0.5},
+        ignored_parameters=["temperature"],
+    )
+
+    payload = api.preview_request(
+        model=model,
+        temperature=0.3,
+        provider_config=config,
+    )
+
+    if expected_container is None:
+        assert "temperature" not in payload
+    else:
+        assert "temperature" not in payload.get(expected_container, {})
+
+
+def test_positive_reasoning_with_empty_payload_still_ignores_temperature(db0_fixture):
+    """An empty mapping is still an enabled reasoning configuration."""
+    api = DefaultLLM_API_Impl(_settings())
+    config = _config("openai", payload={}, ignored_parameters=["temperature"])
+
+    payload = api.preview_request(
+        model="openai//gpt-5/rl=1",
+        temperature=0.3,
+        provider_config=config,
+    )
+
+    assert "temperature" not in payload
+
+
+def test_zero_reasoning_keeps_temperature_when_configuration_ignores_it(db0_fixture):
+    """Ignoring applies only to a positive configured reasoning level."""
+    api = DefaultLLM_API_Impl(_settings())
+    config = _config("openai", ignored_parameters=["temperature"])
+
+    payload = api.preview_request(
+        model="openai//gpt-5/rl=0",
+        temperature=0.3,
+        provider_config=config,
+    )
+
+    assert payload["temperature"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_reasoning_preview_matches_filtered_execution_payload(db0_fixture):
+    """Preview exposes the same post-merge parameter filtering as execution."""
+    api = DefaultLLM_API_Impl(_settings(), temperature=0.7)
+    config = _config(
+        "openrouter",
+        payload={"reasoning": {"effort": "high"}, "temperature": 0.5},
+        ignored_parameters=["temperature"],
+    )
+    captured_payload = {}
+
+    async def fake_post(*_args, **kwargs):
+        captured_payload.update(kwargs["json"])
+        response = MagicMock(content=b'{"choices":[{"message":{"content":"ok"}}]}')
+        response.raise_for_status = MagicMock()
+        response.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+        return response
+
+    preview = api.preview_request(
+        model="openrouter/openai/gpt-5/rl=1",
+        temperature=0.3,
+        provider_config=config,
+    )
+
+    with patch("httpx.AsyncClient.post", fake_post):
+        await api.process_request(
+            model="openrouter/openai/gpt-5/rl=1",
+            temperature=0.3,
+            provider_config=config,
+        )
+
+    assert preview == captured_payload
+    assert "temperature" not in preview
 
 
 @pytest.mark.asyncio

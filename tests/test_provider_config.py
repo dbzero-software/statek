@@ -18,26 +18,35 @@ def provider_config(db0_fixture):
     del db0_fixture
     return ProviderConfig({
         "openrouter": {
-            "reasoning_level": [
-                {
-                    "range": {"from": 1, "to": 100},
-                    "payload": {"reasoning": {"effort": "low"}},
-                },
-            ],
-            "openai": {
+            "reasoning": {
+                "ignore_parameters": ["temperature"],
                 "reasoning_level": [
                     {
-                        "range": {"from": 26, "to": 75},
-                        "payload": {"reasoning": {"effort": "medium"}},
+                        "range": {"from": 1, "to": 100},
+                        "payload": {"reasoning": {"effort": "low"}},
                     },
                 ],
-                "gpt-5.4": {
+            },
+            "openai": {
+                "reasoning": {
+                    "ignore_parameters": ["temperature", "top_p"],
                     "reasoning_level": [
                         {
-                            "range": {"from": 76},
-                            "payload": {"reasoning": {"effort": "high"}},
+                            "range": {"from": 26, "to": 75},
+                            "payload": {"reasoning": {"effort": "medium"}},
                         },
                     ],
+                },
+                "gpt-5.4": {
+                    "reasoning": {
+                        "ignore_parameters": ["temperature", "logprobs"],
+                        "reasoning_level": [
+                            {
+                                "range": {"from": 76},
+                                "payload": {"reasoning": {"effort": "high"}},
+                            },
+                        ],
+                    },
                 },
             },
         },
@@ -100,10 +109,12 @@ def test_find_payload_resolves_provider_model_path_when_family_is_redundant(db0_
     config = ProviderConfig({
         "openai": {
             "gpt-5": {
-                "reasoning_level": [{
-                    "range": {"from": 1},
-                    "payload": {"reasoning_effort": "high"},
-                }],
+                "reasoning": {
+                    "reasoning_level": [{
+                        "range": {"from": 1},
+                        "payload": {"reasoning_effort": "high"},
+                    }],
+                },
             },
         },
     })
@@ -121,6 +132,79 @@ def test_find_payload_returns_a_defensive_copy(provider_config):
     assert provider_config.find_payload("openrouter", reasoning_level=10) == {
         "reasoning": {"effort": "low"},
     }
+
+
+def test_find_ignored_parameters_prefers_the_deepest_explicit_mapping(provider_config):
+    """The most-specific explicit ignore list overrides broader reasoning policy."""
+    assert provider_config.find_ignored_parameters(
+        "openrouter", "openai", "gpt-5.4",
+    ) == ["temperature", "logprobs"]
+
+
+def test_find_ignored_parameters_falls_back_when_model_omits_the_list(provider_config):
+    """A nested reasoning mapping inherits the closest explicit parent ignore list."""
+    assert provider_config.find_ignored_parameters(
+        "openrouter", "openai", "gpt-5.3",
+    ) == ["temperature", "top_p"]
+
+
+def test_find_ignored_parameters_allows_an_explicit_empty_override(db0_fixture):
+    """An empty list disables a broader ignore policy for one model mapping."""
+    del db0_fixture
+    config = ProviderConfig({
+        "openrouter": {
+            "reasoning": {"ignore_parameters": ["temperature"]},
+            "openai": {
+                "gpt-5.4": {
+                    "reasoning": {"ignore_parameters": []},
+                },
+            },
+        },
+    })
+
+    assert config.find_ignored_parameters("openrouter", "openai", "gpt-5.4") == []
+
+
+def test_find_ignored_parameters_returns_a_defensive_copy(provider_config):
+    """Request formatting cannot mutate the durable ignored-parameter list."""
+    parameters = provider_config.find_ignored_parameters("openrouter", "openai")
+    parameters.append("logprobs")
+
+    assert provider_config.find_ignored_parameters("openrouter", "openai") == [
+        "temperature", "top_p",
+    ]
+
+
+@pytest.mark.parametrize(
+    "reasoning_config",
+    [
+        [],
+        {"ignore_parameters": "temperature"},
+        {"ignore_parameters": ["temperature", 1]},
+    ],
+)
+def test_reasoning_configuration_rejects_invalid_ignore_parameters(db0_fixture, reasoning_config):
+    """The canonical reasoning object requires a list of parameter names."""
+    del db0_fixture
+    config = ProviderConfig({"openrouter": {"reasoning": reasoning_config}})
+
+    with pytest.raises(ValueError, match="reasoning"):
+        config.find_ignored_parameters("openrouter")
+
+
+def test_flat_reasoning_level_configuration_is_not_supported(db0_fixture):
+    """Only the canonical nested reasoning configuration resolves mappings."""
+    del db0_fixture
+    config = ProviderConfig({
+        "openrouter": {
+            "reasoning_level": [{
+                "range": {"from": 1},
+                "payload": {"reasoning": {"effort": "high"}},
+            }],
+        },
+    })
+
+    assert config.find_payload("openrouter", reasoning_level=1) is None
 
 
 @pytest.mark.parametrize("reasoning_level", [-1, 101, "invalid"])
