@@ -357,6 +357,26 @@ class TestDocsAgentIntegration:
     """Tests that docstr and brief pass the current agent name to format_docstring."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["docstr", "brief"])
+    async def test_blank_method_name_documents_context_function(self, db0_fixture, tool_name):  # pylint: disable=unused-argument
+        """Formal provider calls with blank method names must document resolved functions."""
+        tool_func = docs_tool if tool_name == "docstr" else brief_tool
+        job = _make_job(
+            "doc_blank_method_name",
+            tools=[tool_func],
+            context_extras={"lookup_target": _lookup_target},
+        )
+
+        result, error = await exec_tool(
+            _call_spec(tool_name, kwargs={"what": "lookup_target", "method_name": ""}),
+            job,
+        )
+
+        assert error is None
+        assert "Target tool used as a name-resolution lookup target." in result
+        assert "is not a class" not in result
+
+    @pytest.mark.asyncio
     async def test_docs_passes_agent_type_name_to_format_docstring(self, db0_fixture):  # pylint: disable=unused-argument
         """docstr tool passes current agent's type name as agent= to format_docstring."""
         job = _make_job("doc_test_agent", tools=[docs_tool],

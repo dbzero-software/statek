@@ -642,6 +642,13 @@ def create_tool(tool_name: str, callable: Callable, docstring: str,
     return new_tool
 
 
+def _normalize_method_name(method_name: Optional[str]) -> Optional[str]:
+    """Return a stripped method name or ``None`` when no method was requested."""
+    if method_name is None:
+        return None
+    return method_name.strip() or None
+
+
 @tool(system=True)
 def docstr(what: type | Callable | Any, method_name: str = None, **kwargs):  # pylint: disable=unused-argument
     """Prints the docstring associated with a tool, class, object instance or method.
@@ -662,6 +669,8 @@ def docstr(what: type | Callable | Any, method_name: str = None, **kwargs):  # p
     if isinstance(what, str):
         print(f"NameError: name '{what}' is not defined")
         return
+
+    method_name = _normalize_method_name(method_name)
 
     try:
         # Handle object instances - get their class
@@ -713,6 +722,8 @@ def brief(what: type | Callable | Any, method_name: str = None, **kwargs):  # py
     if isinstance(what, str):
         print(f"NameError: name '{what}' is not defined")
         return
+
+    method_name = _normalize_method_name(method_name)
 
     try:
         # Handle object instances - get their class
