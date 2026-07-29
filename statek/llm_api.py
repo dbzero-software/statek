@@ -112,6 +112,20 @@ def resolve_reasoning_payload(
     default_provider: Optional[str],
 ) -> Tuple[str, Optional[Dict]]:
     """Resolve model parameters into an upstream model ID and provider payload."""
+    upstream_model, payload, _ = _resolve_reasoning_request(
+        model,
+        provider_config,
+        default_provider,
+    )
+    return upstream_model, payload
+
+
+def _resolve_reasoning_request(
+    model: str,
+    provider_config: Optional[ProviderConfig],
+    default_provider: Optional[str],
+) -> Tuple[str, Optional[Dict], List[str]]:
+    """Resolve model parameters into request model, reasoning payload, and conflicts."""
     model_name = ensure_model_name(model)
     provider = select_model_provider(model_name, default_provider=default_provider)
     aliases = [
@@ -120,6 +134,7 @@ def resolve_reasoning_payload(
         if key in model_name.params
     ]
     payload = None
+    ignored_parameters: List[str] = []
     if aliases:
         if len(aliases) == 2 and aliases[0] != aliases[1]:
             raise ValueError("rl and reasoning_level specify conflicting values")
@@ -137,6 +152,11 @@ def resolve_reasoning_payload(
             if payload is None:
                 raise ValueError(
                     "positive reasoning level has no matching provider configuration payload")
+            ignored_parameters = provider_config.find_ignored_parameters(
+                provider,
+                model_name.model_family,
+                model_name.model,
+            ) or []
     upstream_model = (
         format_model_for_provider(model_name, provider)
         if provider is not None else (
@@ -144,7 +164,27 @@ def resolve_reasoning_payload(
             if model_name.model_family else model_name.model
         )
     )
-    return upstream_model, payload
+    return upstream_model, payload, ignored_parameters
+
+
+def _ignore_request_parameters(
+    payload: Dict,
+    ignored_parameters: Sequence[str],
+    nested_container: Optional[str] = None,
+) -> Dict:
+    """Remove reasoning-conflicting parameters from final provider request JSON."""
+    for parameter in ignored_parameters:
+        payload.pop(parameter, None)
+    if nested_container is None:
+        return payload
+    nested_payload = payload.get(nested_container)
+    if not isinstance(nested_payload, dict):
+        return payload
+    for parameter in ignored_parameters:
+        nested_payload.pop(parameter, None)
+    if not nested_payload:
+        payload.pop(nested_container)
+    return payload
 
 LLM_Stats = namedtuple(
     "LLM_Stats",
@@ -759,7 +799,7 @@ class DefaultLLM_API_Impl(LLM_API):
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
         provider = select_model_provider(model, default_provider=(metadata or {}).get("PROVIDER"))
-        model, reasoning_payload = resolve_reasoning_payload(
+        model, reasoning_payload, ignored_parameters = _resolve_reasoning_request(
             self.require_model(model),
             provider_config,
             provider,
@@ -782,7 +822,7 @@ class DefaultLLM_API_Impl(LLM_API):
         payload.update(self.kwargs)
         if reasoning_payload is not None:
             payload = _deep_merge(payload, reasoning_payload)
-        return payload
+        return _ignore_request_parameters(payload, ignored_parameters)
 
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,
@@ -1263,7 +1303,7 @@ class VertexAI_API(LLM_API):
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
         provider = select_model_provider(model, default_provider=(metadata or {}).get("PROVIDER"))
-        model, reasoning_payload = resolve_reasoning_payload(
+        model, reasoning_payload, ignored_parameters = _resolve_reasoning_request(
             self.require_model(model),
             provider_config,
             provider,
@@ -1296,7 +1336,11 @@ class VertexAI_API(LLM_API):
         self.require_model(model)
         if reasoning_payload is not None:
             payload = _deep_merge(payload, reasoning_payload)
-        return payload
+        return _ignore_request_parameters(
+            payload,
+            ignored_parameters,
+            nested_container="generationConfig",
+        )
 
     @staticmethod
     def _parse_response(  # pylint: disable=too-many-locals
@@ -1630,7 +1674,7 @@ class ClaudeAI_API(LLM_API):
         from .utils import format_tool_spec  # pylint: disable=import-outside-toplevel
 
         provider = select_model_provider(model, default_provider=(metadata or {}).get("PROVIDER"))
-        model, reasoning_payload = resolve_reasoning_payload(
+        model, reasoning_payload, ignored_parameters = _resolve_reasoning_request(
             self.require_model(model),
             provider_config,
             provider,
@@ -1650,7 +1694,7 @@ class ClaudeAI_API(LLM_API):
             payload["temperature"] = temperature
         if reasoning_payload is not None:
             payload = _deep_merge(payload, reasoning_payload)
-        return payload
+        return _ignore_request_parameters(payload, ignored_parameters)
 
     async def _process_request(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         self,

@@ -29,7 +29,7 @@ _PROVIDER_CONFIG_HASH_TAG_PREFIX = "STATEK_PROVIDER_CONFIG:H:"
 @db0.memo
 @dataclass
 class ProviderConfig:
-    """Durable snapshot of provider-specific model parameter payload mappings."""
+    """Durable snapshot of provider-specific reasoning payload and conflict mappings."""
 
     provider_config: Dict[str, Any]
 
@@ -53,9 +53,24 @@ class ProviderConfig:
             node = _find_path_node(self.provider_config, path)
             if node is None:
                 continue
-            payload = _matching_payload(node, reasoning_level)
+            reasoning = _reasoning_config(node)
+            if reasoning is None:
+                continue
+            payload = _matching_payload(reasoning, reasoning_level)
             if payload is not None:
                 return payload
+        return None
+
+    def find_ignored_parameters(self, *args: Optional[str]) -> Optional[List[str]]:
+        """Return the deepest explicit reasoning parameter ignore list for a model path."""
+        for path in _candidate_paths(args):
+            node = _find_path_node(self.provider_config, path)
+            if node is None:
+                continue
+            reasoning = _reasoning_config(node)
+            if reasoning is None or "ignore_parameters" not in reasoning:
+                continue
+            return _ignored_parameters(reasoning["ignore_parameters"])
         return None
 
 
@@ -139,6 +154,29 @@ def _matching_payload(config: Mapping[str, Any], reasoning_level: int) -> Option
         if lower_bound <= reasoning_level <= upper_bound:
             return deepcopy(_plain_json_value(payload))
     return None
+
+
+def _reasoning_config(config: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    """Return the canonical nested reasoning configuration at one hierarchy node."""
+    if "reasoning" not in config:
+        return None
+    reasoning = config["reasoning"]
+    if not _is_mapping(reasoning):
+        raise ValueError("Provider configuration reasoning must be a mapping")
+    return reasoning
+
+
+def _ignored_parameters(parameters: Any) -> List[str]:
+    """Validate and copy a reasoning parameter ignore list."""
+    error_message = (
+        "Provider configuration reasoning ignore_parameters must be a sequence of strings"
+    )
+    if not _is_sequence(parameters):
+        raise ValueError(error_message)
+    copied_parameters = list(parameters)
+    if any(not isinstance(parameter, str) for parameter in copied_parameters):
+        raise ValueError(error_message)
+    return copied_parameters
 
 
 def _is_mapping(value: Any) -> bool:
