@@ -534,7 +534,9 @@ class TestJob:
         result = job.get_next_prompt()
         assert "Podaj grafik (PAMIĘTAJ:" in result
 
-    def test_get_next_prompt_push_log_has_english_hint_for_explicit_en_locale(self, job_def_factory):
+    def test_get_next_prompt_push_log_has_english_hint_for_explicit_en_locale(
+        self, job_def_factory
+    ):
         """Explicit English locales append an English-only response hint."""
         locale = StatekLocale(
             lang_code=StatekLangCode.EN,
