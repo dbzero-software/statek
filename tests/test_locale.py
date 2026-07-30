@@ -83,9 +83,11 @@ class TestStatekLocale:
 class TestGetLanguageRule:
     """Tests for the get_language_rule helper."""
 
-    def test_returns_none_for_english(self):
-        """English should not have a language rule."""
-        assert get_language_rule(StatekLangCode.EN) is None
+    def test_returns_rule_for_english(self):
+        """An explicit English locale must enforce English-only responses."""
+        rule = get_language_rule(StatekLangCode.EN)
+        assert rule is not None
+        assert "exclusively in English" in rule
 
     def test_returns_rule_for_polish(self):
         """Polish must have a hardcoded language rule."""
@@ -145,9 +147,10 @@ class TestResolveLocale:
 class TestGetLanguageHint:
     """Tests for the get_language_hint helper."""
 
-    def test_returns_none_for_english(self):
-        """English should not have a language hint."""
-        assert get_language_hint(StatekLangCode.EN) is None
+    def test_returns_hint_for_english(self):
+        """An explicit English locale must provide an English-only hint."""
+        hint = get_language_hint(StatekLangCode.EN)
+        assert hint == "REMEMBER: Respond exclusively in English"
 
     def test_returns_hint_for_polish(self):
         """Polish must have a hardcoded language hint."""

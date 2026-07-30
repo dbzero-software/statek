@@ -534,8 +534,10 @@ class TestJob:
         result = job.get_next_prompt()
         assert "Podaj grafik (PAMIĘTAJ:" in result
 
-    def test_get_next_prompt_push_log_no_hint_for_en(self, job_def_factory):
-        """push_log messages have no hint when locale language is EN."""
+    def test_get_next_prompt_push_log_has_english_hint_for_explicit_en_locale(
+        self, job_def_factory
+    ):
+        """Explicit English locales append an English-only response hint."""
         locale = StatekLocale(
             lang_code=StatekLangCode.EN,
             country_code=StatekCountryCode.US,
@@ -547,9 +549,7 @@ class TestJob:
         )
         job.push_user_message("Show schedule")
         result = job.get_next_prompt()
-        assert "Show schedule" in result
-        assert "(PAMIĘTAJ:" not in result
-        assert "(ERINNERUNG:" not in result
+        assert "Show schedule (REMEMBER: Respond exclusively in English)" in result
 
     def test_get_next_prompt_push_log_no_hint_when_disabled(self, job_def_factory):
         """AUTO_LANG_HINT: False disables language hint on push_log messages."""
@@ -1230,8 +1230,8 @@ class TestJobGetNextRequest:
         # The language rule should be appended after the base prompt
         assert len(request["system_prompt"]) > len("Test agent")
 
-    def test_get_next_request_no_language_rule_for_en(self, job_def_factory):
-        """System prompt is unchanged when locale language is EN."""
+    def test_get_next_request_appends_language_rule_for_explicit_en_locale(self, job_def_factory):
+        """Explicit English locales append an English-only system rule."""
         locale = StatekLocale(
             lang_code=StatekLangCode.EN,
             country_code=StatekCountryCode.US,
@@ -1242,7 +1242,9 @@ class TestJobGetNextRequest:
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
         )
         request = job.get_next_request()
-        assert request["system_prompt"] == "Test agent"
+        assert request["system_prompt"].startswith("Test agent\n\n")
+        assert "CRITICAL LANGUAGE RULE" in request["system_prompt"]
+        assert "exclusively in English" in request["system_prompt"]
 
     def test_get_next_request_no_language_rule_when_no_locale(self, job_factory):
         """System prompt is unchanged when no locale is set."""

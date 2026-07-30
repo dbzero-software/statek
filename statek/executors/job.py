@@ -932,10 +932,10 @@ class Job:
         self.job_status = new_status
 
     def _language_hint_suffix(self) -> str:
-        """Return the language hint suffix for push_log messages, or empty string.
+        """Return the configured locale hint suffix for user messages, if enabled.
 
-        Returns a string like ``' (PAMIĘTAJ: ...)'`` when the job's locale
-        specifies a non-EN language and AUTO_LANG_HINT is not disabled.
+        The result is empty when no JobDef locale exists or AUTO_LANG_HINT is
+        disabled.
         """
         locale = self.job_def.locale
         if locale is None:

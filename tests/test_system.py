@@ -25,6 +25,18 @@ class TestDocs:
         captured = capsys.readouterr()
         assert "This is a sample function." in captured.out
 
+    @pytest.mark.parametrize("method_name", ["", "   "])
+    def test_docs_with_blank_method_name_uses_function(self, capsys, method_name):
+        """Blank optional method names must not turn a function into a class target."""
+        def sample_func():
+            """This is a sample function."""
+
+        docstr(sample_func, method_name)
+        captured = capsys.readouterr()
+
+        assert "This is a sample function." in captured.out
+        assert "is not a class" not in captured.out
+
     def test_docs_with_class(self, capsys):
         """Test docstr with a class that has a docstring."""
         class SampleClass:
@@ -43,6 +55,19 @@ class TestDocs:
 
         docstr(SampleClass, "sample_method")
         captured = capsys.readouterr()
+        assert "This is a sample method." in captured.out
+
+    def test_docs_strips_non_blank_method_name(self, capsys):
+        """Non-blank method names retain method lookup after whitespace normalization."""
+        class SampleClass:
+            """This is a sample class."""
+
+            def sample_method(self):
+                """This is a sample method."""
+
+        docstr(SampleClass, " sample_method ")
+        captured = capsys.readouterr()
+
         assert "This is a sample method." in captured.out
 
     def test_docs_with_multiline_docstring(self, capsys):
@@ -239,6 +264,18 @@ class TestBrief:
         assert "Returns: Output value." in captured.out
         assert "def " not in captured.out
 
+    @pytest.mark.parametrize("method_name", ["", "   "])
+    def test_brief_with_blank_method_name_uses_function(self, capsys, method_name):
+        """Blank optional method names must not turn a function into a class target."""
+        def sample_func():
+            """A sample function."""
+
+        brief(sample_func, method_name)
+        captured = capsys.readouterr()
+
+        assert "A sample function." in captured.out
+        assert "is not a class" not in captured.out
+
     def test_brief_with_object_instance(self, capsys):
         """Test brief with an object instance gets its class docs."""
         class SampleClass:
@@ -277,6 +314,29 @@ class TestBrief:
         assert "add(a, b)" in captured.out
         assert "Add two numbers." in captured.out
         assert "def " not in captured.out
+
+    def test_brief_strips_non_blank_method_name(self, capsys):
+        """Non-blank method names retain method lookup after whitespace normalization."""
+        class Calculator:
+            """A calculator class."""
+
+            def add(self, a: int, b: int) -> int:
+                """Add two numbers.
+
+                Args:
+                    a: First number.
+                    b: Second number.
+
+                Returns:
+                    The sum.
+                """
+                return a + b
+
+        brief(Calculator, " add ")
+        captured = capsys.readouterr()
+
+        assert "add(a, b)" in captured.out
+        assert "Add two numbers." in captured.out
 
 
     def test_brief_with_string_prints_name_error(self, capsys):

@@ -4,6 +4,7 @@ import dbzero as db0
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
+from statek.locale import StatekCountryCode, StatekLangCode, StatekLocale
 from statek.statek_push_queue import StatekPushQueue
 from statek.executors.utils import process_push_notifications
 
@@ -121,6 +122,17 @@ class TestProcessPushNotifications:
         assert not isinstance(val, str)
         assert "msg1" in val
         assert "msg2" in val
+
+    def test_notification_keeps_job_definition_locale(self, db0_fixture):
+        """An English message does not change a Polish job's response locale."""
+        job = _make_started_job()
+        job.job_def.locale = StatekLocale(StatekLangCode.PL, StatekCountryCode.PL)
+        queue = StatekPushQueue()
+
+        queue.push_to_job_console(db0.uuid(job), "show schedule")
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
+
+        assert "KRYTYCZNA ZASADA JĘZYKOWA" in job.get_next_request()["system_prompt"]
 
     def test_processes_notifications_for_multiple_jobs(self, db0_fixture):
         job1 = _make_started_job()
