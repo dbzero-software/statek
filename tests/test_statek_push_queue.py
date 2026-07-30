@@ -7,7 +7,6 @@ import statek.statek_push_queue as push_queue_module
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent, SupervisedAgent
 from statek.prompt_config import make_system_prompt
-from statek.locale import StatekCountryCode, StatekLangCode, StatekLocale
 from statek.statek_push_queue import StatekPushQueue
 
 
@@ -120,31 +119,6 @@ def test_pop_from_job_console_preserves_memo_message_objects(db0_fixture):
     result = queue.pop_from_job_console(10)
     assert len(result) == 1
     assert result[0] == (job_uuid, message)
-
-
-def test_pop_from_job_console_keeps_legacy_message_payloads_unchanged(db0_fixture):
-    """Queue entries created without a locale retain the legacy two-value payload."""
-    job = _make_job(db0_fixture)
-    queue = StatekPushQueue()
-
-    queue._StatekPushQueue__job_console_queue.push_back(  # pylint: disable=protected-access
-        job_uuid=db0.uuid(job), message="legacy message"
-    )
-
-    assert queue.pop_from_job_console(1) == [(db0.uuid(job), "legacy message")]
-
-
-def test_pop_from_job_console_preserves_locale_override(db0_fixture):
-    """Locale overrides travel with the queued message without altering legacy entries."""
-    job = _make_job(db0_fixture)
-    locale = StatekLocale(StatekLangCode.EN, StatekCountryCode.US)
-    queue = StatekPushQueue()
-
-    queue.push_to_job_console(db0.uuid(job), "show schedule", locale=locale)
-
-    _, payload = queue.pop_from_job_console(1)[0]
-    assert payload.message == "show schedule"
-    assert payload.locale is locale
 
 
 def test_pop_from_job_console_respects_count(db0_fixture):

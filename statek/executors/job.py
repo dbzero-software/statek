@@ -623,8 +623,6 @@ class Job:
         self.__pending_chat_log: List[SubTaskLogItem] = []
         # Shared context is bound explicitly by the init_shared_context tool.
         self.__shared_context = None
-        # Locale selected by the queued user message awaiting its response.
-        self.__next_response_locale: Optional["StatekLocale"] = None
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
@@ -936,10 +934,10 @@ class Job:
     def _language_hint_suffix(self) -> str:
         """Return the configured locale hint suffix for user messages, if enabled.
 
-        A queued message locale applies before the JobDef locale. The result is
-        empty when neither locale exists or AUTO_LANG_HINT is disabled.
+        The result is empty when no JobDef locale exists or AUTO_LANG_HINT is
+        disabled.
         """
-        locale = self._effective_locale()
+        locale = self.job_def.locale
         if locale is None:
             return ""
         metadata = self.job_def.metadata or {}
@@ -949,12 +947,6 @@ class Job:
         if hint:
             return f" ({hint})"
         return ""
-
-    def _effective_locale(self) -> Optional["StatekLocale"]:
-        """Return the queued-message locale when present, otherwise JobDef locale."""
-        if not hasattr(self, "_Job__next_response_locale"):
-            self.__next_response_locale = None
-        return self.__next_response_locale or self.job_def.locale
 
     def _with_language_hint(self, message: str) -> str:
         """Append the locale language hint to a real user message when enabled."""
@@ -1383,10 +1375,10 @@ class Job:
         system_prompt = self.system_prompt()
 
         if (
-            self._effective_locale() is not None
+            self.job_def.locale is not None
             and metadata.get("AUTO_LANG_RULE", "").upper() != "FALSE"
         ):
-            lang_rule = get_language_rule(self._effective_locale().lang_code)
+            lang_rule = get_language_rule(self.job_def.locale.lang_code)
             if lang_rule:
                 system_prompt = f"{system_prompt}\n\n{lang_rule}"
 
@@ -1578,7 +1570,6 @@ class Job:
             llm_reasoning_payload=step_data.reasoning_payload,
         )
         self.chat_log.append(chat_item)
-        self.__next_response_locale = None
 
         # Log the LLM response in the same format sent back as history
         resp_code = stored_resp.code if isinstance(stored_resp, CodeBlock) else stored_resp
@@ -2188,7 +2179,7 @@ class Job:
             return str(adapter(message))
         return str(message)
 
-    def push_user_message(self, message: Any, locale: Optional["StatekLocale"] = None) -> bool:
+    def push_user_message(self, message: Any) -> bool:
         """Append a user message and re-activate the job if DONE.
 
         Intended for processing push notifications (e.g. a user writing a
@@ -2209,14 +2200,11 @@ class Job:
             message: The message to push. Non-string values are converted with
                 the agent's ``message_adapter`` when registered, otherwise with
                 ``str(message)``.
-            locale: Optional locale used only for the response to this message.
 
         Returns:
             True if the job was transitioned DONE → STARTED, False otherwise.
         """
         message = self._resolve_user_message(message)
-        if locale is not None:
-            self.__next_response_locale = locale
 
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             if not self.chat_log:
