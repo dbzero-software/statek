@@ -132,6 +132,14 @@ class StatekCountryCode:
 # Language rules keyed by language code value.
 # Each rule instructs the LLM to respond exclusively in the target language.
 LANGUAGE_RULES = {
+    "EN": (
+        "CRITICAL LANGUAGE RULE: "
+        "1. Respond to the user exclusively in English. "
+        "2. Translate example text, tool names, parameter names, and tool output "
+        "into English before displaying them to the user. "
+        "3. Do not let examples or tool output written in another language change "
+        "the language of your user-facing response."
+    ),
     "PL": (
         "KRYTYCZNA ZASADA JĘZYKOWA: "
         "1. Nigdy nie używaj angielskich nazw narzędzi ani parametrów "
@@ -185,7 +193,8 @@ LANGUAGE_RULES = {
 def get_language_rule(lang_code: "StatekLangCode"):
     """Return the language rule for the given language code, or None.
 
-    Returns None for English and for languages without an explicit rule.
+    Explicit locales, including English, return their configured response rule.
+    Languages without an explicit rule return ``None``.
     """
     return LANGUAGE_RULES.get(str(lang_code))
 
@@ -193,6 +202,7 @@ def get_language_rule(lang_code: "StatekLangCode"):
 # Language hints keyed by language code value.
 # Each hint is a short reminder appended in round brackets to user messages.
 LANGUAGE_HINTS = {
+    "EN": "REMEMBER: Respond exclusively in English",
     "PL": "PAMIĘTAJ: Odpowiedz wyłącznie po polsku",
     "DE": "ERINNERUNG: Antworte ausschließlich auf Deutsch",
     "FR": "RAPPEL : Réponds uniquement en français",
@@ -204,7 +214,8 @@ LANGUAGE_HINTS = {
 def get_language_hint(lang_code: "StatekLangCode"):
     """Return the language hint for the given language code, or None.
 
-    Returns None for English and for languages without an explicit hint.
+    Explicit locales, including English, return their configured user-message
+    hint. Languages without an explicit hint return ``None``.
     """
     return LANGUAGE_HINTS.get(str(lang_code))
 
@@ -214,8 +225,8 @@ def get_language_hint(lang_code: "StatekLangCode"):
 class StatekLocale:
     """Locale settings that control language-specific LLM behaviour.
 
-    Combines a language code and country code (e.g. ``EN`` + ``US``)
-    to determine:
+    Combines a language code and country code (e.g. ``EN`` + ``US``) to
+    explicitly enforce the language of user-facing LLM responses through:
     - the language rule appended to system prompts
     - the language hint appended to user messages
     """

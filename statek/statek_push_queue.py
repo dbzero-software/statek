@@ -14,13 +14,25 @@
 
 """StatekPushQueue - singleton wrapper over FiFoQueue(s) for inter-process messaging."""
 # pylint: disable=no-member
+from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 import dbzero as db0
 from dbzero_modelkit.queues import FiFoQueue
 
 from statek.agents.agent import SupervisedAgent
+from statek.locale import StatekLocale
 from statek.rpc_integration import rpc as db0_rpc
+
+
+@db0.memo(no_default_tags=True)
+@dataclass
+class JobConsoleMessage:
+    """Job-console message with an optional locale for its next response."""
+
+    message: Any
+    locale: Optional[StatekLocale] = None
+
 
 @db0.memo(singleton=True)
 class StatekPushQueue:
@@ -41,13 +53,22 @@ class StatekPushQueue:
         return self.__job_console_queue.is_empty()
 
     @db0_rpc.remote
-    def push_to_job_console(self, job_uuid: str, message: Any):
-        """Append a (job_uuid, message) pair to the job-console queue.
+    def push_to_job_console(
+        self,
+        job_uuid: str,
+        message: Any,
+        locale: Optional[StatekLocale] = None,
+    ):
+        """Append a job-console message with an optional one-response locale.
 
         Args:
             job_uuid: The job object's UUID (may be from a different prefix).
             message: Arbitrary string-convertible object to push.
+            locale: Optional locale that applies only to this message's next
+                generated response.
         """
+        if locale is not None:
+            message = JobConsoleMessage(message=message, locale=locale)
         self.__job_console_queue.push_back(job_uuid=job_uuid, message=message)
 
     def push_to_agent_queue(self, agent: SupervisedAgent, event: Any):

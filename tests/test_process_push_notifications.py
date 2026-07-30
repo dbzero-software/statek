@@ -4,6 +4,7 @@ import dbzero as db0
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
+from statek.locale import StatekCountryCode, StatekLangCode, StatekLocale
 from statek.statek_push_queue import StatekPushQueue
 from statek.executors.utils import process_push_notifications
 
@@ -121,6 +122,56 @@ class TestProcessPushNotifications:
         assert not isinstance(val, str)
         assert "msg1" in val
         assert "msg2" in val
+
+    def test_uses_locale_override_for_only_the_next_response(self, db0_fixture):
+        """A queued locale override wins once, then the job returns to its base locale."""
+        job = _make_started_job()
+        base_locale = StatekLocale(StatekLangCode.PL, StatekCountryCode.PL)
+        override_locale = StatekLocale(StatekLangCode.EN, StatekCountryCode.US)
+        job.job_def.locale = base_locale
+        queue = StatekPushQueue()
+
+        queue.push_to_job_console(db0.uuid(job), "show schedule", locale=override_locale)
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
+
+        first_request = job.get_next_request()
+        assert "CRITICAL LANGUAGE RULE" in first_request["system_prompt"]
+        assert "exclusively in English" in first_request["system_prompt"]
+        assert job.job_def.locale is base_locale
+
+        job.append_chat_log(first_request, type("Response", (), {
+            "step_data": type("Step", (), {
+                "call_requests": [], "text": "done", "reasoning_payload": None
+            })()
+        })())
+        second_request = job.get_next_request()
+        assert "KRYTYCZNA ZASADA JĘZYKOWA" in second_request["system_prompt"]
+
+    def test_uses_polish_locale_override_without_mutating_job_def(self, db0_fixture):
+        """A Polish queued-message locale overrides an English base locale once."""
+        job = _make_started_job()
+        base_locale = StatekLocale(StatekLangCode.EN, StatekCountryCode.US)
+        override_locale = StatekLocale(StatekLangCode.PL, StatekCountryCode.PL)
+        job.job_def.locale = base_locale
+        queue = StatekPushQueue()
+
+        queue.push_to_job_console(db0.uuid(job), "pokaż grafik", locale=override_locale)
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
+
+        request = job.get_next_request()
+        assert "KRYTYCZNA ZASADA JĘZYKOWA" in request["system_prompt"]
+        assert job.job_def.locale is base_locale
+
+    def test_notification_without_locale_inherits_job_def_locale(self, db0_fixture):
+        """Legacy queued messages use the locale configured on the reusable JobDef."""
+        job = _make_started_job()
+        job.job_def.locale = StatekLocale(StatekLangCode.PL, StatekCountryCode.PL)
+        queue = StatekPushQueue()
+
+        queue.push_to_job_console(db0.uuid(job), "pokaż grafik")
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
+
+        assert "KRYTYCZNA ZASADA JĘZYKOWA" in job.get_next_request()["system_prompt"]
 
     def test_processes_notifications_for_multiple_jobs(self, db0_fixture):
         job1 = _make_started_job()

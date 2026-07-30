@@ -47,7 +47,7 @@ from statek.provider_config import (
 )
 from statek.executors.chat_log_item import ToolError, WarmupLogItem
 from statek.executors.post_processor import post_processing_identity
-from statek.statek_push_queue import StatekPushQueue
+from statek.statek_push_queue import JobConsoleMessage, StatekPushQueue
 from statek.llm_api import LLM_API, LLM_Response
 from statek.llm_harness import get_llm_harness
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
@@ -1244,9 +1244,13 @@ def process_push_notifications(
             for job_uuid, message in items:
                 try:
                     job = db0.fetch(job_uuid)
+                    locale = None
+                    if isinstance(message, JobConsoleMessage):
+                        locale = message.locale
+                        message = message.message
                     if not isinstance(message, str):
                         job.add_ext_ref(message)
-                    job.push_user_message(message)
+                    job.push_user_message(message, locale=locale)
                 except Exception:  # pylint: disable=broad-except
                     pass
                 processed += 1
