@@ -64,6 +64,32 @@ def test_zero_reasoning_does_not_require_or_send_mapping(db0_fixture):
     assert payload == {"model": "gpt-5", "messages": []}
 
 
+def test_zero_reasoning_uses_an_explicit_provider_mapping(db0_fixture):
+    """An explicit level-zero mapping overrides a model's default reasoning effort."""
+    api = DefaultLLM_API_Impl(_settings())
+    config = ProviderConfig({
+        "openai": {
+            "gpt-5.6-terra": {
+                "reasoning": {
+                    "reasoning_level": [{
+                        "range": {"from": 0, "to": 0},
+                        "payload": {"reasoning": {"effort": "none"}},
+                    }],
+                },
+            },
+        },
+    })
+
+    payload = api.preview_request(
+        model="openai/gpt-5.6-terra/rl=0",
+        metadata={"PROVIDER": "OPENAI"},
+        provider_config=config,
+    )
+
+    assert payload["model"] == "gpt-5.6-terra"
+    assert payload["reasoning"] == {"effort": "none"}
+
+
 def test_metadata_provider_controls_model_formatting_and_reasoning_lookup(db0_fixture):
     """The effective provider formats a family/model selection and finds its mapping."""
     api = DefaultLLM_API_Impl(_settings())
