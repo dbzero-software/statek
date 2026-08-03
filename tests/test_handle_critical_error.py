@@ -1,6 +1,6 @@
 """Tests for handle_critical_error and its integration with job_worker."""
 
-# pylint: disable=too-few-public-methods
+# pylint: disable=too-few-public-methods,no-member
 
 import asyncio
 from unittest.mock import AsyncMock, patch
@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from statek.exceptions import LLM_HarnessError
+from statek.executors.job import JobDefError, JobStatus
 from statek.executors.utils import handle_critical_error, job_worker
 from statek.system import error_handler
 from statek.utils import _statek_ctx_scope
@@ -58,6 +59,9 @@ class TestHandleCriticalError:
 
         assert len(_call_log) == 1
         assert isinstance(_call_log[0][1], LLM_HarnessError)
+        assert job.status == JobStatus.DONE
+        assert isinstance(job.error, JobDefError)
+        assert job.error.error_message == "too many turns"
 
     @pytest.mark.asyncio
     async def test_job_worker_notifies_handlers_on_generic_exception(self, job_factory):
@@ -74,3 +78,6 @@ class TestHandleCriticalError:
 
         assert len(_call_log) == 1
         assert _call_log[0][1] is exc
+        assert job.status == JobStatus.DONE
+        assert isinstance(job.error, JobDefError)
+        assert job.error.error_message == "unexpected failure"

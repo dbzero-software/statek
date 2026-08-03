@@ -53,6 +53,15 @@ def _run_with_current_job(job, func):
         return func()
 
 
+@db0.memo
+class BrokenSubTaskHistoryHandler(SubTaskHandler):
+    """Completed subtask handler whose specialized history rendering fails."""
+
+    def get_log_message(self) -> str:
+        """Raise to model an application-specific display failure."""
+        raise RuntimeError("specialized history rendering failed")
+
+
 def _completed_subtask_handler(job, subtask_id=None, result=None, error=None):
     """Create a completed handler fixture before the public complete API exists."""
     handler = SubTaskHandler(job=job, id=subtask_id)
@@ -147,6 +156,18 @@ class TestJobWithError:
             job.error = err
             assert job.error is err
         assert job.error.error_message == "job failed"
+
+    def test_constructor_preserves_supplied_job_error(self, job_def_factory, db0_fixture):  # pylint: disable=unused-argument
+        """Job preserves the existing error object supplied at construction."""
+        error = JobDefError(RuntimeError("job failed"))
+        job = Job(
+            job_def=job_def_factory(),
+            model_family="test",
+            model="test-model",
+            error=error,
+        )
+
+        assert job.error is error
 
 
 class TestJobAddLocals:
@@ -2739,6 +2760,25 @@ class TestSubTaskNotifications:
         assert len(history) == 1
         assert history[0].role == ChatRole.SYSTEM
         assert history[0].content == "[Error] sub-task id=child-1 failed with failed"
+
+    def test_broken_subtask_log_message_uses_generic_history_notification(self, job_factory):
+        """A broken specialized handler does not hide adjacent history entries."""
+        job = job_factory()
+        handler = BrokenSubTaskHistoryHandler(job=job_factory(), id="child-1")
+        handler.complete(result="done")
+        job.chat_log.extend([
+            UserLogItem(message="before subtask"),
+            SubTaskLogItem(console_pos=0, handler=handler),
+            UserLogItem(message="after subtask"),
+        ])
+
+        history = list(job.get_chat_history())
+
+        assert [item.content for item in history] == [
+            "before subtask",
+            "[Notification] sub-task id=child-1 completed successfully.",
+            "after subtask",
+        ]
 
     def test_find_sub_task_handler_searches_reverse_chat_log(self, job_factory):
         """Most recent handlers are found first unless an id is requested."""

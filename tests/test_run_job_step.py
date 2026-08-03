@@ -16,6 +16,7 @@ from statek.executors.chat_log_item import (
     PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
+    ToolError,
 )
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.post_processor import PostProcessor
@@ -1251,8 +1252,8 @@ class TestRunJobStepCliToolCalls:
         assert not any("cli-out" in line for line in job.py_env.console or [])
 
     @pytest.mark.asyncio
-    async def test_cli_error_output_stored_only_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
-        """python_cli error output lands in tool_log, not in job console."""
+    async def test_cli_error_stored_as_tool_error_only_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
+        """python_cli errors are ToolError entries and do not enter the job console."""
         cs = CallSpec(id="C-001", func_name="python_cli",
                       kwargs={"code": '1 / 0'})
         warmup_code = [CodeBlock(code=None, tool_calls=[cs]), 'exit("ok")']
@@ -1274,7 +1275,55 @@ class TestRunJobStepCliToolCalls:
         assert len(warmup_items) >= 1
         tool_log = warmup_items[0].tool_log
         assert len(tool_log) == 1
-        assert "ZeroDivisionError" in tool_log[0]
+        assert isinstance(tool_log[0], ToolError)
+        assert "ZeroDivisionError" in tool_log[0].err_message
+
+    @pytest.mark.asyncio
+    async def test_cli_error_on_llm_turn_counts_as_exception(self, job_def_factory):
+        """A failed python_cli call on an LLM turn contributes to exception limits."""
+        cli_call = CallSpec(
+            id="C-001",
+            func_name="python_cli",
+            kwargs={"code": "1 / 0"},
+        )
+        job = Job(
+            job_def=job_def_factory(),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.STARTED,
+        )
+        job.chat_log.append(
+            LLM_LogItem(console_pos=0, llm_resp=CodeBlock(code=None, tool_calls=[cli_call]))
+        )
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=_llm_response("next step"))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api:
+            mock_llm_api.get.return_value = mock_api
+            await run_job_step(job)
+
+        tool_result = job.chat_log[0].get_tool_result(0)
+        assert isinstance(tool_result, ToolError)
+        assert job.exception_count == 1
+        assert job.max_consecutive_exceptions == 1
+
+    @pytest.mark.asyncio
+    async def test_code_triggered_exit_runs_harness_post_check(self, job_def_factory):
+        """A code-triggered terminal transition enforces post-step limits."""
+        job = Job(
+            job_def=job_def_factory(warmup_code='exit("done")'),
+            model_family="test",
+            model="test-model",
+            job_status=JobStatus.READY,
+        )
+        mock_harness = MagicMock()
+
+        with patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            result = await run_job_step(job)
+
+        assert result is True
+        assert job.status == JobStatus.DONE
+        mock_harness.check_after_step.assert_called_once_with(job)
 
     @pytest.mark.asyncio
     async def test_cli_no_output_leaves_tool_log_none(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1512,6 +1561,7 @@ class TestRunJobStepMdDialog:
         assert result is True
         assert job.status == JobStatus.DONE
         mock_handle.assert_called_once()
+        mock_harness.check_after_step.assert_called_once_with(job)
 
     @pytest.mark.asyncio
     async def test_md_dialog_text_only_response_with_reminder_continues(
