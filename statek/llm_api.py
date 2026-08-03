@@ -144,19 +144,20 @@ def _resolve_reasoning_request(
             raise ValueError("reasoning level must be an integer from 0 through 100") from exc
         if not 0 <= level <= 100 or str(level) != aliases[0].strip():
             raise ValueError("reasoning level must be an integer from 0 through 100")
-        if level > 0:
-            if provider_config is None:
-                raise ValueError("positive reasoning level requires a provider configuration")
+        if provider_config is not None:
             payload = provider_config.find_payload(
                 provider, model_name.model_family, model_name.model, reasoning_level=level)
-            if payload is None:
+            if payload is not None:
+                ignored_parameters = provider_config.find_ignored_parameters(
+                    provider,
+                    model_name.model_family,
+                    model_name.model,
+                ) or []
+            elif level > 0:
                 raise ValueError(
                     "positive reasoning level has no matching provider configuration payload")
-            ignored_parameters = provider_config.find_ignored_parameters(
-                provider,
-                model_name.model_family,
-                model_name.model,
-            ) or []
+        elif level > 0:
+            raise ValueError("positive reasoning level requires a provider configuration")
     upstream_model = (
         format_model_for_provider(model_name, provider)
         if provider is not None else (
