@@ -17,6 +17,7 @@
 # pylint: disable=no-member
 
 from abc import ABC, abstractmethod
+import asyncio
 from collections import namedtuple
 from functools import lru_cache
 from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, Any, Type
@@ -43,6 +44,9 @@ _INTERNAL_LLM_API_PROVIDER_ALIASES = {
     "VERTEXAI", "VERTEX_AI", "GOOGLE_VERTEXAI", "GOOGLE",
     "CLAUDEAI", "CLAUDE_AI", "CLAUDE", "ANTHROPIC",
 }
+_LLM_API_RETRY_DELAYS_SECONDS = (3, 15)
+
+
 def _func_name_from_tool_calls(tool_calls) -> str:
     """Return the function name from a single CallSpec or the first item of a list."""
     if tool_calls is None:
@@ -575,6 +579,22 @@ class LLM_API(ABC):
             provider_config=provider_config,
         ))
 
+    @staticmethod
+    def _is_retryable_request_error(error: httpx.HTTPError) -> bool:
+        """Return whether an HTTP client failure is likely temporary and external."""
+        if isinstance(error, httpx.HTTPStatusError):
+            status_code = error.response.status_code
+            return status_code in (408, 429) or 500 <= status_code <= 599
+        return isinstance(
+            error,
+            (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.ProxyError,
+                httpx.RemoteProtocolError,
+            ),
+        )
+
     async def process_request(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         system_prompt: Optional[str] = None,
@@ -627,8 +647,16 @@ class LLM_API(ABC):
             provider_config=provider_config,
         )
 
-        response = await self._process_request(**request_kwargs)
-        return response
+        for attempt_num in range(len(_LLM_API_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                return await self._process_request(**request_kwargs)
+            except httpx.HTTPError as error:
+                if (
+                    attempt_num == len(_LLM_API_RETRY_DELAYS_SECONDS)
+                    or not self._is_retryable_request_error(error)
+                ):
+                    raise
+                await asyncio.sleep(_LLM_API_RETRY_DELAYS_SECONDS[attempt_num])
 
     @abstractmethod
     def _build_request_payload(  # pylint: disable=too-many-arguments,too-many-positional-arguments
