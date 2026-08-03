@@ -614,7 +614,6 @@ class Job:
         # The last dynamically-resolved difficulty level in this task.
         self.__last_difficulty: Optional[TaskDifficulty] = None
         self.usage = LLM_Usage(pricing=self._current_model_pricing())
-        self.error = None
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
         # Application-specific external memo references, created lazily.
@@ -1218,9 +1217,17 @@ class Job:
                 continue
 
             if isinstance(item, SubTaskLogItem):
+                try:
+                    notification = item.handler.get_log_message()
+                except Exception:  # pylint: disable=broad-except
+                    task_id = f" id={item.handler.id}" if item.handler.id is not None else ""
+                    if item.handler.error is not None:
+                        notification = f"[Error] sub-task{task_id} failed."
+                    else:
+                        notification = f"[Notification] sub-task{task_id} completed successfully."
                 yield ChatHistoryItem(
                     role=ChatRole.SYSTEM,
-                    content=item.handler.get_log_message(),
+                    content=notification,
                     content_src=ContentSource.SYSTEM,
                 )
                 if item.tool_log is not None:

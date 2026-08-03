@@ -35,6 +35,7 @@ from statek.executors.job import (
     Job,
     JobStatus,
     JobDef,
+    JobDefError,
     job_def_identity_tag_for_job_def,
     parse_warmup_code,
     _job_def_identity_tag,
@@ -630,7 +631,8 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
 
 async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
                         instr_num: Optional[int] = None,
-                        local_context: Optional[dict] = None) -> bool:
+                        local_context: Optional[dict] = None,
+                        error_append: Optional[Callable] = None) -> bool:
     """Execute a code block submitted via a ``python_cli`` tool request.
 
     Behaves like :func:`exec_step` — same context sharing, temporal-function
@@ -643,6 +645,8 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         job: the Job providing the execution context.
         console_append: callback receiving each console output line.
         instr_num: optional instruction index to resume from.
+        error_append: optional callback receiving each execution-error line.
+            When omitted, errors use ``console_append`` for compatibility.
 
     Returns:
         ``True`` if ``exit()`` was called (program finished), ``False``
@@ -663,7 +667,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         _exec_code_body(
             code_str, job, global_context, local_context,
             output_fn=console_append,
-            error_fn=console_append,
+            error_fn=error_append or console_append,
             print_fn=cli_print,
             instr_num=instr_num,
         )
@@ -676,9 +680,10 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
 
 
 async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
-                         console_append: Callable,
-                         instr_num: Optional[Union[int, Tuple[int, int]]] = None,
-                         local_context: Optional[dict] = None) -> bool:
+                          console_append: Callable,
+                          instr_num: Optional[Union[int, Tuple[int, int]]] = None,
+                          local_context: Optional[dict] = None,
+                          error_append: Optional[Callable] = None) -> bool:
     """Execute regular code and any ``python_cli`` tool calls from a code block.
 
     First executes the regular code (if present) via :func:`exec_step`, then
@@ -700,6 +705,7 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
         job: the Job providing the execution context.
         console_append: callback ``(cli_tool_index, text)`` for CLI output.
         instr_num: optional continuation position.
+        error_append: optional callback ``(cli_tool_index, text)`` for CLI errors.
 
     Returns:
         ``True`` if ``exit()`` was called, ``False`` otherwise.
@@ -757,6 +763,7 @@ async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
                 console_append=lambda s, _idx=cli_idx: console_append(_idx, s),
                 instr_num=step_instr,
                 local_context=local_context,
+                error_append=lambda s, _idx=cli_idx: (error_append or console_append)(_idx, s),
             )
         except FutureError as e:
             e.instr_num = (cli_idx, e.instr_num)
@@ -1045,14 +1052,18 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 6: Execute code and CLI tool calls using exec_all_steps
         cli_outputs = {}  # cli_idx -> list of output lines
+        cli_errors = {}  # cli_idx -> list of error lines
         code_block = code if isinstance(code, CodeBlock) else CodeBlock(code=code)
 
         def _cli_console_append(cli_idx, text):
             cli_outputs.setdefault(cli_idx, []).append(text)
 
+        def _cli_error_append(cli_idx, text):
+            cli_errors.setdefault(cli_idx, []).append(text)
+
         try:
             await exec_all_steps(code_block, job, _cli_console_append, job.next_instr_num,
-                                local_context=local_context)
+                                local_context=local_context, error_append=_cli_error_append)
 
             # Clear continuation state after successful execution
             job.awaited_result = None
@@ -1087,18 +1098,22 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 ]
                 for cli_idx in range(len(cli_calls)):
                     joined = "\n".join(cli_outputs.get(cli_idx, []))
+                    error = "\n".join(cli_errors.get(cli_idx, []))
                     if (last_chat_log_item is not None
                             and last_chat_log_item.tool_log is not None
                             and cli_idx < len(cli_tool_log_positions)):
                         j = cli_tool_log_positions[cli_idx]
                         if j < len(last_chat_log_item.tool_log):
-                            last_chat_log_item.tool_log[j] = joined
+                            last_chat_log_item.tool_log[j] = (
+                                ToolError(err_message=error) if error else joined
+                            )
 
         # Step 9: If code has finished, transition to DONE and return True
         if job.py_env.exit_status is not None:
             # Apply the Step 16 follow-up guard before code-triggered DONE.
             if _process_pending_notification_follow_up(job, harness):
                 return False
+            harness.check_after_step(job)
             job.set_status(JobStatus.DONE)
             _log_pending_console(job)
             return True
@@ -1195,6 +1210,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             return False
         if _process_pending_notification_follow_up(job, harness):
             return False
+        harness.check_after_step(job)
         custom_exit(job)
         job.set_status(JobStatus.DONE)
         _log_pending_console(job)
@@ -1364,6 +1380,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"
                 job.console_append(error_msg, error_message=error_msg)
+                job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)
             except Exception as e:
@@ -1372,6 +1389,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 error_msg = f"Job {db0.uuid(job)} failed with error: {e}\n{traceback.format_exc()}"
                 statek_log(error_msg, level='error')
                 job.console_append(error_msg, error_message=error_msg)
+                job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)
 
