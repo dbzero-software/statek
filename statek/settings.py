@@ -16,6 +16,9 @@
 
 import os
 import logging
+import json
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from functools import lru_cache
 from typing import Any, Optional, Dict
 from pydantic import Field
@@ -416,3 +419,84 @@ def statek_log(message: str, level: str = 'info') -> None:
     log_func = getattr(logger, level.lower(), logger.info)
     formatted_message = f"{'-'*40}\n{message}\n{'-'*40}"
     log_func(formatted_message)
+
+
+_TRACE_SECRET_KEYS = {"api_key", "authorization", "cookie", "password", "secret", "token"}
+_FULL_AGENT_TRACE_LOGGER_NAME = "statek.full_agent_trace"
+_DEFAULT_FULL_AGENT_TRACE_PATH = "full_agent_trace.jsonl"
+_DEFAULT_FULL_AGENT_TRACE_MAX_BYTES = 10 * 1024 * 1024
+_DEFAULT_FULL_AGENT_TRACE_BACKUP_COUNT = 3
+
+
+def _is_trace_secret_key(key: object) -> bool:
+    """Return whether a trace field name is likely to hold credentials."""
+    normalized_key = str(key).casefold()
+    return any(secret_key in normalized_key for secret_key in _TRACE_SECRET_KEYS)
+
+
+def _redact_trace_data(value: Any) -> Any:
+    """Return trace data with credential-bearing fields replaced by a redaction marker."""
+    if isinstance(value, dict):
+        return {
+            str(key): "<redacted>"
+            if _is_trace_secret_key(key)
+            else _redact_trace_data(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_trace_data(item) for item in value]
+    return value
+
+
+def _get_full_agent_trace_logger() -> logging.Logger:
+    """Return the dedicated rotating JSONL logger for full agent traces."""
+    trace_path = Path(os.getenv("FULL_AGENT_TRACE_PATH", _DEFAULT_FULL_AGENT_TRACE_PATH)).resolve()
+    max_bytes = int(
+        os.getenv("FULL_AGENT_TRACE_MAX_BYTES", str(_DEFAULT_FULL_AGENT_TRACE_MAX_BYTES))
+    )
+    backup_count = int(
+        os.getenv("FULL_AGENT_TRACE_BACKUP_COUNT", str(_DEFAULT_FULL_AGENT_TRACE_BACKUP_COUNT))
+    )
+    logger = logging.getLogger(_FULL_AGENT_TRACE_LOGGER_NAME)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    matching_handler = next(
+        (
+            handler
+            for handler in logger.handlers
+            if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == trace_path
+        ),
+        None,
+    )
+    if matching_handler is not None:
+        return logger
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        trace_path,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    return logger
+
+
+def full_agent_trace(event: str, details: Dict[str, Any]) -> None:
+    """Emit opt-in structured agent diagnostics without credentials.
+
+    Full payload tracing is intentionally disabled unless ``FULL_AGENT_TRACE`` is
+    set to ``true``. Trace output can contain user content and must only be enabled
+    while diagnosing a local issue.
+    """
+    if os.getenv("FULL_AGENT_TRACE", "").casefold() != "true":
+        return
+    message = json.dumps(
+        {"event": event, "details": _redact_trace_data(details)},
+        default=str,
+        ensure_ascii=False,
+    )
+    _get_full_agent_trace_logger().info(message)

@@ -52,7 +52,7 @@ from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API, LLM_Response
 from statek.llm_harness import get_llm_harness
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
-from statek.settings import get_statek_settings, statek_log, ChatStyle
+from statek.settings import ChatStyle, full_agent_trace, get_statek_settings, statek_log
 from statek.system import inject_context
 from statek.python_sandbox import get_sandbox_policy
 from statek.dbzero_restricted import statek_internal_tool, llm_dbzero_restricted_context
@@ -652,6 +652,14 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         ``True`` if ``exit()`` was called (program finished), ``False``
         otherwise.
     """
+    job_uuid = str(db0.uuid(job))
+    context_names = set(job.py_env.local_state or {})
+    if job.job_def.agent is not None and job.job_def.agent.context is not None:
+        context_names.update(job.job_def.agent.context)
+    full_agent_trace(
+        "python_cli.request",
+        {"job_uuid": job_uuid, "code": code_str, "context_names": sorted(context_names)},
+    )
     if job.py_env.global_state is None:
         global_context = globals()
     else:
@@ -661,13 +669,19 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
 
     def cli_print(*args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
+        full_agent_trace("python_cli.output", {"job_uuid": job_uuid, "output": output.rstrip('\n')})
         console_append(output.rstrip('\n'))
+
+    def cli_error(error_message: str) -> None:
+        """Trace Python CLI errors before forwarding them to the existing callback."""
+        full_agent_trace("python_cli.error", {"job_uuid": job_uuid, "error": error_message})
+        (error_append or console_append)(error_message)
 
     try:
         _exec_code_body(
             code_str, job, global_context, local_context,
             output_fn=console_append,
-            error_fn=error_append or console_append,
+            error_fn=cli_error,
             print_fn=cli_print,
             instr_num=instr_num,
         )
@@ -676,7 +690,9 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
             job.py_env.local_state = {}
         _copy_modified_locals(local_context, job.py_env.local_state)
 
-    return job.py_env.exit_status is not None
+    exited = job.py_env.exit_status is not None
+    full_agent_trace("python_cli.completed", {"job_uuid": job_uuid, "exited": exited})
+    return exited
 
 
 async def exec_all_steps(code: Union[str, CodeBlock], job: Job,
@@ -797,6 +813,16 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         string on failure.
     """
     private_console = []
+    job_uuid = str(db0.uuid(job))
+    tool_trace_details = {
+        "job_uuid": job_uuid,
+        "tool_name": call_spec.func_name,
+        "arguments": {
+            "args": list(call_spec.args) if call_spec.args else [],
+            "kwargs": dict(call_spec.kwargs) if call_spec.kwargs else {},
+        },
+    }
+    full_agent_trace("tool.request", tool_trace_details)
 
     def _private_print(*args, sep=' ', end='\n', **kwargs):
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
@@ -805,6 +831,10 @@ async def exec_tool(call_spec: CallSpec, job: Job,
     policy = _execution_sandbox_policy()
     if _is_hidden_tool_call(call_spec, job, policy):
         error_msg = f"NameError: tool '{call_spec.func_name}' is not exposed to this job"
+        full_agent_trace(
+            "tool.error",
+            {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "error": error_msg},
+        )
         return error_msg, error_msg
 
     # Build global and local contexts — mirrors exec_step
@@ -842,6 +872,10 @@ async def exec_tool(call_spec: CallSpec, job: Job,
 
         if func is None:
             error_msg = f"NameError: tool '{call_spec.func_name}' not found"
+            full_agent_trace(
+                "tool.error",
+                {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "error": error_msg},
+            )
             return error_msg, error_msg
 
         try:
@@ -859,9 +893,19 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         except Exception as e:  # pylint: disable=broad-exception-caught
             error_msg = f"{type(e).__name__}: {e}"
             private_console.append(error_msg)
-            return "\n".join(private_console), error_msg
+            result_text = "\n".join(private_console)
+            full_agent_trace(
+                "tool.error",
+                {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "error": error_msg},
+            )
+            return result_text, error_msg
 
-    return "\n".join(private_console), None
+    result_text = "\n".join(private_console)
+    full_agent_trace(
+        "tool.output",
+        {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "result": result_text},
+    )
+    return result_text, None
 
 
 def _log_pending_console(job: Job):

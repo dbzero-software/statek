@@ -23,7 +23,7 @@ from typing import Optional, Iterable, Sequence, List, Dict, Callable, Tuple, An
 import json
 import httpx
 
-from .settings import LLM_API_Settings, get_provider_settings
+from .settings import LLM_API_Settings, full_agent_trace, get_provider_settings
 from .exceptions import InvalidFormat
 from .chat_history import (
     ChatHistoryItem, ChatRole, format_chat_history_item,
@@ -873,6 +873,7 @@ class DefaultLLM_API_Impl(LLM_API):
         # Measure bytes sent
         payload_bytes = json.dumps(payload).encode('utf-8')
         total_bytes_sent = len(payload_bytes)
+        full_agent_trace("llm.request", {"provider_url": self.api_url, "payload": payload})
 
         # Make the async HTTP request
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -888,6 +889,7 @@ class DefaultLLM_API_Impl(LLM_API):
 
             # Parse the response
             data = response.json()
+            full_agent_trace("llm.response", {"provider_url": self.api_url, "payload": data})
 
             if "choices" not in data or not data["choices"]:
                 error_detail = data.get("error", {}).get("message", str(data))
@@ -900,6 +902,15 @@ class DefaultLLM_API_Impl(LLM_API):
             call_requests = (
                 [extract_call_params(tc) for tc in raw_tool_calls]
                 if raw_tool_calls else None
+            )
+            full_agent_trace(
+                "llm.parsed_tool_calls",
+                {
+                    "tool_calls": [
+                        {"name": call.name, "arguments": call.kwargs}
+                        for call in call_requests or []
+                    ],
+                },
             )
 
             response_text = message.get("content") or ""
