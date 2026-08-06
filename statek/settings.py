@@ -31,6 +31,10 @@ from statek.prompt_config import PromptDef, load_prompt_files
 from statek.docstring import ACL_Item, Statek_ACL
 
 
+_TRACE_SECRET_KEYS = {"api_key", "authorization", "cookie", "password", "secret", "token"}
+_FULL_AGENT_TRACE_LOGGER_NAME = "statek.full_agent_trace"
+
+
 class LLM_API_Settings(BaseSettings):
     """Settings for a specific LLM provider (e.g. OpenAI, OpenRouter, Google).
 
@@ -90,6 +94,14 @@ class StatekSettings(MultiSourceBaseSettings):
     xml_box_example: Optional[str] = None
     """Log level for statek logger (INFO, WARNING, ERROR, CRITICAL)"""
     log_level: str = "ERROR"
+    """Whether to persist detailed LLM and tool traces for tests and debugging."""
+    full_agent_trace: bool = False
+    """JSONL output file for detailed agent traces."""
+    full_agent_trace_path: str = "full_agent_trace.jsonl"
+    """Maximum bytes per detailed-agent-trace file before rotation."""
+    full_agent_trace_max_bytes: int = 10 * 1024 * 1024
+    """Number of rotated detailed-agent-trace files to retain."""
+    full_agent_trace_backup_count: int = 3
     """The default ACL mode string: GRANT or DENY (loaded from STATEK_DEFAULT_ACL)"""
     default_acl_str: str = "DENY"
     """Host for the STATEK RPC server"""
@@ -195,6 +207,20 @@ class StatekSettings(MultiSourceBaseSettings):
         if env_val is not None:
             self.log_level = env_val.upper()
         set_log_level(self.log_level)
+
+        env_val = os.environ.get('FULL_AGENT_TRACE')
+        if env_val is not None and 'full_agent_trace' not in data:
+            self.full_agent_trace = env_val.casefold() == 'true'
+
+        for attr, env_var in [
+            ('full_agent_trace_path', 'FULL_AGENT_TRACE_PATH'),
+            ('full_agent_trace_max_bytes', 'FULL_AGENT_TRACE_MAX_BYTES'),
+            ('full_agent_trace_backup_count', 'FULL_AGENT_TRACE_BACKUP_COUNT'),
+        ]:
+            env_val = os.environ.get(env_var)
+            if env_val is not None and attr not in data:
+                value = int(env_val) if attr.endswith(('_max_bytes', '_backup_count')) else env_val
+                setattr(self, attr, value)
 
         env_val = os.environ.get('STATEK_DEFAULT_ACL')
         if env_val is not None and 'default_acl_str' not in data:
@@ -421,13 +447,6 @@ def statek_log(message: str, level: str = 'info') -> None:
     log_func(formatted_message)
 
 
-_TRACE_SECRET_KEYS = {"api_key", "authorization", "cookie", "password", "secret", "token"}
-_FULL_AGENT_TRACE_LOGGER_NAME = "statek.full_agent_trace"
-_DEFAULT_FULL_AGENT_TRACE_PATH = "full_agent_trace.jsonl"
-_DEFAULT_FULL_AGENT_TRACE_MAX_BYTES = 10 * 1024 * 1024
-_DEFAULT_FULL_AGENT_TRACE_BACKUP_COUNT = 3
-
-
 def _is_trace_secret_key(key: object) -> bool:
     """Return whether a trace field name is likely to hold credentials."""
     normalized_key = str(key).casefold()
@@ -448,15 +467,9 @@ def _redact_trace_data(value: Any) -> Any:
     return value
 
 
-def _get_full_agent_trace_logger() -> logging.Logger:
+def _get_full_agent_trace_logger(settings: StatekSettings) -> logging.Logger:
     """Return the dedicated rotating JSONL logger for full agent traces."""
-    trace_path = Path(os.getenv("FULL_AGENT_TRACE_PATH", _DEFAULT_FULL_AGENT_TRACE_PATH)).resolve()
-    max_bytes = int(
-        os.getenv("FULL_AGENT_TRACE_MAX_BYTES", str(_DEFAULT_FULL_AGENT_TRACE_MAX_BYTES))
-    )
-    backup_count = int(
-        os.getenv("FULL_AGENT_TRACE_BACKUP_COUNT", str(_DEFAULT_FULL_AGENT_TRACE_BACKUP_COUNT))
-    )
+    trace_path = Path(settings.full_agent_trace_path).resolve()
     logger = logging.getLogger(_FULL_AGENT_TRACE_LOGGER_NAME)
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -476,8 +489,8 @@ def _get_full_agent_trace_logger() -> logging.Logger:
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
         trace_path,
-        maxBytes=max_bytes,
-        backupCount=backup_count,
+        maxBytes=settings.full_agent_trace_max_bytes,
+        backupCount=settings.full_agent_trace_backup_count,
         encoding="utf-8",
     )
     handler.setFormatter(logging.Formatter("%(message)s"))
@@ -488,15 +501,15 @@ def _get_full_agent_trace_logger() -> logging.Logger:
 def full_agent_trace(event: str, details: Dict[str, Any]) -> None:
     """Emit opt-in structured agent diagnostics without credentials.
 
-    Full payload tracing is intentionally disabled unless ``FULL_AGENT_TRACE`` is
-    set to ``true``. Trace output can contain user content and must only be enabled
-    while diagnosing a local issue.
+    Use for local tests and issue diagnosis. Because trace output can contain user
+    content, it must only be enabled in controlled environments while diagnosing an issue.
     """
-    if os.getenv("FULL_AGENT_TRACE", "").casefold() != "true":
+    settings = get_statek_settings()
+    if not settings.full_agent_trace:
         return
     message = json.dumps(
         {"event": event, "details": _redact_trace_data(details)},
         default=str,
         ensure_ascii=False,
     )
-    _get_full_agent_trace_logger().info(message)
+    _get_full_agent_trace_logger(settings).info(message)
