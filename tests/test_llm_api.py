@@ -2,8 +2,9 @@
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-lines,no-member
 """Tests for LLM_API process_request available_tools / LLM_TOOLS_SCOPE integration."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
+import httpx
 import pytest
 
 from statek.llm_api import (
@@ -567,6 +568,130 @@ class TestProcessRequestToolScope:
         tool_names = [t.__name__ for t in captured["tools"]]
         duplicates = [n for n in set(tool_names) if tool_names.count(n) > 1]
         assert duplicates == [], f"Duplicate tools in merged list: {duplicates}"
+
+
+class TestProcessRequestRetries:
+    """Tests for retrying temporary external LLM API failures."""
+
+    @staticmethod
+    def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://provider.test/requests")
+        response = httpx.Response(status_code=status_code, request=request)
+        return httpx.HTTPStatusError(
+            f"provider returned {status_code}",
+            request=request,
+            response=response,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [408, 429, 500, 503])
+    async def test_retries_retryable_http_statuses_after_three_seconds(
+            self, openrouter_api, status_code):
+        process_request = AsyncMock(side_effect=[
+            self._http_status_error(status_code),
+            _make_response(),
+        ])
+        sleep = AsyncMock()
+
+        with patch.object(openrouter_api, "_process_request", process_request), \
+                patch("statek.llm_api.asyncio.sleep", sleep):
+            response = await openrouter_api.process_request(model="gpt-4o")
+
+        assert response == _make_response()
+        assert process_request.await_count == 2
+        sleep.assert_awaited_once_with(3)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_type", [
+        httpx.ConnectError,
+        httpx.ReadTimeout,
+        httpx.ProxyError,
+        httpx.RemoteProtocolError,
+    ])
+    async def test_retries_temporary_transport_errors_after_three_seconds(
+            self, openrouter_api, error_type):
+        request = httpx.Request("POST", "https://provider.test/requests")
+        process_request = AsyncMock(side_effect=[
+            error_type("temporary provider connection failure", request=request),
+            _make_response(),
+        ])
+        sleep = AsyncMock()
+
+        with patch.object(openrouter_api, "_process_request", process_request), \
+                patch("statek.llm_api.asyncio.sleep", sleep):
+            response = await openrouter_api.process_request(model="gpt-4o")
+
+        assert response == _make_response()
+        assert process_request.await_count == 2
+        sleep.assert_awaited_once_with(3)
+
+    @pytest.mark.asyncio
+    async def test_retries_with_three_then_fifteen_second_delays(self, openrouter_api):
+        retryable_error = self._http_status_error(429)
+        process_request = AsyncMock(side_effect=[
+            retryable_error,
+            retryable_error,
+            _make_response(),
+        ])
+        sleep = AsyncMock()
+
+        with patch.object(openrouter_api, "_process_request", process_request), \
+                patch("statek.llm_api.asyncio.sleep", sleep):
+            response = await openrouter_api.process_request(model="gpt-4o")
+
+        assert response == _make_response()
+        assert process_request.await_count == 3
+        assert sleep.await_args_list == [((3,), {}), ((15,), {})]
+
+    @pytest.mark.asyncio
+    async def test_reraises_final_retryable_error_without_another_delay(self, openrouter_api):
+        final_error = self._http_status_error(503)
+        process_request = AsyncMock(side_effect=[
+            self._http_status_error(503),
+            self._http_status_error(503),
+            final_error,
+        ])
+        sleep = AsyncMock()
+
+        with patch.object(openrouter_api, "_process_request", process_request), \
+                patch("statek.llm_api.asyncio.sleep", sleep), \
+                pytest.raises(httpx.HTTPStatusError) as raised:
+            await openrouter_api.process_request(model="gpt-4o")
+
+        assert raised.value is final_error
+        assert process_request.await_count == 3
+        assert sleep.await_args_list == [((3,), {}), ((15,), {})]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [400, 401, 404])
+    async def test_does_not_retry_permanent_http_statuses(self, openrouter_api, status_code):
+        error = self._http_status_error(status_code)
+        process_request = AsyncMock(side_effect=error)
+        sleep = AsyncMock()
+
+        with patch.object(openrouter_api, "_process_request", process_request), \
+                patch("statek.llm_api.asyncio.sleep", sleep), \
+                pytest.raises(httpx.HTTPStatusError) as raised:
+            await openrouter_api.process_request(model="gpt-4o")
+
+        assert raised.value is error
+        assert process_request.await_count == 1
+        sleep.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_internal_errors(self, openrouter_api):
+        error = RuntimeError("invalid provider response")
+        process_request = AsyncMock(side_effect=error)
+        sleep = AsyncMock()
+
+        with patch.object(openrouter_api, "_process_request", process_request), \
+                patch("statek.llm_api.asyncio.sleep", sleep), \
+                pytest.raises(RuntimeError) as raised:
+            await openrouter_api.process_request(model="gpt-4o")
+
+        assert raised.value is error
+        assert process_request.await_count == 1
+        sleep.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
