@@ -2,6 +2,7 @@
 
 from typing import Any, Callable
 from unittest.mock import patch
+import dbzero as db0
 import pytest
 
 from statek.executors.utils import exec_tool
@@ -104,6 +105,52 @@ class TestExecTool:
 
         assert "7" in result
         assert job.py_env.console is None
+
+    @pytest.mark.asyncio
+    async def test_trace_records_direct_tool_request_and_output(self, db0_fixture, monkeypatch):  # pylint: disable=unused-argument
+        """Full tracing must record direct tool arguments and their formatted result."""
+        monkeypatch.setenv("FULL_AGENT_TRACE", "true")
+
+        def inspectable(value):
+            return f"result: {value}"
+
+        job = _make_job("role_trace", context_extras={"inspectable": inspectable})
+        call_spec = _call_spec("inspectable", kwargs={"value": "visible"})
+
+        with patch("statek.executors.utils.full_agent_trace") as trace:
+            await exec_tool(call_spec, job)
+
+        job_uuid = str(db0.uuid(job))  # pylint: disable=no-member
+        trace.assert_any_call(
+            "tool.request",
+            {
+                "job_uuid": job_uuid,
+                "tool_name": "inspectable",
+                "arguments": {"args": [], "kwargs": {"value": "visible"}},
+            },
+        )
+        trace.assert_any_call(
+            "tool.output",
+            {"job_uuid": job_uuid, "tool_name": "inspectable", "result": "result: visible"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_trace_records_direct_tool_error(self, db0_fixture, monkeypatch):  # pylint: disable=unused-argument
+        """Full tracing must record errors returned by direct tool execution."""
+        monkeypatch.setenv("FULL_AGENT_TRACE", "true")
+        job = _make_job("role_trace_error")
+
+        with patch("statek.executors.utils.full_agent_trace") as trace:
+            await exec_tool(_call_spec("missing_tool"), job)
+
+        trace.assert_any_call(
+            "tool.error",
+            {
+                "job_uuid": str(db0.uuid(job)),  # pylint: disable=no-member
+                "tool_name": "missing_tool",
+                "error": "NameError: tool 'missing_tool' not found",
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_return_value_list_uses_llm_repr_for_items(self, db0_fixture):  # pylint: disable=unused-argument
