@@ -1689,14 +1689,14 @@ async def run_agentic_loop(agent: 'Agent',
                            provider: str = None, auto_terminate: bool = False):
     """
     Helper function to start listening on arriving new tasks (e.g incoming user messages)
-    and process them with a specific agent such as Coordinator or MessageDispatcher.
+    and process them with a specific supervised agent.
 
     This function can be used as the agentic system's main loop - where the incoming user
     messages are processed with a specific specialized agent. Internally the function calls
     `run_jobs_loop` and runs indefinitely (unless auto_terminate is True).
 
     Args:
-        agent: the Agent instance (e.g. Coordinator or MessageDispatcher)
+        agent: The supervised agent that should process the event.
         warmup_code: the agent's warmup code - single block or sequence of blocks
                     (e.g. "user, message = fetch_next_message()")
         task_queue_size_func: a function for calculating the number of queued tasks 
