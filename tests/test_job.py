@@ -377,8 +377,8 @@ def test_job_system_prompt_allows_difficulty_override(agent):
     assert "High instructions." not in result
 
 
-class TestJob:
-    """Test cases for Job class."""
+class TestJobLoggingAndExternalRefs:
+    """Test cases for Job logging and external references."""
 
     def test_log_pending_console_accepts_initial_legacy_message(self, job_factory):
         """A leading legacy user message has no console boundary."""
@@ -434,6 +434,9 @@ class TestJob:
         job = job_factory()
         job.add_ext_ref("message")
         assert job.contains_ext_ref("message") is False
+
+class TestJobNextPrompt:
+    """Test cases for Job.get_next_prompt."""
 
     def test_get_next_prompt_first_prompt_empty_console(self, job_factory):
         """Test get_next_prompt when chat_log is empty and console is empty."""
