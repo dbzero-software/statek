@@ -46,7 +46,7 @@ from statek.provider_config import (
     provider_configs_match,
     resolve_settings_provider_config,
 )
-from statek.executors.chat_log_item import ToolError, WarmupLogItem
+from statek.executors.chat_log_item import ChatLogItem, ToolError, WarmupLogItem
 from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API, LLM_Response
@@ -929,8 +929,10 @@ def _log_pending_console(job: Job):
                 if last_idx + 1 < len(job.chat_log)
                 else last.console_pos
             )
-        else:
+        elif isinstance(last, ChatLogItem):
             from_pos = last.console_pos
+        else:
+            from_pos = 0
     else:
         from_pos = 0
     to_pos = len(job.py_env.console) if job.py_env.console else 0
