@@ -39,6 +39,7 @@ from statek.executors.chat_log_item import (
     WarmupLogItem,
 )
 from statek.executors.post_processor import PostProcessor
+from statek.executors.utils import _log_pending_console
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
@@ -376,8 +377,28 @@ def test_job_system_prompt_allows_difficulty_override(agent):
     assert "High instructions." not in result
 
 
-class TestJob:
-    """Test cases for Job class."""
+class TestJobLoggingAndExternalRefs:
+    """Test cases for Job logging and external references."""
+
+    def test_log_pending_console_accepts_initial_legacy_message(self, job_factory):
+        """A leading legacy user message has no console boundary."""
+        job = job_factory()
+        job.chat_log.append("Initial user message")
+        job.py_env.console_append("Console output")
+
+        with patch.object(Job, "_log_console_batch") as log_console_batch:
+            _log_pending_console(job)
+
+        log_console_batch.assert_called_once_with(0, 1)
+
+    def test_console_append_error_accepts_initial_legacy_message(self, job_factory):
+        """Error logging uses the initial console position for a legacy message."""
+        job = job_factory()
+        job.chat_log.append("Initial user message")
+
+        job.console_append("Failure", error_message="error")
+
+        assert job.py_env.exceptions == {0: "error"}
 
     def test_contains_ext_ref_false_before_add(self, job_factory):
         """Job does not report unrelated memo objects as external refs."""
@@ -413,6 +434,9 @@ class TestJob:
         job = job_factory()
         job.add_ext_ref("message")
         assert job.contains_ext_ref("message") is False
+
+class TestJobNextPrompt:
+    """Test cases for Job.get_next_prompt."""
 
     def test_get_next_prompt_first_prompt_empty_console(self, job_factory):
         """Test get_next_prompt when chat_log is empty and console is empty."""

@@ -904,7 +904,8 @@ class Job:
         """
         self.py_env.console_append(output)
         if error_message is not None:
-            console_pos = self.chat_log[-1].console_pos if self.chat_log else 0
+            last_item = self.chat_log[-1] if self.chat_log else None
+            console_pos = last_item.console_pos if isinstance(last_item, ChatLogItem) else 0
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
             self.py_env.exceptions[console_pos] = error_message

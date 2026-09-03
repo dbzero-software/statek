@@ -16,7 +16,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Callable, Mapping, Optional, Sequence, Union
 
 import dbzero as db0
 
@@ -69,6 +69,21 @@ def _agent_warmup_code(agent: Agent):
     return None
 
 
+def _no_queued_tasks() -> int:
+    """Return the default pull queue size for push-only agents."""
+    return 0
+
+
+def _task_queue_size_func(
+    agent: Agent,
+    task_queue_size_funcs: Optional[Mapping[Agent, Callable[[], int]]],
+) -> Callable[[], int]:
+    """Return the configured pull callback or the push-only default for an agent."""
+    if task_queue_size_funcs is None:
+        return _no_queued_tasks
+    return task_queue_size_funcs.get(agent, _no_queued_tasks)
+
+
 def _prepare_statek(agents: list[Agent], settings: StatekSettings) -> None:
     import statek  # pylint: disable=import-outside-toplevel,cyclic-import
 
@@ -93,8 +108,19 @@ async def start_statek_async(
     settings: Optional[StatekSettings] = None,
     max_concurrency: int = 100,
     provider: str = None,
+    task_queue_size_funcs: Optional[Mapping[Agent, Callable[[], int]]] = None,
 ):
-    """Prepare Statek agents and run the job processing loop."""
+    """Prepare Statek agents and run the job processing loop.
+
+    Args:
+        agents: Optional sequence of agents to activate.
+        push_queues: Optional Statek queues to monitor for events and notifications.
+        settings: Optional worker settings.
+        max_concurrency: Maximum number of jobs processed concurrently.
+        provider: Optional default LLM provider.
+        task_queue_size_funcs: Optional per-agent callbacks for legacy pull queues.
+            Agents absent from the mapping remain push-only.
+    """
     resolved_settings = settings or get_statek_settings()
     active_agents = _active_agents(agents)
     _prepare_statek(active_agents, resolved_settings)
@@ -104,7 +130,7 @@ async def start_statek_async(
         AgentLoopDef(
             agent=agent,
             warmup_code=_agent_warmup_code(agent),
-            task_queue_size_func=lambda: 0,
+            task_queue_size_func=_task_queue_size_func(agent, task_queue_size_funcs),
         )
         for agent in active_agents
     ]
@@ -135,6 +161,7 @@ def start_statek(
     settings: Optional[StatekSettings] = None,
     max_concurrency: int = 100,
     provider: str = None,
+    task_queue_size_funcs: Optional[Mapping[Agent, Callable[[], int]]] = None,
 ):
     """Blocking wrapper for :func:`start_statek_async`."""
     try:
@@ -147,6 +174,7 @@ def start_statek(
                 settings=settings,
                 max_concurrency=max_concurrency,
                 provider=provider,
+                task_queue_size_funcs=task_queue_size_funcs,
             )
         )
     raise RuntimeError(

@@ -46,7 +46,7 @@ from statek.provider_config import (
     provider_configs_match,
     resolve_settings_provider_config,
 )
-from statek.executors.chat_log_item import ToolError, WarmupLogItem
+from statek.executors.chat_log_item import ChatLogItem, ToolError, WarmupLogItem
 from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API, LLM_Response
@@ -929,8 +929,10 @@ def _log_pending_console(job: Job):
                 if last_idx + 1 < len(job.chat_log)
                 else last.console_pos
             )
-        else:
+        elif isinstance(last, ChatLogItem):
             from_pos = last.console_pos
+        else:
+            from_pos = 0
     else:
         from_pos = 0
     to_pos = len(job.py_env.console) if job.py_env.console else 0
@@ -1687,14 +1689,14 @@ async def run_agentic_loop(agent: 'Agent',
                            provider: str = None, auto_terminate: bool = False):
     """
     Helper function to start listening on arriving new tasks (e.g incoming user messages)
-    and process them with a specific agent such as Coordinator or MessageDispatcher.
+    and process them with a specific supervised agent.
 
     This function can be used as the agentic system's main loop - where the incoming user
     messages are processed with a specific specialized agent. Internally the function calls
     `run_jobs_loop` and runs indefinitely (unless auto_terminate is True).
 
     Args:
-        agent: the Agent instance (e.g. Coordinator or MessageDispatcher)
+        agent: The supervised agent that should process the event.
         warmup_code: the agent's warmup code - single block or sequence of blocks
                     (e.g. "user, message = fetch_next_message()")
         task_queue_size_func: a function for calculating the number of queued tasks 

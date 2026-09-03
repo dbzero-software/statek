@@ -56,6 +56,29 @@ async def test_start_statek_async_uses_single_agent_loop(db0_fixture, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_start_statek_async_uses_pull_callback_for_single_agent(db0_fixture, monkeypatch):
+    agent = _agent()
+    calls = {}
+
+    def pull_queue_size() -> int:
+        return 3
+
+    async def fake_loop(**kwargs):
+        calls.update(kwargs)
+
+    monkeypatch.setattr("statek.runner.run_agentic_loop", fake_loop)
+    monkeypatch.setattr("statek.runner.StatekClientAPI", Mock())
+
+    await start_statek_async(
+        agents=[agent],
+        settings=_settings(),
+        task_queue_size_funcs={agent: pull_queue_size},
+    )
+
+    assert calls["task_queue_size_func"] is pull_queue_size
+
+
+@pytest.mark.asyncio
 async def test_start_statek_async_uses_fleet_for_multiple_agents(db0_fixture, monkeypatch):
     agent_a = _agent("runner-a")
     agent_b = _agent("runner-b")
@@ -74,6 +97,32 @@ async def test_start_statek_async_uses_fleet_for_multiple_agents(db0_fixture, mo
     assert [loop_def.agent for loop_def in loop_defs] == [agent_a, agent_b]
     assert loop_defs[0].warmup_code is None
     assert loop_defs[1].warmup_code == "event = payload"
+
+
+@pytest.mark.asyncio
+async def test_start_statek_async_uses_only_configured_pull_callback(db0_fixture, monkeypatch):
+    agent_a = _agent("runner-a")
+    agent_b = _agent("runner-b")
+    calls = {}
+
+    def pull_queue_size() -> int:
+        return 2
+
+    async def fake_fleet(**kwargs):
+        calls.update(kwargs)
+
+    monkeypatch.setattr("statek.runner.run_agentic_fleet", fake_fleet)
+    monkeypatch.setattr("statek.runner.StatekClientAPI", Mock())
+
+    await start_statek_async(
+        agents=[agent_a, agent_b],
+        settings=_settings(),
+        task_queue_size_funcs={agent_a: pull_queue_size},
+    )
+
+    loop_defs = calls["agent_loop_defs"]
+    assert loop_defs[0].task_queue_size_func is pull_queue_size
+    assert loop_defs[1].task_queue_size_func() == 0
 
 
 @pytest.mark.asyncio
@@ -192,11 +241,12 @@ def test_start_statek_sync_wrapper(db0_fixture, monkeypatch):
 
     monkeypatch.setattr("statek.runner.start_statek_async", fake_start)
 
-    result = start_statek(max_concurrency=3, provider="TEST")
+    result = start_statek(max_concurrency=3, provider="TEST", task_queue_size_funcs={})
 
     assert result == "done"
     assert called["max_concurrency"] == 3
     assert called["provider"] == "TEST"
+    assert called["task_queue_size_funcs"] == {}
 
 
 @pytest.mark.asyncio
