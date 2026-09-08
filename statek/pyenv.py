@@ -32,7 +32,8 @@ class PyEnv:
     local_state: Dict = field(default_factory=dict)
     # Console outputs of the LLM's program
     console: List[str] = None
-    # Optional error message by chat_log item ID
+    # Diagnostics by console-entry index (legacy keys used turn starts), including
+    # harness-limit messages retained for display but excluded from execution counters.
     exceptions: Dict[int, str] = None
     # Messages pushed into the console of an active job
     push_log: Dict[int, Union[str, List[str]]] = None

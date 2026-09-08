@@ -1,10 +1,13 @@
 """Tests for harness counting: warmup exclusions and tool-exception inclusion."""
 # pylint: disable=no-member,redefined-outer-name
 
+from typing import Callable
+
 import pytest
 
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
+from statek.llm_harness import LLM_Harness
 
 
 @pytest.fixture
@@ -64,6 +67,108 @@ class TestNumTurnsExcludesWarmup:
 
 class TestExceptionCountExcludesWarmup:
     """exception_count should not include exceptions from warmup blocks."""
+
+    @pytest.mark.parametrize("message", [
+        "LLM_HarnessError: Maximum token usage exceeded: 55320/50002.0",
+        "LLM_HarnessError: Maximum number of exceptions exceeded: 8/6.0",
+        "LLM_HarnessError: Maximum consecutive exceptions exceeded: 8/6.0",
+        "LLM_HarnessError: Maximum number of turns exceeded: 101/100.0",
+    ])
+    def test_terminal_diagnostic_preserves_shared_position_accounting(
+        self, make_job: Callable[..., Job], message: str,
+    ) -> None:
+        """A terminal diagnostic must not duplicate events or join real-error streaks."""
+        items = [LLM_LogItem(console_pos=0), LLM_LogItem(console_pos=1),
+                 LLM_LogItem(console_pos=1), LLM_LogItem(console_pos=2)]
+        items[0].push_tool_result(ToolError(err_message="tool error"))
+        job = make_job(items)
+        job.console_append("output")
+        job.console_append("code error", error_message="code error")
+        job.console_append("another error", error_message="another error")
+        assert job.exception_count == 3
+        assert job.max_consecutive_exceptions == 2
+
+        job.console_append(message, error_message=message)
+
+        assert job.py_env.exceptions[3] == message
+        assert job.exception_count == 3
+        assert job.max_consecutive_exceptions == 2
+
+    @pytest.mark.parametrize("with_execution_error", [False, True])
+    def test_distinct_diagnostics_retain_unique_console_keys(
+        self, make_job: Callable[..., Job], with_execution_error: bool,
+    ) -> None:
+        """Successive diagnostics cannot replace an earlier real error or each other."""
+        job = make_job([LLM_LogItem(console_pos=0)])
+        expected = {}
+        if with_execution_error:
+            job.console_append("ValueError: bad code", error_message="ValueError: bad code")
+            expected[0] = "ValueError: bad code"
+        for message in (
+            "LLM_HarnessError: Maximum token usage exceeded: 55320/50002.0",
+            "LLM_HarnessError: Maximum number of turns exceeded: 101/100.0",
+        ):
+            expected[len(expected)] = message
+            job.console_append(message, error_message=message)
+
+        assert dict(job.py_env.exceptions) == expected
+        assert list(job.py_env.console) == list(expected.values())
+        assert job.exception_count == int(with_execution_error)
+        assert job.max_consecutive_exceptions == int(with_execution_error)
+
+    @pytest.mark.parametrize("message", [
+        "ValueError: Maximum token usage exceeded: application quota",
+        "LLM_HarnessError: application failure",
+    ])
+    def test_application_errors_are_not_filtered(
+        self, make_job: Callable[..., Job], message: str,
+    ) -> None:
+        """Only recognized terminal harness diagnostics are excluded from accounting."""
+        job = make_job([LLM_LogItem(console_pos=0)])
+        job.console_append(message, error_message=message)
+        assert job.exception_count == 1
+        assert job.max_consecutive_exceptions == 1
+
+    def test_shared_position_counts_one_event(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        job = make_job([LLM_LogItem(console_pos=1) for _ in range(8)],
+                       exceptions={1: "ValueError: bad code"})
+        assert job.exception_count == 1
+        assert job.max_consecutive_exceptions == 1
+
+    def test_new_errors_have_unique_console_keys(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        job = make_job([LLM_LogItem(console_pos=0)])
+        job.console_append("output")
+        job.console_append("first", error_message="same error")
+        job.console_append("second", error_message="same error")
+        assert dict(job.py_env.exceptions) == {1: "same error", 2: "same error"}
+        assert job.exception_count == 2
+        assert job.max_consecutive_exceptions == 1
+
+    def test_legacy_terminal_errors_do_not_poison_resume(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        job = make_job([LLM_LogItem(console_pos=1) for _ in range(8)], exceptions={
+            1: "LLM_HarnessError: Maximum token usage exceeded: 55320/50002.0",
+            2: "LLM_HarnessError: Maximum number of exceptions exceeded: 8/6.0",
+        })
+        assert job.exception_count == 0
+        assert job.max_consecutive_exceptions == 0
+        job.set_status(JobStatus.DONE)
+        job.push_user_message("continue")
+        LLM_Harness(None, 6, 6, None).check_before_step(job)
+
+    def test_shared_warmup_boundary_has_single_owner(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        job = make_job([LLM_LogItem(console_pos=0),
+                        WarmupLogItem(console_pos=0, warmup_block_num=0)],
+                       exceptions={0: "warmup error"})
+        assert job.exception_count == 0
+        assert job.max_consecutive_exceptions == 0
+
+    def test_success_breaks_shared_position_streak(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        items = [LLM_LogItem(console_pos=0), LLM_LogItem(console_pos=1),
+                 LLM_LogItem(console_pos=1), LLM_LogItem(console_pos=2)]
+        items[0].push_tool_result(ToolError(err_message="tool error"))
+        job = make_job(items, exceptions={1: "code error"})
+        assert job.exception_count == 2
+        assert job.max_consecutive_exceptions == 1
 
     def test_no_exceptions(self, db0_fixture, make_job):  # pylint: disable=unused-argument
         job = make_job([LLM_LogItem(console_pos=0)])

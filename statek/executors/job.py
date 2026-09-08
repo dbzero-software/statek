@@ -904,8 +904,7 @@ class Job:
         """
         self.py_env.console_append(output)
         if error_message is not None:
-            last_item = self.chat_log[-1] if self.chat_log else None
-            console_pos = last_item.console_pos if isinstance(last_item, ChatLogItem) else 0
+            console_pos = len(self.py_env.console) - 1
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
             self.py_env.exceptions[console_pos] = error_message
@@ -2116,29 +2115,39 @@ class Job:
         return {item.console_pos for item in self.chat_log if isinstance(item, WarmupLogItem)}
 
     @staticmethod
-    def _tool_error_count(item) -> int:
-        """Return the number of ToolError entries in item.tool_log."""
-        if item.tool_log is None:
-            return 0
-        if isinstance(item.tool_log, ToolError):
-            return 1
-        if isinstance(item.tool_log, str):
-            return 0
-        return sum(1 for entry in item.tool_log if isinstance(entry, ToolError))
+    def _is_harness_limit_error(message: str) -> bool:
+        """Recognize stored terminal harness diagnostics excluded from execution counts."""
+        return message.startswith((
+            "LLM_HarnessError: Maximum token usage exceeded",
+            "LLM_HarnessError: Maximum number of exceptions exceeded",
+            "LLM_HarnessError: Maximum consecutive exceptions exceeded",
+            "LLM_HarnessError: Maximum number of turns exceeded",
+        ))
 
-    def _has_exception(self, item) -> bool:
-        """Return True if *item* has a code exception or a tool exception."""
-        if self.py_env.exceptions and item.console_pos in self.py_env.exceptions:
-            return True
-        return self._tool_error_count(item) > 0
+    def _exception_messages_by_turn(self) -> Iterable[Tuple[ChatLogItem, List[str]]]:
+        """Resolve console events once; latest equal execution boundary wins.
 
-    def _exception_count_for_item(self, item) -> int:
-        """Return the number of exceptions for a single chat log item."""
-        count = 0
-        if self.py_env.exceptions and item.console_pos in self.py_env.exceptions:
-            count += 1
-        count += self._tool_error_count(item)
-        return count
+        Legacy keys identify turn starts, newer keys identify error console
+        entries. Both fit the same half-open execution ranges.
+        """
+        items = [item for item in self.chat_log
+                 if isinstance(item, (LLM_LogItem, WarmupLogItem))]
+        errors = sorted((self.py_env.exceptions or {}).items())
+        position = 0
+        for index, item in enumerate(items):
+            end = items[index + 1].console_pos if index + 1 < len(items) else None
+            messages = []
+            while position < len(errors) and (end is None or errors[position][0] < end):
+                key, message = errors[position]
+                position += 1
+                if key >= item.console_pos and not self._is_harness_limit_error(message):
+                    messages.append(message)
+            tool_log = item.tool_log
+            if isinstance(tool_log, ToolError):
+                messages.append(tool_log.err_message)
+            elif tool_log is not None and not isinstance(tool_log, str):
+                messages.extend(entry.err_message for entry in tool_log if isinstance(entry, ToolError))
+            yield item, messages
 
     @property
     def exception_count(self) -> int:
@@ -2147,9 +2156,7 @@ class Job:
         Counts both code-execution exceptions (py_env.exceptions) and
         tool-call exceptions (ToolError entries in tool_log).
         """
-        if not self.chat_log:
-            return 0
-        return sum(self._exception_count_for_item(item) for item in self.chat_log
+        return sum(len(messages) for item, messages in self._exception_messages_by_turn()
                    if isinstance(item, LLM_LogItem))
 
     @property
@@ -2162,10 +2169,10 @@ class Job:
             return 0
         max_streak = 0
         streak = 0
-        for item in self.chat_log:
+        for item, messages in self._exception_messages_by_turn():
             if not isinstance(item, LLM_LogItem):
                 continue
-            if self._has_exception(item):
+            if messages:
                 streak += 1
                 max_streak = max(max_streak, streak)
             else:
