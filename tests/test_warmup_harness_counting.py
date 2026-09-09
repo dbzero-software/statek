@@ -3,11 +3,13 @@
 
 from typing import Callable
 
+import dbzero as db0
 import pytest
 
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from statek.llm_harness import LLM_Harness
+from tests.conftest import DB0_DIR
 
 
 @pytest.fixture
@@ -73,6 +75,7 @@ class TestExceptionCountExcludesWarmup:
         "LLM_HarnessError: Maximum number of exceptions exceeded: 8/6.0",
         "LLM_HarnessError: Maximum consecutive exceptions exceeded: 8/6.0",
         "LLM_HarnessError: Maximum number of turns exceeded: 101/100.0",
+        "Dowolny komunikat zatrzymania",
     ])
     def test_terminal_diagnostic_preserves_shared_position_accounting(
         self, make_job: Callable[..., Job], message: str,
@@ -88,7 +91,7 @@ class TestExceptionCountExcludesWarmup:
         assert job.exception_count == 3
         assert job.max_consecutive_exceptions == 2
 
-        job.console_append(message, error_message=message)
+        job.console_append(message, error_message=message, harness_diagnostic=True)
 
         assert job.py_env.exceptions[3] == message
         assert job.exception_count == 3
@@ -109,7 +112,7 @@ class TestExceptionCountExcludesWarmup:
             "LLM_HarnessError: Maximum number of turns exceeded: 101/100.0",
         ):
             expected[len(expected)] = message
-            job.console_append(message, error_message=message)
+            job.console_append(message, error_message=message, harness_diagnostic=True)
 
         assert dict(job.py_env.exceptions) == expected
         assert list(job.py_env.console) == list(expected.values())
@@ -119,11 +122,12 @@ class TestExceptionCountExcludesWarmup:
     @pytest.mark.parametrize("message", [
         "ValueError: Maximum token usage exceeded: application quota",
         "LLM_HarnessError: application failure",
+        "LLM_HarnessError: Maximum token usage exceeded: 55320/50002.0",
     ])
     def test_application_errors_are_not_filtered(
         self, make_job: Callable[..., Job], message: str,
     ) -> None:
-        """Only recognized terminal harness diagnostics are excluded from accounting."""
+        """Message wording cannot exclude an application error from accounting."""
         job = make_job([LLM_LogItem(console_pos=0)])
         job.console_append(message, error_message=message)
         assert job.exception_count == 1
@@ -144,11 +148,10 @@ class TestExceptionCountExcludesWarmup:
         assert job.exception_count == 2
         assert job.max_consecutive_exceptions == 1
 
-    def test_legacy_terminal_errors_do_not_poison_resume(self, db0_fixture, make_job):  # pylint: disable=unused-argument
-        job = make_job([LLM_LogItem(console_pos=1) for _ in range(8)], exceptions={
-            1: "LLM_HarnessError: Maximum token usage exceeded: 55320/50002.0",
-            2: "LLM_HarnessError: Maximum number of exceptions exceeded: 8/6.0",
-        })
+    def test_terminal_diagnostics_do_not_poison_resume(self, db0_fixture, make_job):  # pylint: disable=unused-argument
+        job = make_job([LLM_LogItem(console_pos=0) for _ in range(8)])
+        for message in ("Token budget exhausted", "Execution stopped"):
+            job.console_append(message, error_message=message, harness_diagnostic=True)
         assert job.exception_count == 0
         assert job.max_consecutive_exceptions == 0
         job.set_status(JobStatus.DONE)
@@ -161,6 +164,21 @@ class TestExceptionCountExcludesWarmup:
                        exceptions={0: "warmup error"})
         assert job.exception_count == 0
         assert job.max_consecutive_exceptions == 0
+
+    def test_diagnostic_classification_survives_reopen(self, make_job: Callable[..., Job]) -> None:
+        """Persist provenance independently of identical diagnostic and error text."""
+        job = make_job([LLM_LogItem(console_pos=0)])
+        message = "LLM_HarnessError: Maximum token usage exceeded"
+        job.console_append(message, error_message=message, harness_diagnostic=True)
+        job.console_append(message, error_message=message)
+        job_id = db0.uuid(job)
+        db0.close()
+        db0.init(DB0_DIR, read_write=True)
+        db0.open("test_prefix", "rw")
+        restored = db0.fetch(job_id)
+        assert list(restored.py_env.console) == [message, message]
+        assert restored.exception_count == 1
+        assert restored.max_consecutive_exceptions == 1
 
     def test_success_breaks_shared_position_streak(self, db0_fixture, make_job):  # pylint: disable=unused-argument
         items = [LLM_LogItem(console_pos=0), LLM_LogItem(console_pos=1),

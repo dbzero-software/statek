@@ -894,13 +894,16 @@ class Job:
         else:
             self._log(call_line)
 
-    def console_append(self, output: str, error_message: str = None):
+    def console_append(
+        self, output: str, error_message: Optional[str] = None, *, harness_diagnostic: bool = False,
+    ) -> None:
         """
         Append output to the console and optionally log it.
 
         Args:
             output: The output string to append
             error_message: optional error message (if execution resulted in an exception)
+            harness_diagnostic: mark a terminal harness diagnostic, excluded from execution counts
         """
         self.py_env.console_append(output)
         if error_message is not None:
@@ -908,6 +911,8 @@ class Job:
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
             self.py_env.exceptions[console_pos] = error_message
+            if harness_diagnostic:
+                self.py_env.harness_diagnostic_positions.add(console_pos)
         # Console is logged in batches at block/turn boundaries (see _log_console_batch)
 
     @property
@@ -2114,16 +2119,6 @@ class Job:
         """Returns console_pos values that correspond to warmup blocks."""
         return {item.console_pos for item in self.chat_log if isinstance(item, WarmupLogItem)}
 
-    @staticmethod
-    def _is_harness_limit_error(message: str) -> bool:
-        """Recognize stored terminal harness diagnostics excluded from execution counts."""
-        return message.startswith((
-            "LLM_HarnessError: Maximum token usage exceeded",
-            "LLM_HarnessError: Maximum number of exceptions exceeded",
-            "LLM_HarnessError: Maximum consecutive exceptions exceeded",
-            "LLM_HarnessError: Maximum number of turns exceeded",
-        ))
-
     def _exception_messages_by_turn(self) -> Iterable[Tuple[ChatLogItem, List[str]]]:
         """Resolve console events once; latest equal execution boundary wins.
 
@@ -2140,7 +2135,7 @@ class Job:
             while position < len(errors) and (end is None or errors[position][0] < end):
                 key, message = errors[position]
                 position += 1
-                if key >= item.console_pos and not self._is_harness_limit_error(message):
+                if key >= item.console_pos and key not in self.py_env.harness_diagnostic_positions:
                     messages.append(message)
             tool_log = item.tool_log
             if isinstance(tool_log, ToolError):

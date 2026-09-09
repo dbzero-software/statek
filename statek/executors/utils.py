@@ -1425,7 +1425,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 error_msg = f"LLM_HarnessError: {e}"
                 statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"
-                job.console_append(error_msg, error_message=error_msg)
+                job.console_append(error_msg, error_message=error_msg, harness_diagnostic=True)
                 job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)

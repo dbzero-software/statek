@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Union
+from typing import List, Dict, Set, Union
 import dbzero as db0
 
 from statek.future import FutureResult
@@ -32,9 +32,11 @@ class PyEnv:
     local_state: Dict = field(default_factory=dict)
     # Console outputs of the LLM's program
     console: List[str] = None
-    # Diagnostics by console-entry index (legacy keys used turn starts), including
+    # Diagnostics by console-entry index, including
     # harness-limit messages retained for display but excluded from execution counters.
     exceptions: Dict[int, str] = None
+    # Console-entry indexes explicitly recorded as terminal harness diagnostics.
+    harness_diagnostic_positions: Set[int] = field(default_factory=set)
     # Messages pushed into the console of an active job
     push_log: Dict[int, Union[str, List[str]]] = None
     # The next instruction ID for continuation

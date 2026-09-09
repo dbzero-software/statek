@@ -53,6 +53,8 @@ class TestHandleCriticalError:
         "Maximum number of exceptions exceeded: 8/6.0",
         "Maximum consecutive exceptions exceeded: 8/6.0",
         "Maximum number of turns exceeded: 101/100.0",
+        "Token budget exhausted",
+        "",
     ])
     @pytest.mark.parametrize("with_execution_errors", [False, True])
     async def test_job_worker_notifies_handlers_on_harness_error(
