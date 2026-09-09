@@ -3,12 +3,15 @@
 # pylint: disable=too-few-public-methods,no-member
 
 import asyncio
+from typing import Callable
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from statek.exceptions import LLM_HarnessError
-from statek.executors.job import JobDefError, JobStatus
+from statek.pyenv import Error, ErrorKind
+from statek.executors.job import Job, JobDefError, JobStatus
+from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.utils import handle_critical_error, job_worker
 from statek.system import error_handler
 from statek.utils import _statek_ctx_scope
@@ -46,28 +49,60 @@ class TestHandleCriticalError:
         handle_critical_error(RuntimeError("ignored"))
 
     @pytest.mark.asyncio
-    async def test_job_worker_notifies_handlers_on_harness_error(self, job_factory):
+    @pytest.mark.parametrize("message", [
+        "Maximum token usage exceeded: 55320/50002.0",
+        "Maximum number of exceptions exceeded: 8/6.0",
+        "Maximum consecutive exceptions exceeded: 8/6.0",
+        "Maximum number of turns exceeded: 101/100.0",
+        "Token budget exhausted",
+        "",
+    ])
+    @pytest.mark.parametrize("with_execution_errors", [False, True])
+    async def test_job_worker_notifies_handlers_on_harness_error(
+        self, job_factory: Callable[..., Job], message: str, with_execution_errors: bool,
+    ) -> None:
         """job_worker calls handle_critical_error when LLM_HarnessError is raised."""
         _call_log.clear()
         job = job_factory()
+        for index in range(3 if with_execution_errors else 1):
+            job.chat_log.append(LLM_LogItem(console_pos=len(job.py_env.console or [])))
+            if with_execution_errors:
+                execution_error = f"ValueError: failure {index}"
+                job.console_append(
+                    execution_error, error=Error(ErrorKind.EXECUTION, execution_error),
+                )
+        previous_errors = {
+            key: error.message for key, error in (job.py_env.exceptions or {}).items()
+        }
         job.add_error_handler(_capture, "ctx")
         semaphore = asyncio.Semaphore(1)
 
+        exc = LLM_HarnessError(message)
         with patch('statek.executors.utils.run_job_step', new_callable=AsyncMock) as mock_step:
-            mock_step.side_effect = LLM_HarnessError("too many turns")
+            mock_step.side_effect = exc
             await job_worker(semaphore, job)
 
         assert len(_call_log) == 1
-        assert isinstance(_call_log[0][1], LLM_HarnessError)
+        assert _call_log[0][1] is exc
         assert job.status == JobStatus.DONE
         assert isinstance(job.error, JobDefError)
-        assert job.error.error_message == "too many turns"
+        assert job.error.error_message == message
+        assert job.py_env.exit_status == f"Error: {message}"
+        error_msg = f"LLM_HarnessError: {message}"
+        assert job.py_env.console[-1] == error_msg
+        assert {key: error.message for key, error in job.py_env.exceptions.items()} == {
+            **previous_errors, len(job.py_env.console) - 1: error_msg,
+        }
+        assert job.exception_count == (3 if with_execution_errors else 0)
+        assert job.max_consecutive_exceptions == (3 if with_execution_errors else 0)
+        assert job.py_env.exceptions[len(job.py_env.console) - 1].kind == ErrorKind.HARNESS
 
     @pytest.mark.asyncio
     async def test_job_worker_notifies_handlers_on_generic_exception(self, job_factory):
         """job_worker calls handle_critical_error for any other critical exception."""
         _call_log.clear()
         job = job_factory()
+        job.chat_log.append(LLM_LogItem(console_pos=0))
         job.add_error_handler(_capture, "ctx")
         semaphore = asyncio.Semaphore(1)
 
@@ -81,3 +116,5 @@ class TestHandleCriticalError:
         assert job.status == JobStatus.DONE
         assert isinstance(job.error, JobDefError)
         assert job.error.error_message == "unexpected failure"
+        assert job.exception_count == 1
+        assert job.py_env.exceptions[0].kind == ErrorKind.EXECUTION

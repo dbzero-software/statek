@@ -34,7 +34,7 @@ from typing import (
 )
 import dbzero as db0
 from dbzero import memo, enum
-from statek.pyenv import PyEnv
+from statek.pyenv import Error, ErrorKind, PyEnv
 from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
@@ -894,21 +894,22 @@ class Job:
         else:
             self._log(call_line)
 
-    def console_append(self, output: str, error_message: str = None):
+    def console_append(
+        self, output: str, error: Optional[Error] = None,
+    ) -> None:
         """
         Append output to the console and optionally log it.
 
         Args:
             output: The output string to append
-            error_message: optional error message (if execution resulted in an exception)
+            error: optional classified error associated with the console entry
         """
         self.py_env.console_append(output)
-        if error_message is not None:
-            last_item = self.chat_log[-1] if self.chat_log else None
-            console_pos = last_item.console_pos if isinstance(last_item, ChatLogItem) else 0
+        if error is not None:
+            console_pos = len(self.py_env.console) - 1
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
-            self.py_env.exceptions[console_pos] = error_message
+            self.py_env.exceptions[console_pos] = error
         # Console is logged in batches at block/turn boundaries (see _log_console_batch)
 
     @property
@@ -2115,30 +2116,29 @@ class Job:
         """Returns console_pos values that correspond to warmup blocks."""
         return {item.console_pos for item in self.chat_log if isinstance(item, WarmupLogItem)}
 
-    @staticmethod
-    def _tool_error_count(item) -> int:
-        """Return the number of ToolError entries in item.tool_log."""
-        if item.tool_log is None:
-            return 0
-        if isinstance(item.tool_log, ToolError):
-            return 1
-        if isinstance(item.tool_log, str):
-            return 0
-        return sum(1 for entry in item.tool_log if isinstance(entry, ToolError))
+    def _exception_messages_by_turn(self) -> Iterable[Tuple[ChatLogItem, List[str]]]:
+        """Resolve console events once; latest equal execution boundary wins.
 
-    def _has_exception(self, item) -> bool:
-        """Return True if *item* has a code exception or a tool exception."""
-        if self.py_env.exceptions and item.console_pos in self.py_env.exceptions:
-            return True
-        return self._tool_error_count(item) > 0
-
-    def _exception_count_for_item(self, item) -> int:
-        """Return the number of exceptions for a single chat log item."""
-        count = 0
-        if self.py_env.exceptions and item.console_pos in self.py_env.exceptions:
-            count += 1
-        count += self._tool_error_count(item)
-        return count
+        Error console entries belong to half-open execution ranges.
+        """
+        items = [item for item in self.chat_log
+                 if isinstance(item, (LLM_LogItem, WarmupLogItem))]
+        errors = sorted((self.py_env.exceptions or {}).items())
+        position = 0
+        for index, item in enumerate(items):
+            end = items[index + 1].console_pos if index + 1 < len(items) else None
+            messages = []
+            while position < len(errors) and (end is None or errors[position][0] < end):
+                key, error = errors[position]
+                position += 1
+                if key >= item.console_pos and error.kind == ErrorKind.EXECUTION:
+                    messages.append(error.message)
+            tool_log = item.tool_log
+            if isinstance(tool_log, ToolError):
+                messages.append(tool_log.err_message)
+            elif tool_log is not None and not isinstance(tool_log, str):
+                messages.extend(entry.err_message for entry in tool_log if isinstance(entry, ToolError))
+            yield item, messages
 
     @property
     def exception_count(self) -> int:
@@ -2147,9 +2147,7 @@ class Job:
         Counts both code-execution exceptions (py_env.exceptions) and
         tool-call exceptions (ToolError entries in tool_log).
         """
-        if not self.chat_log:
-            return 0
-        return sum(self._exception_count_for_item(item) for item in self.chat_log
+        return sum(len(messages) for item, messages in self._exception_messages_by_turn()
                    if isinstance(item, LLM_LogItem))
 
     @property
@@ -2162,10 +2160,10 @@ class Job:
             return 0
         max_streak = 0
         streak = 0
-        for item in self.chat_log:
+        for item, messages in self._exception_messages_by_turn():
             if not isinstance(item, LLM_LogItem):
                 continue
-            if self._has_exception(item):
+            if messages:
                 streak += 1
                 max_streak = max(max_streak, streak)
             else:

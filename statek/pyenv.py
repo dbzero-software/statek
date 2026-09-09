@@ -13,10 +13,25 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Union
+from typing import List, Dict, Optional, Union
 import dbzero as db0
 
 from statek.future import FutureResult
+
+
+@db0.enum(values=["EXECUTION", "HARNESS"])
+class ErrorKind:
+    """Origin of a recorded console error."""
+
+
+@db0.memo(no_default_tags=True)
+@dataclass
+class Error:
+    """Persistent error message classified at its point of origin."""
+
+    kind: ErrorKind
+    message: str
+
 
 @db0.memo
 @dataclass
@@ -32,8 +47,9 @@ class PyEnv:
     local_state: Dict = field(default_factory=dict)
     # Console outputs of the LLM's program
     console: List[str] = None
-    # Optional error message by chat_log item ID
-    exceptions: Dict[int, str] = None
+    # Diagnostics by console-entry index, including
+    # harness-limit messages retained for display but excluded from execution counters.
+    exceptions: Optional[Dict[int, Error]] = None
     # Messages pushed into the console of an active job
     push_log: Dict[int, Union[str, List[str]]] = None
     # The next instruction ID for continuation
