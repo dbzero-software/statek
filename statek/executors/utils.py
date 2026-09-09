@@ -51,6 +51,7 @@ from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API, LLM_Response
 from statek.llm_harness import get_llm_harness
+from statek.pyenv import Error, ErrorKind
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.settings import ChatStyle, full_agent_trace, get_statek_settings, statek_log
 from statek.system import inject_context
@@ -617,7 +618,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
         _exec_code_body(
             code_str, job, global_context, local_context,
             output_fn=lambda s: job.console_append(s),
-            error_fn=lambda msg: job.console_append(msg, error_message=msg),
+            error_fn=lambda msg: job.console_append(msg, error=Error(ErrorKind.EXECUTION, msg)),
             instr_num=instr_num,
             allowed_tools=allowed_tools,
         )
@@ -1073,7 +1074,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 and job.job_def.chat_style != ChatStyle.DIRECT  # pylint: disable=no-member
                 and _is_empty_code(code_str)):
             error_msg = "Error: no code submitted."
-            job.console_append(error_msg, error_message=error_msg)
+            job.console_append(error_msg, error=Error(ErrorKind.EXECUTION, error_msg))
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
         last_chat_log_item = job.chat_log[-1] if job.chat_log else None
@@ -1238,7 +1239,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             await handle_dialog(processed_step.text, _local_context=local_context)
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
-            job.console_append(error_msg, error_message=error_msg)
+            job.console_append(error_msg, error=Error(ErrorKind.EXECUTION, error_msg))
             dialog_error = True
 
     # Step 16: MD_DIALOG/DIRECT text-only responses can finish only after
@@ -1425,7 +1426,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 error_msg = f"LLM_HarnessError: {e}"
                 statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"
-                job.console_append(error_msg, error_message=error_msg, harness_diagnostic=True)
+                job.console_append(error_msg, error=Error(ErrorKind.HARNESS, error_msg))
                 job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)
@@ -1434,7 +1435,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 import traceback
                 error_msg = f"Job {db0.uuid(job)} failed with error: {e}\n{traceback.format_exc()}"
                 statek_log(error_msg, level='error')
-                job.console_append(error_msg, error_message=error_msg)
+                job.console_append(error_msg, error=Error(ErrorKind.EXECUTION, error_msg))
                 job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)

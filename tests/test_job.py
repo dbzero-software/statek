@@ -21,6 +21,7 @@ from statek.executors.job import (
 )
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, OpenRouter_API
 from statek.model_pricing import set_model_pricing
+from statek.pyenv import Error, ErrorKind
 from statek.model_name import (
     ModelName,
     ensure_model_name,
@@ -396,9 +397,11 @@ class TestJobLoggingAndExternalRefs:
         job = job_factory()
         job.chat_log.append("Initial user message")
 
-        job.console_append("Failure", error_message="error")
+        job.console_append("Failure", error=Error(ErrorKind.EXECUTION, "error"))
 
-        assert job.py_env.exceptions == {0: "error"}
+        assert list(job.py_env.exceptions) == [0]
+        assert job.py_env.exceptions[0].message == "error"
+        assert job.py_env.exceptions[0].kind == ErrorKind.EXECUTION
 
     def test_contains_ext_ref_false_before_add(self, job_factory):
         """Job does not report unrelated memo objects as external refs."""

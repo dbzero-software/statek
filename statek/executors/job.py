@@ -34,7 +34,7 @@ from typing import (
 )
 import dbzero as db0
 from dbzero import memo, enum
-from statek.pyenv import PyEnv
+from statek.pyenv import Error, ErrorKind, PyEnv
 from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
@@ -895,24 +895,21 @@ class Job:
             self._log(call_line)
 
     def console_append(
-        self, output: str, error_message: Optional[str] = None, *, harness_diagnostic: bool = False,
+        self, output: str, error: Optional[Error] = None,
     ) -> None:
         """
         Append output to the console and optionally log it.
 
         Args:
             output: The output string to append
-            error_message: optional error message (if execution resulted in an exception)
-            harness_diagnostic: mark a terminal harness diagnostic, excluded from execution counts
+            error: optional classified error associated with the console entry
         """
         self.py_env.console_append(output)
-        if error_message is not None:
+        if error is not None:
             console_pos = len(self.py_env.console) - 1
             if self.py_env.exceptions is None:
                 self.py_env.exceptions = {}
-            self.py_env.exceptions[console_pos] = error_message
-            if harness_diagnostic:
-                self.py_env.harness_diagnostic_positions.add(console_pos)
+            self.py_env.exceptions[console_pos] = error
         # Console is logged in batches at block/turn boundaries (see _log_console_batch)
 
     @property
@@ -2122,8 +2119,7 @@ class Job:
     def _exception_messages_by_turn(self) -> Iterable[Tuple[ChatLogItem, List[str]]]:
         """Resolve console events once; latest equal execution boundary wins.
 
-        Legacy keys identify turn starts, newer keys identify error console
-        entries. Both fit the same half-open execution ranges.
+        Error console entries belong to half-open execution ranges.
         """
         items = [item for item in self.chat_log
                  if isinstance(item, (LLM_LogItem, WarmupLogItem))]
@@ -2133,10 +2129,10 @@ class Job:
             end = items[index + 1].console_pos if index + 1 < len(items) else None
             messages = []
             while position < len(errors) and (end is None or errors[position][0] < end):
-                key, message = errors[position]
+                key, error = errors[position]
                 position += 1
-                if key >= item.console_pos and key not in self.py_env.harness_diagnostic_positions:
-                    messages.append(message)
+                if key >= item.console_pos and error.kind == ErrorKind.EXECUTION:
+                    messages.append(error.message)
             tool_log = item.tool_log
             if isinstance(tool_log, ToolError):
                 messages.append(tool_log.err_message)

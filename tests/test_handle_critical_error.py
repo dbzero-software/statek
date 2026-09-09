@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from statek.exceptions import LLM_HarnessError
+from statek.pyenv import Error, ErrorKind
 from statek.executors.job import Job, JobDefError, JobStatus
 from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.utils import handle_critical_error, job_worker
@@ -67,8 +68,12 @@ class TestHandleCriticalError:
             job.chat_log.append(LLM_LogItem(console_pos=len(job.py_env.console or [])))
             if with_execution_errors:
                 execution_error = f"ValueError: failure {index}"
-                job.console_append(execution_error, error_message=execution_error)
-        previous_errors = dict(job.py_env.exceptions or {})
+                job.console_append(
+                    execution_error, error=Error(ErrorKind.EXECUTION, execution_error),
+                )
+        previous_errors = {
+            key: error.message for key, error in (job.py_env.exceptions or {}).items()
+        }
         job.add_error_handler(_capture, "ctx")
         semaphore = asyncio.Semaphore(1)
 
@@ -85,11 +90,12 @@ class TestHandleCriticalError:
         assert job.py_env.exit_status == f"Error: {message}"
         error_msg = f"LLM_HarnessError: {message}"
         assert job.py_env.console[-1] == error_msg
-        assert dict(job.py_env.exceptions or {}) == {
+        assert {key: error.message for key, error in job.py_env.exceptions.items()} == {
             **previous_errors, len(job.py_env.console) - 1: error_msg,
         }
         assert job.exception_count == (3 if with_execution_errors else 0)
         assert job.max_consecutive_exceptions == (3 if with_execution_errors else 0)
+        assert job.py_env.exceptions[len(job.py_env.console) - 1].kind == ErrorKind.HARNESS
 
     @pytest.mark.asyncio
     async def test_job_worker_notifies_handlers_on_generic_exception(self, job_factory):
@@ -111,3 +117,4 @@ class TestHandleCriticalError:
         assert isinstance(job.error, JobDefError)
         assert job.error.error_message == "unexpected failure"
         assert job.exception_count == 1
+        assert job.py_env.exceptions[0].kind == ErrorKind.EXECUTION

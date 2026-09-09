@@ -9,6 +9,7 @@ import pytest
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from statek.llm_harness import LLM_Harness
+from statek.pyenv import Error, ErrorKind
 from tests.conftest import DB0_DIR
 
 
@@ -26,7 +27,9 @@ def make_job(job_def_factory):
         for item in chat_log_items:
             job.chat_log.append(item)
         if exceptions:
-            job.py_env.exceptions = exceptions
+            job.py_env.exceptions = {
+                key: Error(ErrorKind.EXECUTION, message) for key, message in exceptions.items()
+            }
         return job
     return _make
 
@@ -86,14 +89,15 @@ class TestExceptionCountExcludesWarmup:
         items[0].push_tool_result(ToolError(err_message="tool error"))
         job = make_job(items)
         job.console_append("output")
-        job.console_append("code error", error_message="code error")
-        job.console_append("another error", error_message="another error")
+        job.console_append("code error", error=Error(ErrorKind.EXECUTION, "code error"))
+        job.console_append("another error", error=Error(ErrorKind.EXECUTION, "another error"))
         assert job.exception_count == 3
         assert job.max_consecutive_exceptions == 2
 
-        job.console_append(message, error_message=message, harness_diagnostic=True)
+        job.console_append(message, error=Error(ErrorKind.HARNESS, message))
 
-        assert job.py_env.exceptions[3] == message
+        assert job.py_env.exceptions[3].message == message
+        assert job.py_env.exceptions[3].kind == ErrorKind.HARNESS
         assert job.exception_count == 3
         assert job.max_consecutive_exceptions == 2
 
@@ -105,16 +109,18 @@ class TestExceptionCountExcludesWarmup:
         job = make_job([LLM_LogItem(console_pos=0)])
         expected = {}
         if with_execution_error:
-            job.console_append("ValueError: bad code", error_message="ValueError: bad code")
+            job.console_append(
+                "ValueError: bad code", error=Error(ErrorKind.EXECUTION, "ValueError: bad code"),
+            )
             expected[0] = "ValueError: bad code"
         for message in (
             "LLM_HarnessError: Maximum token usage exceeded: 55320/50002.0",
             "LLM_HarnessError: Maximum number of turns exceeded: 101/100.0",
         ):
             expected[len(expected)] = message
-            job.console_append(message, error_message=message, harness_diagnostic=True)
+            job.console_append(message, error=Error(ErrorKind.HARNESS, message))
 
-        assert dict(job.py_env.exceptions) == expected
+        assert {key: error.message for key, error in job.py_env.exceptions.items()} == expected
         assert list(job.py_env.console) == list(expected.values())
         assert job.exception_count == int(with_execution_error)
         assert job.max_consecutive_exceptions == int(with_execution_error)
@@ -129,7 +135,7 @@ class TestExceptionCountExcludesWarmup:
     ) -> None:
         """Message wording cannot exclude an application error from accounting."""
         job = make_job([LLM_LogItem(console_pos=0)])
-        job.console_append(message, error_message=message)
+        job.console_append(message, error=Error(ErrorKind.EXECUTION, message))
         assert job.exception_count == 1
         assert job.max_consecutive_exceptions == 1
 
@@ -142,16 +148,18 @@ class TestExceptionCountExcludesWarmup:
     def test_new_errors_have_unique_console_keys(self, db0_fixture, make_job):  # pylint: disable=unused-argument
         job = make_job([LLM_LogItem(console_pos=0)])
         job.console_append("output")
-        job.console_append("first", error_message="same error")
-        job.console_append("second", error_message="same error")
-        assert dict(job.py_env.exceptions) == {1: "same error", 2: "same error"}
+        job.console_append("first", error=Error(ErrorKind.EXECUTION, "same error"))
+        job.console_append("second", error=Error(ErrorKind.EXECUTION, "same error"))
+        assert {key: error.message for key, error in job.py_env.exceptions.items()} == {
+            1: "same error", 2: "same error",
+        }
         assert job.exception_count == 2
         assert job.max_consecutive_exceptions == 1
 
     def test_terminal_diagnostics_do_not_poison_resume(self, db0_fixture, make_job):  # pylint: disable=unused-argument
         job = make_job([LLM_LogItem(console_pos=0) for _ in range(8)])
         for message in ("Token budget exhausted", "Execution stopped"):
-            job.console_append(message, error_message=message, harness_diagnostic=True)
+            job.console_append(message, error=Error(ErrorKind.HARNESS, message))
         assert job.exception_count == 0
         assert job.max_consecutive_exceptions == 0
         job.set_status(JobStatus.DONE)
@@ -169,14 +177,19 @@ class TestExceptionCountExcludesWarmup:
         """Persist provenance independently of identical diagnostic and error text."""
         job = make_job([LLM_LogItem(console_pos=0)])
         message = "LLM_HarnessError: Maximum token usage exceeded"
-        job.console_append(message, error_message=message, harness_diagnostic=True)
-        job.console_append(message, error_message=message)
+        job.console_append(message, error=Error(ErrorKind.HARNESS, message))
+        job.console_append(message, error=Error(ErrorKind.EXECUTION, message))
         job_id = db0.uuid(job)
         db0.close()
         db0.init(DB0_DIR, read_write=True)
         db0.open("test_prefix", "rw")
         restored = db0.fetch(job_id)
         assert list(restored.py_env.console) == [message, message]
+        assert restored.py_env.exceptions[0].kind == ErrorKind.HARNESS
+        assert restored.py_env.exceptions[1].kind == ErrorKind.EXECUTION
+        assert [error.message for error in restored.py_env.exceptions.values()] == [
+            message, message,
+        ]
         assert restored.exception_count == 1
         assert restored.max_consecutive_exceptions == 1
 
