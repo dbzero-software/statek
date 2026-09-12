@@ -26,6 +26,7 @@ from contextlib import contextmanager
 import dbzero as db0
 
 from statek.exceptions import FutureError, LLM_HarnessError
+from statek.extra_resources import extra_resources_from_metadata, extra_resources_identity
 from statek.future import FutureResult
 
 
@@ -1523,12 +1524,15 @@ def find_existing_job_def(
     chat_style: object = _MATCH_UNSET,
     post_processing: object = None,
     provider_config: Optional[ProviderConfig] = None,
+    extra_resources: object = _MATCH_UNSET,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
     Args:
         agent: the Agent the JobDef must be associated with
         warmup_code: the warmup code to match (compared after parsing)
+        extra_resources: parsed resource criterion; omitted means no filter,
+            while None or an empty triple matches no additional resources
 
     Returns:
         The first matching JobDef, or None if not found
@@ -1553,15 +1557,19 @@ def find_existing_job_def(
             return False
         if not provider_configs_match(job_def.provider_config, provider_config):
             return False
+        if extra_resources is not _MATCH_UNSET and extra_resources_identity(job_def.extra_resources) != resource_identity:
+            return False
         return True
 
     parsed = parse_warmup_code(warmup_code)
+    resource_identity = extra_resources_identity(extra_resources) if extra_resources is not _MATCH_UNSET else None
     agent_tag = db0.as_tag(agent)
     if (
         model is not None
         and job_params is not _MATCH_UNSET
         and locale is not _MATCH_UNSET
         and chat_style is not _MATCH_UNSET
+        and extra_resources is not _MATCH_UNSET
     ):
         resolved_model_family = model_family or ensure_model_name(model).model_family
         lookup_tag = _job_def_identity_tag(
@@ -1573,6 +1581,7 @@ def find_existing_job_def(
             chat_style,
             post_processing,
             provider_config,
+            extra_resources,
         )
         for job_def in db0.find(JobDef, agent_tag, lookup_tag):
             if _matches(job_def):
@@ -1725,6 +1734,7 @@ async def run_agentic_loop(agent: 'Agent',
     # Reuse an existing matching job definition or create a new one
     model_family, model_to_use = _resolve_job_def_model(agent, provider)
     provider_config = resolve_settings_provider_config(get_statek_settings())
+    extra_resources = extra_resources_from_metadata(agent._metadata)  # pylint: disable=protected-access
     job_def = find_existing_job_def(
         agent,
         warmup_code,
@@ -1734,6 +1744,7 @@ async def run_agentic_loop(agent: 'Agent',
         locale=None,
         chat_style=None,
         provider_config=provider_config,
+        extra_resources=extra_resources,
     )
     if job_def:
         # Clear any previous errors on the job definition they might'be been fixed after process restart
@@ -1747,6 +1758,7 @@ async def run_agentic_loop(agent: 'Agent',
             job_params=None,
             warmup_code=parsed_warmup_code,
             provider_config=provider_config,
+            extra_resources=extra_resources,
         )
     
     start_jobs_func = _make_start_jobs_func(agent, job_def, task_queue_size_func, provider)
@@ -1791,6 +1803,7 @@ async def run_agentic_fleet(
 
         model_family, model_to_use = _resolve_job_def_model(agent, provider)
         provider_config = resolve_settings_provider_config(get_statek_settings())
+        extra_resources = extra_resources_from_metadata(agent._metadata)  # pylint: disable=protected-access
         job_def = find_existing_job_def(
             agent,
             warmup_code,
@@ -1800,6 +1813,7 @@ async def run_agentic_fleet(
             locale=None,
             chat_style=None,
             provider_config=provider_config,
+            extra_resources=extra_resources,
         )
         if job_def:
             job_def.clear_errors()
@@ -1812,6 +1826,7 @@ async def run_agentic_fleet(
                 job_params=None,
                 warmup_code=parsed_warmup_code,
                 provider_config=provider_config,
+                extra_resources=extra_resources,
             )
 
         start_jobs_funcs.append(_make_start_jobs_func(agent, job_def, task_queue_size_func, provider))

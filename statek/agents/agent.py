@@ -29,6 +29,7 @@ from statek.executors.job import (
 )
 from statek.executors.post_processor import effective_post_processing
 from statek.provider_config import ProviderConfig
+from statek.extra_resources import ExtraResources
 from statek.prompt_config import (
     SystemPrompt,
     SystemPromptData,
@@ -486,7 +487,7 @@ class SupervisedAgent(Agent):
         self._X__ref_locals = None
         return True
 
-    def create_job_def(
+    def create_job_def(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         tools: Optional[List[Callable]] = None,
         warmup_code: WarmupCodeInput = None,
@@ -494,6 +495,7 @@ class SupervisedAgent(Agent):
         locale=None,
         post_processing=None,
         provider_config: Optional[ProviderConfig] = None,
+        extra_resources: ExtraResources | None = None,
         **kwargs
     ) -> JobDef:
         # pylint: disable=unused-argument
@@ -510,6 +512,7 @@ class SupervisedAgent(Agent):
             locale: optional locale for job execution
             post_processing: optional resolved post-processor or sequence of
                 post-processors for this job definition
+            extra_resources: parsed prompt resources transported by internal callers
             kwargs: job specific parameters for prompt formatting (i.e. job_params)
 
         Returns:
@@ -541,6 +544,7 @@ class SupervisedAgent(Agent):
             locale=locale,
             post_processing=resolved_post_processing,
             provider_config=provider_config,
+            extra_resources=extra_resources,
         )
 
     def _combine_warmup_code(self, warmup_code):

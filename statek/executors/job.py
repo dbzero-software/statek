@@ -35,6 +35,9 @@ from typing import (
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import Error, ErrorKind, PyEnv
+from statek.extra_resources import (
+    ExtraResources, extra_resources_from_metadata, extra_resources_identity, normalize_extra_resources,
+)
 from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
@@ -356,6 +359,7 @@ def _job_def_identity_hash(
     chat_style,
     post_processing,
     provider_config=None,
+    extra_resources=None,
 ) -> str:
     payload = (
         warmup_code,
@@ -366,6 +370,7 @@ def _job_def_identity_hash(
         chat_style,
         post_processing_identity(post_processing),
         provider_config_identity(provider_config),
+        extra_resources_identity(extra_resources),
     )
     encoded = str(payload).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:4]
@@ -380,10 +385,11 @@ def _job_def_identity_tag(
     chat_style,
     post_processing=None,
     provider_config=None,
+    extra_resources=None,
 ) -> str:
     return (
         f"{_JOBDEF_HASH_TAG_PREFIX}"
-        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing, provider_config)}"
+        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing, provider_config, extra_resources)}"
     )
 
 
@@ -398,6 +404,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
         getattr(job_def, "_chat_style", None),
         job_def.post_processing,
         job_def.provider_config,
+        job_def.extra_resources,
     )
 
 
@@ -421,9 +428,11 @@ class JobDef:
     # Optional locale for language-specific behaviour
     locale: Optional["StatekLocale"] = None
     # Optional post-processing sequence applied after LLM responses
-    post_processing: PostProcessingInput = None
+    post_processing: Optional[PostProcessingInput] = None
     # Durable provider configuration snapshot used to create this job definition.
     provider_config: Optional[ProviderConfig] = None
+    # Incremental prompt resource additions at L/M/H, kept out of LLM metadata.
+    extra_resources: Optional[ExtraResources] = None
 
     def __post_init__(self):
         if self.metadata is None:
@@ -432,6 +441,14 @@ class JobDef:
                 if self.agent is not None and self.agent._metadata
                 else {}
             )
+
+        resources = self.extra_resources
+        if resources is None:
+            resources = extra_resources_from_metadata(self.metadata)
+        resources = normalize_extra_resources(resources)
+        self.extra_resources = resources if any(resources) else None
+        if "EXTRA_RESOURCES" in self.metadata:
+            self.metadata = {key: value for key, value in self.metadata.items() if key != "EXTRA_RESOURCES"}
 
         metadata_model = self.metadata.get('MODEL') if self.metadata else None
         if metadata_model is None:

@@ -15,6 +15,7 @@
 """Parse incremental extra resource declarations for difficulty levels L/M/H."""
 
 import re
+from collections.abc import Mapping
 from typing import TypeAlias
 
 
@@ -68,13 +69,29 @@ def parse_extra_resources(input: str) -> ExtraResources:  # pylint: disable=rede
             if not remaining:
                 raise ValueError("Invalid EXTRA_RESOURCES: trailing comma")
 
+    return normalize_extra_resources((buckets[0], buckets[1], buckets[2]))
+
+
+def normalize_extra_resources(resources: ExtraResources | None) -> ExtraResources:
+    """Copy resource lists and retain each name only at its lowest level."""
     seen: set[str] = set()
     result: list[list[str] | None] = []
-    for bucket in buckets:
+    for bucket in resources or (None, None, None):
         additions = []
-        for name in bucket:
+        for name in bucket or ():
             if name not in seen:
                 seen.add(name)
                 additions.append(name)
         result.append(additions or None)
     return result[0], result[1], result[2]
+
+
+def extra_resources_from_metadata(metadata: Mapping[str, str] | None) -> ExtraResources:
+    """Prepare prompt resources once for both definition lookup and creation."""
+    declaration = metadata.get("EXTRA_RESOURCES") if metadata else None
+    return parse_extra_resources(declaration) if declaration is not None else (None, None, None)
+
+
+def extra_resources_identity(resources: ExtraResources | None) -> tuple[tuple[str, ...], ...]:
+    """Return the same ordered value identity for Python and persisted lists."""
+    return tuple(tuple(bucket or ()) for bucket in normalize_extra_resources(resources))

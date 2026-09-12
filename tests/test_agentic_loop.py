@@ -234,6 +234,7 @@ class TestFindExistingJobDef:
             job_params=None,
             locale=None,
             chat_style=None,
+            extra_resources=None,
         )
 
         assert result is job_def
@@ -262,6 +263,7 @@ class TestFindExistingJobDef:
             job_params=None,
             locale=None,
             chat_style=None,
+            extra_resources=None,
         )
 
         assert result is matching
@@ -294,6 +296,7 @@ class TestFindExistingJobDef:
             job_params=None,
             locale=None,
             chat_style=None,
+            extra_resources=None,
             provider_config=requested_config,
         )
 

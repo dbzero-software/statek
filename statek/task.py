@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Type
 import dbzero as db0
 from .exceptions import FutureError
+from .extra_resources import ExtraResources, extra_resources_from_metadata
 from .future import FutureResult, temporal
 from .system import tool
 from .agents.agent import Agent, SupervisedAgent
@@ -60,6 +61,7 @@ def _find_reusable_job_def(
     post_processing,
     kwargs: Dict[str, Any],
     provider_config: Optional[ProviderConfig],
+    extra_resources: ExtraResources,
 ):
     """Find an existing JobDef matching create_new_job's reusable definition."""
     from statek.executors.utils import find_existing_job_def  # pylint: disable=import-outside-toplevel
@@ -79,6 +81,7 @@ def _find_reusable_job_def(
         chat_style=_dialog_chat_style(agent, kwargs) if isinstance(agent, DialogAgent) else None,
         post_processing=resolved_post_processing,
         provider_config=provider_config,
+        extra_resources=extra_resources,
     )
 
 
@@ -447,6 +450,7 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
     shared_vars = shared_vars or {}
     effective_locale = _resolve_child_locale(parent_job, locale)
     provider_config = resolve_settings_provider_config(_get_statek_settings())
+    extra_resources = extra_resources_from_metadata(agent._metadata)  # pylint: disable=protected-access
     job_def = _find_reusable_job_def(
         agent,
         warmup_code,
@@ -454,6 +458,7 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
         post_processing,
         kwargs,
         provider_config,
+        extra_resources,
     )
     if job_def is None:
         job_def = agent.create_job_def(
@@ -461,6 +466,7 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
             locale=effective_locale,
             post_processing=post_processing,
             provider_config=provider_config,
+            extra_resources=extra_resources,
             **kwargs,
         )
 
