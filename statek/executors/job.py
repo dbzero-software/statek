@@ -88,6 +88,7 @@ from statek.task_difficulty import (
 )
 
 if TYPE_CHECKING:
+    from statek.agents.agent import Agent
     from statek.agents.dialog_agent import Reminder
     from statek.task import SubTaskHandler
 
@@ -1476,6 +1477,45 @@ class Job:
             console=history_console,
             push_log=history_push_log,
         )
+
+    def get_resource_agents(self) -> List["Agent"]:
+        """Return the receiver and configured donors active at this job's difficulty.
+
+        Donors are resolved by role in the receiver's prefix, independently of
+        running jobs. Lower-level declarations remain active at higher levels;
+        donor declarations are not expanded recursively. The returned list is
+        job-local and does not modify any agent's configuration.
+
+        Raises:
+            ValueError: If an activated role has no configured agent.
+        """
+        receiver = self.job_def.agent
+        resources = getattr(self.job_def, "extra_resources", None)
+        if not resources:
+            return [receiver]
+
+        level = tuple(TaskDifficulty.values()).index(self.get_current_difficulty())
+        roles = dict.fromkeys(
+            role for index in range(level + 1) for role in resources[index] or ()
+            if role != receiver.role
+        )
+        if not roles:
+            return [receiver]
+
+        # Agent imports JobDef from this module, so defer the runtime import.
+        from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel
+
+        prefix = db0.get_prefix_of(receiver).name
+        configured = {agent.role: agent for agent in db0.find(Agent, prefix=prefix)}
+        result = [receiver]
+        for role in roles:
+            if role not in configured:
+                raise ValueError(
+                    f"EXTRA_RESOURCES for {receiver.role!r}: agent {role!r} "
+                    f"is not configured in prefix {prefix!r}"
+                )
+            result.append(configured[role])
+        return result
 
     def get_current_model(self) -> str:
         """Return the concrete model configured for the job's current difficulty."""
