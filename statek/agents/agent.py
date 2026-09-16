@@ -210,7 +210,9 @@ class Agent:
         self._description = new_description
         return True
 
-    def _expand_tool_placeholders(self, text: str) -> Optional[str]:
+    def _expand_tool_placeholders(
+        self, text: str, available_tools: Optional[Sequence[Callable]] = None,
+    ) -> Optional[str]:
         """Expand {tools}, {brief_tools}, {detailed_tools} placeholders in text.
 
         Lines starting with '#' before a placeholder are embedded as a block comment.
@@ -225,10 +227,10 @@ class Agent:
         for name, brief, py_syntax in placeholders:
             pattern = re.compile(rf'^(\s*#\s*)\{{{name}\}}', re.MULTILINE)
             if pattern.search(text):
-                tools_str = self._format_tools(brief, py_syntax)
+                tools_str = self._format_tools(brief, py_syntax, available_tools)
                 text = pattern.sub(block_comment(tools_str), text)
             elif f'{{{name}}}' in text:
-                tools_str = self._format_tools(brief, py_syntax)
+                tools_str = self._format_tools(brief, py_syntax, available_tools)
                 text = text.replace(f'{{{name}}}', tools_str)
         return text
 
@@ -236,6 +238,7 @@ class Agent:
         self,
         task_difficulty: TaskDifficulty,
         job_params: Dict = None,
+        available_tools: Optional[Sequence[Callable]] = None,
         **kwargs,
     ) -> str:
         """
@@ -263,7 +266,9 @@ class Agent:
         result = format_system_prompt(
             self._system_prompt,
             task_difficulty,
-            prompt_part_formatter=self._expand_tool_placeholders,
+            prompt_part_formatter=lambda text: self._expand_tool_placeholders(
+                text, available_tools,
+            ),
         )
         format_ctx = {}
         if job_params:
@@ -278,29 +283,23 @@ class Agent:
             return result.format_map(format_ctx)
         return result
 
-    def _format_tools(self, brief: bool, py_syntax: bool) -> str:
+    def _format_tools(
+        self, brief: bool, py_syntax: bool,
+        available_tools: Optional[Sequence[Callable]] = None,
+    ) -> str:
         """Format all tools with the specified settings."""
         agent_name = _get_class_name(self)
-        formatted = []
         def inner_format_tool(fn: Callable) -> str:
             parsed = parse_tool_docstring(fn)
             return format_docstring(parsed, brief=brief, py_syntax=py_syntax,
                                     agent=agent_name)
 
+        tools = self.tools if available_tools is None else available_tools
         formatted = [
             inner_format_tool(fn)
-            for fn in self._tools
+            for fn in tools
             if not getattr(fn, "tool_hidden", False)
         ]
-        # also process tools specified by name
-        if self._tools_by_name:
-            for tool_name in self._tools_by_name:
-                fn = self.context.get(tool_name)
-                if fn is None:
-                    raise ValueError(f'Missing tool defined by name "{tool_name}"')
-                if getattr(fn, "tool_hidden", False):
-                    continue
-                formatted.append(inner_format_tool(fn))
 
         return '\n\n'.join(formatted)
 
@@ -328,14 +327,20 @@ class Agent:
         return None
 
     @property
-    def all_tools(self) -> List[Callable]:
-        """Return all tools assigned to this agent (both regular and internal)."""
+    def tools(self) -> List[Callable]:
+        """Return the agent's LLM-visible direct and name-registered tools."""
         result = list(self._tools)
         if self._tools_by_name:
             for tool_name in self._tools_by_name:
                 fn = self.context.get(tool_name)
                 if fn is not None:
                     result.append(fn)
+        return result
+
+    @property
+    def all_tools(self) -> List[Callable]:
+        """Return all tools assigned to this agent (both regular and internal)."""
+        result = self.tools
         if self._internal_tools:
             result.extend(self._internal_tools)
         if self._internal_tools_by_name:

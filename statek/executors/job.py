@@ -774,6 +774,7 @@ class Job:
         return self.job_def.agent.system_prompt(
             task_difficulty=difficulty or self.get_current_difficulty(),
             job_params=self.job_def.job_params,
+            available_tools=self.get_resource_tools(include_internal=False),
         )
 
     def _ensure_ext_ref_storage(self):
@@ -1418,7 +1419,7 @@ class Job:
             "system_prompt": system_prompt,
             "model": model,
             "metadata": metadata,
-            "available_tools": self.job_def.agent.all_tools,
+            "available_tools": self.get_resource_tools(include_internal=False),
             "provider_config": self.job_def.provider_config,
         }
         if temperature is not None:
@@ -1515,6 +1516,25 @@ class Job:
                     f"is not configured in prefix {prefix!r}"
                 )
             result.append(configured[role])
+        return result
+
+    def get_resource_tools(self, include_internal: bool = True) -> List[Callable]:
+        """Return active receiver and donor tools, keeping the first tool per name.
+
+        Receiver tools precede donor tools, so a donor cannot replace an
+        existing receiver binding. Internal tools are included for execution by
+        default but can be omitted from LLM-facing prompt documentation.
+        """
+        result = []
+        seen: set[str] = set()
+        for agent in self.get_resource_agents():
+            tools = agent.all_tools if include_internal else agent.tools
+            for tool_fn in tools:
+                name = getattr(tool_fn, "__name__", "")
+                if name in seen:
+                    continue
+                seen.add(name)
+                result.append(tool_fn)
         return result
 
     def get_current_model(self) -> str:

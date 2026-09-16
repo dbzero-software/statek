@@ -266,9 +266,7 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     # Merge agent's private context if available
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         global_context.update(job.job_def.agent.context)
-    all_direct_tools = list(job.job_def.agent._tools)
-    if job.job_def.agent._internal_tools:
-        all_direct_tools.extend(job.job_def.agent._internal_tools)
+    all_direct_tools = job.get_resource_tools()
     # Include system tools from the global registry (not stored on agents)
     from statek.system import find_tools  # pylint: disable=import-outside-toplevel
     agent_tool_names = {t.__name__ for t in all_direct_tools}
@@ -401,17 +399,12 @@ def _is_hidden_tool_call(call_spec: CallSpec, job: Job, policy) -> bool:
     if call_spec.func_name in policy.blocked_tools:
         return True
 
-    agent = job.job_def.agent
-    if agent is None:
-        return False
-
-    for tool_fn in agent._tools:  # pylint: disable=protected-access
+    for tool_fn in job.get_resource_tools():
         if (getattr(tool_fn, "__name__", None) == call_spec.func_name
                 and getattr(tool_fn, "tool_hidden", False)):
             return True
 
-    context_fn = agent.context.get(call_spec.func_name)
-    return bool(callable(context_fn) and getattr(context_fn, "tool_hidden", False))
+    return False
 
 
 def _compile_exec_node(node: ast.AST, filename: str):
@@ -851,20 +844,18 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         # Re-wrap the original tool with a combined context (global + local) so that
         # _bind_by_name / find_locals can resolve string arguments to actual objects
         # (e.g. docstr(what='some_tool') → the actual callable, not the string).
-        agent = job.job_def.agent
         original_tool = None
-        if agent:
-            for t in agent._tools:  # pylint: disable=protected-access
-                if t.__name__ == call_spec.func_name:
-                    original_tool = t
+        for tool_fn in job.get_resource_tools():
+            if tool_fn.__name__ == call_spec.func_name:
+                original_tool = tool_fn
+                break
+        # Also search system tools from the global registry
+        if original_tool is None:
+            from statek.system import find_tools  # pylint: disable=import-outside-toplevel
+            for tool_fn in find_tools("SYSTEM", include_hidden=True):
+                if tool_fn.__name__ == call_spec.func_name:
+                    original_tool = tool_fn
                     break
-            # Also search system tools from the global registry
-            if original_tool is None:
-                from statek.system import find_tools  # pylint: disable=import-outside-toplevel
-                for t in find_tools("SYSTEM", include_hidden=True):
-                    if t.__name__ == call_spec.func_name:
-                        original_tool = t
-                        break
 
         if original_tool is not None:
             combined_ctx = {**global_context, **local_context}
