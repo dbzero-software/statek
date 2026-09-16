@@ -860,6 +860,64 @@ def test_get_current_difficulty_uses_example_difficulty(job_def_factory):
     assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
 
 
+def test_get_current_difficulty_uses_source_aware_donor_example(
+    job_def_factory, agent_factory,
+):
+    """A persisted example source resolves difficulty against its donor's local ID."""
+    donor = agent_factory(role="donor")
+    job = Job(
+        job_def=job_def_factory(extra_resources=(["donor"], None, None)),
+        job_status=JobStatus.READY,  # pylint: disable=no-member
+    )
+    job.py_env.local_state["_PERM_CTX"] = {
+        "last_example_id": 7,
+        "last_example_source": {"agent_name": "donor", "example_id": 1},
+    }
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.high,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.high
+
+    mock_get_example_difficulty.assert_called_once_with("donor", 1)
+    assert donor in job.get_resource_agents()
+
+
+def test_get_current_difficulty_malformed_source_uses_legacy_receiver_id(job_def_factory):
+    """Malformed persisted source data falls back to the legacy receiver-local ID."""
+    job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {
+        "last_example_id": 3,
+        "last_example_source": {"agent_name": "donor", "example_id": "invalid"},
+    }
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.medium,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+
+    mock_get_example_difficulty.assert_called_once_with("test", 3)
+
+
+def test_get_current_difficulty_unconfigured_source_uses_legacy_receiver_id(job_def_factory):
+    """A forged source outside configured resources cannot influence job difficulty."""
+    job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {
+        "last_example_id": 3,
+        "last_example_source": {"agent_name": "../foreign", "example_id": 0},
+    }
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.medium,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+
+    mock_get_example_difficulty.assert_called_once_with("test", 3)
+
+
 def test_get_current_difficulty_uses_registered_job_perm_ctx_example_id(job_def_factory):
     """The registered job's PyEnv context supplies the last example ID."""
     job_def = job_def_factory(

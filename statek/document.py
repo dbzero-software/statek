@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import lru_cache
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 
 _REQUIRED_KEYS = ("ord_no", "topic", "title")
@@ -32,7 +32,7 @@ class Document:
     """Body of text - organized by lines"""
     body: List[str] = field(default_factory=list)
 
-    def match_audience(self, agent_name: str) -> bool:
+    def match_audience(self, agent_name: str | Sequence[str]) -> bool:
         """Check if a specific agent is the target audience.
 
         If "audience" is not specified, the document targets all agents.
@@ -40,7 +40,8 @@ class Document:
         audience = self.document_metadata.get("audience")
         if audience is None:
             return True
-        return agent_name in audience
+        agent_names = (agent_name,) if isinstance(agent_name, str) else agent_name
+        return any(name in audience for name in agent_names)
 
 
 @dataclass
@@ -50,7 +51,7 @@ class Topic:
     topic: str
     documents: List[Document] = field(default_factory=list)
 
-    def count(self, agent_name: str) -> int:
+    def count(self, agent_name: str | Sequence[str]) -> int:
         """Count documents accessible to a given agent.
 
         Args:
@@ -60,6 +61,16 @@ class Topic:
             Number of documents matching the agent's audience.
         """
         return sum(1 for doc in self.documents if doc.match_audience(agent_name))
+
+
+def validate_unique_document_ids(documents: Sequence[Document]) -> None:
+    """Reject an accessible document view containing an ambiguous numeric ID."""
+    seen: set[int] = set()
+    for document in documents:
+        document_id = document.document_metadata["ord_no"]
+        if document_id in seen:
+            raise ValueError(f"Ambiguous document ID '{document_id}'")
+        seen.add(document_id)
 
 
 def parse_document(document: str) -> Document:
@@ -147,7 +158,7 @@ def load_documents(path: str) -> List[Topic]:
     return list(topics_map.values())
 
 
-def find_topic(key: Union[int, str], agent_name: str,
+def find_topic(key: Union[int, str], agent_name: str | Sequence[str],
                all_topics: List[Topic]) -> Optional[Topic]:
     """Find a topic by index, name, or name fragment.
 
@@ -192,7 +203,7 @@ def find_topic(key: Union[int, str], agent_name: str,
     raise ValueError(f"Ambiguous topic '{key}', matches: {listing}")
 
 
-def find_document(key: Union[int, str], agent_name: str,
+def find_document(key: Union[int, str], agent_name: str | Sequence[str],
                   topic: Topic) -> Optional[Document]:
     """Find a document within a topic by index, title, or title fragment.
 
@@ -212,6 +223,7 @@ def find_document(key: Union[int, str], agent_name: str,
             document titles and indexes.
     """
     accessible = [d for d in topic.documents if d.match_audience(agent_name)]
+    validate_unique_document_ids(accessible)
 
     if isinstance(key, int):
         for doc in accessible:

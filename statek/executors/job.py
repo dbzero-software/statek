@@ -1565,6 +1565,36 @@ class Job:
         if "default_example_id" in local_state:
             return local_state["default_example_id"]        
         return None
+
+    def _get_last_example_source(self) -> Optional[Tuple[str, int]]:
+        """Return a validated source role/local ID for the last shown example."""
+        perm_ctx = self.py_env.perm_ctx or {}
+        source = perm_ctx.get("last_example_source")
+        if source is None and get_current_job() is self:
+            source = perm_ctx_get("last_example_source", None)
+        if not hasattr(source, "get"):
+            return None
+        agent_name = source.get("agent_name")
+        example_id = source.get("example_id")
+        if not isinstance(agent_name, str) or not isinstance(example_id, int):
+            return None
+
+        baseline = self.__last_difficulty or _get_static_task_difficulty(self.job_def.metadata)
+        level = tuple(TaskDifficulty.values()).index(baseline)
+        allowed_roles = {self.job_def.agent.role}
+        resources = getattr(self.job_def, "extra_resources", None)
+        if resources:
+            allowed_roles.update(
+                role for index in range(level + 1) for role in resources[index] or ()
+            )
+        if agent_name not in allowed_roles:
+            return None
+
+        from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel
+        prefix = db0.get_prefix_of(self.job_def.agent).name
+        if not any(agent.role == agent_name for agent in db0.find(Agent, prefix=prefix)):
+            return None
+        return agent_name, example_id
     
     def get_current_difficulty(self) -> TaskDifficulty:
         """Return the current task difficulty for this job.
@@ -1575,10 +1605,12 @@ class Job:
         """        
         last_example_id = self._get_last_example_id()
 
-        if last_example_id is not None:            
-            agent = self.job_def.agent if self.job_def is not None else None
-            agent_name = agent.role if agent is not None else None
-            difficulty = _get_example_difficulty_for_job(agent_name, last_example_id)
+        if last_example_id is not None:
+            source = self._get_last_example_source()
+            if source is None:
+                agent = self.job_def.agent if self.job_def is not None else None
+                source = (agent.role if agent is not None else None, last_example_id)
+            difficulty = _get_example_difficulty_for_job(*source)
             # update the dynamically resolved difficulty                 
             if difficulty is not None:
                 if self.__last_difficulty is None:

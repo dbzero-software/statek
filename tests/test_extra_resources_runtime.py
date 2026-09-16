@@ -2,11 +2,19 @@
 # pylint: disable=protected-access,no-member,redefined-outer-name
 
 from collections.abc import Callable
+from unittest.mock import patch
 
 import dbzero as db0
 import pytest
 
-from statek.agents.agent import Agent, SupervisedAgent
+from statek.agents.agent import (
+    Agent,
+    SupervisedAgent,
+    list_of_documents as list_documents_wrapper,
+    list_of_examples as list_examples_wrapper,
+    show_document as show_document_wrapper,
+    show_example as show_example_wrapper,
+)
 from statek.executors.job import Job, JobDef
 from statek.executors.utils import exec_step, exec_tool
 from statek.extra_resources import parse_extra_resources
@@ -370,3 +378,30 @@ async def test_receiver_tool_name_takes_precedence_over_donor_tool(
     assert [tool_fn.__name__ for tool_fn in tools].count("receiver_action") == 1
     await exec_step("collision_result = receiver_action('ok')", resource_tool_job)
     assert resource_tool_job.py_env.local_state["collision_result"] == "receiver:ok"
+
+
+def test_resource_wrappers_pass_active_agent_roles(resource_tool_job: Job) -> None:
+    """Example and document wrappers pass receiver-first active roles to their helpers."""
+    expected_roles = ["receiver", "preferences_assistant"]
+    with (
+        patch("statek.agents.agent.get_current_agent", return_value=resource_tool_job.agent),
+        patch("statek.agents.agent.get_current_job", return_value=resource_tool_job),
+        patch("statek.agents.list_of_examples.list_of_examples") as list_examples,
+        patch("statek.agents.list_of_examples.show_example") as show_example,
+        patch("statek.agents.list_of_documents.list_of_documents") as list_documents,
+        patch("statek.agents.list_of_documents.show_document") as show_document,
+    ):
+        list_examples_wrapper(start_index=2, limit=3)
+        show_example_wrapper(example_id=4)
+        list_documents_wrapper(topic="Guide", start_index=5, limit=6)
+        show_document_wrapper(key=7, topic="Guide", start_from=8, limit=9)
+
+    list_examples.assert_called_once_with(expected_roles, 2, 3)
+    show_example.assert_called_once_with(expected_roles, 4)
+    list_documents.assert_called_once_with(
+        expected_roles, list_documents.call_args.args[1], topic="Guide", start_index=5, limit=6,
+    )
+    show_document.assert_called_once_with(
+        expected_roles, show_document.call_args.args[1],
+        key=7, topic="Guide", start_from=8, limit=9,
+    )

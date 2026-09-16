@@ -9,9 +9,15 @@ import pytest
 
 from tests.conftest import StatekContextJob, run_with_statek_job
 from statek.agents.agent import Agent
-from statek.agents.list_of_examples import get_example_difficulty, show_example
+from statek.agents.list_of_examples import (
+    get_example_difficulty,
+    list_of_examples,
+    show_example,
+)
 from statek.executors.example import load_examples
-from statek.executors.job import TaskDifficulty
+from statek.executors.job import Job, JobDef, TaskDifficulty
+from statek.extra_resources import parse_extra_resources
+from statek.prompt_config import make_system_prompt
 from statek.settings import StatekSettings, ChatStyle, get_statek_settings
 
 
@@ -399,3 +405,90 @@ def test_get_example_difficulty_returns_none_when_missing(examples_dir):
     settings = _settings(examples_dir=examples_dir)
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
         assert get_example_difficulty("myagent", 0) is None
+
+
+@pytest.fixture
+def expanded_examples_dir(temp_dir):
+    """Create receiver and donor examples with overlapping local indexes."""
+    examples = {
+        "receiver": [("Receiver zero", "low"), ("Receiver one", "medium")],
+        "preferences_assistant": [("Preference zero", "high")],
+        "schedule_assistant": [("Schedule zero", "medium")],
+    }
+    for role, role_examples in examples.items():
+        role_dir = os.path.join(temp_dir, role)
+        os.makedirs(role_dir, exist_ok=True)
+        for index, (name, difficulty) in enumerate(role_examples):
+            content = (
+                f"# seq_id: {index}\n# name: {name}\n# difficulty: {difficulty}\n"
+                f"```python\nprint({name!r})\n```\n"
+            )
+            path = os.path.join(role_dir, f"example-{index}.md")
+            with open(path, "w", encoding="utf-8") as file:
+                file.write(content)
+    return temp_dir
+
+
+@pytest.mark.usefixtures("db0_fixture")
+def test_list_of_examples_combines_roles_with_stable_public_ids(
+    capsys, expanded_examples_dir,
+):
+    """Combined examples keep receiver-first IDs and append newly active donors."""
+    settings = _settings(examples_dir=expanded_examples_dir)
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        list_of_examples(["receiver", "preferences_assistant"], start_index=1, limit=2)
+    first = capsys.readouterr().out
+
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        list_of_examples(
+            ["receiver", "preferences_assistant", "schedule_assistant"],
+            start_index=0,
+            limit=10,
+        )
+    expanded = capsys.readouterr().out
+
+    assert "1: Receiver one" in first
+    assert "2: Preference zero" in first
+    assert "0: Receiver zero" in expanded
+    assert "1: Receiver one" in expanded
+    assert "2: Preference zero" in expanded
+    assert "3: Schedule zero" in expanded
+
+
+@pytest.mark.usefixtures("db0_fixture")
+def test_show_example_records_donor_source_and_raises_job_difficulty(
+    capsys, expanded_examples_dir,
+):
+    """A donor example stores its local source and drives difficulty from that donor."""
+    receiver = Agent(
+        role="receiver", _system_prompt=make_system_prompt("Receiver"),
+        _tools=[], _metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "L"},
+    )
+    donor = Agent(
+        role="preferences_assistant", _system_prompt=make_system_prompt("Preferences"),
+        _tools=[], _metadata={"MODEL": "test-model"},
+    )
+    job = Job(job_def=JobDef(
+        agent=receiver,
+        metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "L"},
+        extra_resources=parse_extra_resources("L:preferences_assistant"),
+    ))
+    settings = _settings(
+        examples_dir=expanded_examples_dir,
+        chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
+    )
+
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        run_with_statek_job(
+            job,
+            lambda: show_example(["receiver", "preferences_assistant"], example_id=2),
+        )
+
+    capsys.readouterr()
+    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 2
+    assert job.py_env.local_state["_PERM_CTX"]["last_example_source"] == {
+        "agent_name": "preferences_assistant", "example_id": 0,
+    }
+    with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):
+        assert job.get_current_difficulty() == TaskDifficulty.high  # pylint: disable=no-member
+    assert donor in job.get_resource_agents()

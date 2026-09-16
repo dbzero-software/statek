@@ -17,7 +17,7 @@ from pathlib import Path
 import re
 from typing import Any, List, Callable, Dict, Optional, Sequence, Union
 import dbzero as db0
-from statek.utils import block_comment, get_current_agent, _get_class_name
+from statek.utils import block_comment, get_current_agent, get_current_job, _get_class_name
 from statek.system import tool
 from statek.docstring import parse_tool_docstring, format_docstring
 from statek.utils import CodeBlock
@@ -51,9 +51,7 @@ def list_of_examples(start_index: int = 0, limit: int = 10, **kwargs):  # pylint
         limit: Maximum number of examples to show (default: 10).
     """
     from statek.agents.list_of_examples import list_of_examples as _impl  # pylint: disable=import-outside-toplevel
-    agent = get_current_agent()
-    agent_name = agent.role if agent else None
-    _impl(agent_name, start_index, limit)
+    _impl(_get_resource_agent_names(), start_index, limit)
 
 
 @tool(system=True)
@@ -70,10 +68,11 @@ def list_of_documents(topic=None, start_index: int = 0, limit: int = 25, **kwarg
     """
     from statek.agents.list_of_documents import list_of_documents as _impl  # pylint: disable=import-outside-toplevel
     from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
-    agent = get_current_agent()
-    agent_name = agent.role if agent else None
     documents_dir = get_statek_settings().documents_dir
-    _impl(agent_name, documents_dir, topic=topic, start_index=start_index, limit=limit)
+    _impl(
+        _get_resource_agent_names(), documents_dir,
+        topic=topic, start_index=start_index, limit=limit,
+    )
 
 
 @tool(system=True)
@@ -90,10 +89,11 @@ def show_document(key, topic=None, start_from: int = 0, limit: int = 50, **kwarg
     """
     from statek.agents.list_of_documents import show_document as _impl  # pylint: disable=import-outside-toplevel
     from statek.settings import get_statek_settings  # pylint: disable=import-outside-toplevel
-    agent = get_current_agent()
-    agent_name = agent.role if agent else None
     documents_dir = get_statek_settings().documents_dir
-    _impl(agent_name, documents_dir, key=key, topic=topic, start_from=start_from, limit=limit)
+    _impl(
+        _get_resource_agent_names(), documents_dir,
+        key=key, topic=topic, start_from=start_from, limit=limit,
+    )
 
 
 @tool(system=True)
@@ -107,8 +107,18 @@ def show_example(example_id: Optional[int] = None, **kwargs):  # pylint: disable
             If not provided, uses default_example_id from the local context.
     """
     from statek.agents.list_of_examples import show_example as _impl  # pylint: disable=import-outside-toplevel
+    _impl(_get_resource_agent_names(), example_id)
+
+
+def _get_resource_agent_names() -> List[str]:
+    """Return current receiver and active donor roles for resource lookup."""
     agent = get_current_agent()
-    _impl(agent.role if agent else None, example_id)
+    if agent is None:
+        return []
+    job = get_current_job()
+    if job is None:
+        return [agent.role]
+    return [resource_agent.role for resource_agent in job.get_resource_agents()]
 
 
 @db0.memo

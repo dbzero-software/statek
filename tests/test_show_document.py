@@ -106,6 +106,20 @@ def test_show_document_fuzzy_match_below_threshold(docs_dir, capsys):
     assert "not found" in out
 
 
+def test_show_document_accepts_any_active_resource_audience(docs_dir, capsys):
+    """A donor-restricted document is visible through the combined audience."""
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: show_document(
+            ["receiver", "agent_a"], docs_dir, key="Secret Guide", topic="Guide",
+        ),
+    )
+    out = capsys.readouterr().out
+
+    assert "Restricted content." in out
+
+
 def _write(directory, filename, content):
     with open(os.path.join(directory, filename), "w", encoding="utf-8") as f:
         f.write(content)

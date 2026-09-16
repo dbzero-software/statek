@@ -22,9 +22,14 @@ documents directory. The base directory is read from StatekSettings.documents_di
 
 # pylint: disable=unused-argument
 
-from typing import Optional, Union
+from typing import Optional, Sequence, Union
 
-from statek.document import load_documents, find_topic, find_document
+from statek.document import (
+    find_document,
+    find_topic,
+    load_documents,
+    validate_unique_document_ids,
+)
 from statek.settings import get_statek_settings
 from statek.system import tool
 from statek.utils import perm_ctx_set, perm_ctx_get
@@ -36,7 +41,7 @@ def _get_documents_dir() -> Optional[str]:
 
 
 @tool(system=True)
-def list_of_documents(agent_name: str, documents_dir: str,
+def list_of_documents(agent_name: str | Sequence[str], documents_dir: str,
                       topic: Optional[Union[int, str]] = None,
                       start_index: int = 0, limit: int = 25, **kwargs):  # pylint: disable=unused-argument
     """Lists available topics or documents within a topic.
@@ -86,6 +91,7 @@ def _list_documents(topic_key, agent_name, all_topics, start_index, limit):
     perm_ctx_set(last_topic_id=matched.ord_no)
 
     docs = [d for d in matched.documents if d.match_audience(agent_name)]
+    validate_unique_document_ids(docs)
     total = len(docs)
     print(f"# Document ID: Document name ({total} total)")
     for d in docs[start_index:start_index + limit]:
@@ -111,7 +117,7 @@ def _resolve_topic(topic_key, agent_name, all_topics):
 
 
 @tool(system=True)
-def show_document(agent_name: str, documents_dir: str,  # pylint: disable=too-many-positional-arguments,too-many-arguments
+def show_document(agent_name: str | Sequence[str], documents_dir: str,  # pylint: disable=too-many-positional-arguments,too-many-arguments
                   key: Union[int, str], topic: Optional[Union[int, str]] = None,
                   start_from: int = 0, limit: int = 50, **kwargs):
     """Shows the contents of a specific document.

@@ -48,3 +48,14 @@ def test_find_exact_title_takes_priority():
 def test_find_excludes_inaccessible_docs():
     # agent_c can only see "Overview" (no audience restriction)
     assert find_document("Details", "agent_c", TOPIC) is None
+
+
+def test_find_rejects_duplicate_ids_exposed_by_combined_audiences():
+    """Combined resource audiences cannot silently select one of two identical IDs."""
+    topic = Topic(ord_no=0, topic="T", documents=[
+        _doc(1, "Agent A", audience=["agent_a"]),
+        _doc(1, "Agent B", audience=["agent_b"]),
+    ])
+
+    with pytest.raises(ValueError, match="Ambiguous document ID '1'"):
+        find_document(1, ["agent_a", "agent_b"], topic)

@@ -24,9 +24,10 @@ The wrappers in agent.py resolve agent_name at call time via get_current_agent()
 """
 
 import os
-from typing import Optional
+from dataclasses import dataclass
+from typing import Optional, Sequence
 
-from statek.executors.example import load_examples, format_example
+from statek.executors.example import Example, load_examples, format_example
 from statek.settings import get_statek_settings
 from statek.system import tool
 from statek.task_difficulty import TaskDifficulty
@@ -36,6 +37,39 @@ from statek.utils import find_locals, perm_ctx_set
 def _get_examples_dir() -> Optional[str]:
     """Return the examples base directory from StatekSettings, or None if not set."""
     return get_statek_settings().examples_dir
+
+
+@dataclass(frozen=True)
+class SourcedExample:
+    """An example paired with its configured agent role and local index."""
+
+    agent_name: str
+    example_id: int
+    example: Example
+
+
+def _agent_names(agent_name: str | Sequence[str]) -> list[str]:
+    """Normalize one or more role names while preserving their first occurrence."""
+    names = [agent_name] if isinstance(agent_name, str) else list(agent_name)
+    return list(dict.fromkeys(name for name in names if name))
+
+
+def get_sourced_examples(agent_name: str | Sequence[str]) -> list[SourcedExample]:
+    """Return a fresh receiver-first combined view of examples and their sources."""
+    examples_dir = _get_examples_dir()
+    if not examples_dir:
+        return []
+
+    result = []
+    for role in _agent_names(agent_name):
+        path = os.path.join(examples_dir, role)
+        if not os.path.isdir(path):
+            continue
+        result.extend(
+            SourcedExample(role, example_id, example)
+            for example_id, example in enumerate(load_examples(path))
+        )
+    return result
 
 
 def _get_example(agent_name: str, example_id: int, logs: Optional[list[str]] = None):
@@ -90,7 +124,9 @@ def get_example_difficulty(agent_name: str, example_id: int) -> Optional[TaskDif
 
 
 @tool(system=True)
-def list_of_examples(agent_name: str, start_index: int = 0, limit: int = 10, **kwargs):  # pylint: disable=unused-argument
+def list_of_examples(  # pylint: disable=unused-argument
+    agent_name: str | Sequence[str], start_index: int = 0, limit: int = 10, **kwargs,
+):
     """Lists available examples for a given agent.
 
     Results are printed as a numbered list (index: name).
@@ -107,19 +143,21 @@ def list_of_examples(agent_name: str, start_index: int = 0, limit: int = 10, **k
         list_of_examples(agent_name="coordinator")
         list_of_examples(agent_name="information_retriever", start_index=10, limit=5)
     """
-    names = get_example_names(agent_name)
-    if not names:
+    sourced_examples = get_sourced_examples(agent_name)
+    if not sourced_examples:
         print("# No examples found")
         return
-    total = len(names)
+    total = len(sourced_examples)
     print(f"# Example ID: Example name ({total} total)")
-    for i, name in enumerate(names[start_index:start_index + limit]):
+    for i, sourced in enumerate(sourced_examples[start_index:start_index + limit]):
         idx = start_index + i
-        print(f"{idx}: {name}")
+        print(f"{idx}: {sourced.example.example_metadata.get('name', '')}")
 
 
 @tool(system=True)
-def show_example(agent_name: str, example_id: Optional[int] = None, **kwargs):  # pylint: disable=unused-argument
+def show_example(  # pylint: disable=unused-argument
+    agent_name: str | Sequence[str], example_id: Optional[int] = None, **kwargs,
+):
     """Shows a specific example for a given agent.
 
     Prints the example content formatted using the current chat style setting.
@@ -146,17 +184,26 @@ def show_example(agent_name: str, example_id: Optional[int] = None, **kwargs):  
         except (TypeError, ValueError):
             print("# Example not found")
             return
-    lookup_logs = []
-    example = _get_example(agent_name, example_id, logs=lookup_logs)
-    if example is None:
-        for message in lookup_logs:
-            print(message)
+    sourced_examples = get_sourced_examples(agent_name)
+    if example_id < 0 or example_id >= len(sourced_examples):
+        if sourced_examples:
+            print(f"# Example {example_id} not found (total: {len(sourced_examples)})")
+        else:
+            print("# No examples found")
         return
+    sourced = sourced_examples[example_id]
+    example = sourced.example
     settings = get_statek_settings()
     style = settings.examples_style or settings.chat_style
     name = example.example_metadata.get("name", "")
     try:
-        perm_ctx_set(last_example_id=example_id)
+        perm_ctx_set(
+            last_example_id=example_id,
+            last_example_source={
+                "agent_name": sourced.agent_name,
+                "example_id": sourced.example_id,
+            },
+        )
     except RuntimeError:
         pass
     if settings.xml_box_example:
