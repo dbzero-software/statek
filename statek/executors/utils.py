@@ -393,18 +393,12 @@ def _execution_sandbox_policy(allowed_tools: Optional[Set[str]] = None):
     return policy
 
 
-def _is_hidden_tool_call(call_spec: CallSpec, job: Job, policy) -> bool:
+def _is_hidden_tool_call(call_spec: CallSpec, tool_fn: Optional[Callable], policy) -> bool:
     if policy is None or call_spec.func_name in policy.allowed_tools:
         return False
-    if call_spec.func_name in policy.blocked_tools:
-        return True
-
-    for tool_fn in job.get_resource_tools():
-        if (getattr(tool_fn, "__name__", None) == call_spec.func_name
-                and getattr(tool_fn, "tool_hidden", False)):
-            return True
-
-    return False
+    if tool_fn is not None:
+        return bool(getattr(tool_fn, "tool_hidden", False))
+    return call_spec.func_name in policy.blocked_tools
 
 
 def _compile_exec_node(node: ast.AST, filename: str):
@@ -834,13 +828,6 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         private_console.append(output.rstrip('\n'))
 
     policy = _execution_sandbox_policy()
-    if _is_hidden_tool_call(call_spec, job, policy):
-        error_msg = f"NameError: tool '{call_spec.func_name}' is not exposed to this job"
-        full_agent_trace(
-            "tool.error",
-            {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "error": error_msg},
-        )
-        return error_msg, error_msg
 
     # Build global and local contexts — mirrors exec_step
     if job.py_env.global_state is None:
@@ -872,6 +859,14 @@ async def exec_tool(call_spec: CallSpec, job: Job,
             func = inject_context(original_tool, combined_ctx)
         else:
             func = global_context.get(call_spec.func_name) or local_context.get(call_spec.func_name)
+
+        if _is_hidden_tool_call(call_spec, func, policy):
+            error_msg = f"NameError: tool '{call_spec.func_name}' is not exposed to this job"
+            full_agent_trace(
+                "tool.error",
+                {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "error": error_msg},
+            )
+            return error_msg, error_msg
 
         if func is None:
             error_msg = f"NameError: tool '{call_spec.func_name}' not found"

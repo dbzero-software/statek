@@ -63,16 +63,6 @@ class Topic:
         return sum(1 for doc in self.documents if doc.match_audience(agent_name))
 
 
-def validate_unique_document_ids(documents: Sequence[Document]) -> None:
-    """Reject an accessible document view containing an ambiguous numeric ID."""
-    seen: set[int] = set()
-    for document in documents:
-        document_id = document.document_metadata["ord_no"]
-        if document_id in seen:
-            raise ValueError(f"Ambiguous document ID '{document_id}'")
-        seen.add(document_id)
-
-
 def parse_document(document: str) -> Document:
     """Parse a document string into a Document instance.
 
@@ -223,20 +213,37 @@ def find_document(key: Union[int, str], agent_name: str | Sequence[str],
             document titles and indexes.
     """
     accessible = [d for d in topic.documents if d.match_audience(agent_name)]
-    validate_unique_document_ids(accessible)
 
     if isinstance(key, int):
-        for doc in accessible:
-            if doc.document_metadata["ord_no"] == key:
-                return doc
-        return None
+        matches = [
+            doc for doc in accessible
+            if doc.document_metadata["ord_no"] == key
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            return None
+        listing = ", ".join(
+            f"{doc.document_metadata['title']} (#{doc.document_metadata['ord_no']})"
+            for doc in matches
+        )
+        raise ValueError(f"Ambiguous document ID '{key}', matches: {listing}")
 
     key_lower = key.lower()
 
     # Exact title match takes priority
-    for doc in accessible:
-        if doc.document_metadata["title"].lower() == key_lower:
-            return doc
+    exact_matches = [
+        doc for doc in accessible
+        if doc.document_metadata["title"].lower() == key_lower
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        listing = ", ".join(
+            f"{doc.document_metadata['title']} (#{doc.document_metadata['ord_no']})"
+            for doc in exact_matches
+        )
+        raise ValueError(f"Ambiguous document '{key}', matches: {listing}")
 
     matches = [d for d in accessible
                if key_lower in d.document_metadata["title"].lower()]

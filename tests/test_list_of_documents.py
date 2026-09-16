@@ -31,7 +31,7 @@ DOC_TOOLS_0 = """\
 Body."""
 
 DOC_PREFS_2 = """\
-# ord_no: 2
+# ord_no: 1
 # topic: Preferences
 # audience: agent_b
 # title: Donor Details
@@ -93,8 +93,24 @@ def test_list_documents_unions_resource_audiences_without_duplicate_public_docs(
     out = capsys.readouterr().out
 
     assert out.count("Overview") == 1
-    assert "Details" in out
-    assert "Donor Details" in out
+    assert "1: Details" in out
+    assert "1: Donor Details" in out
+
+
+def test_list_documents_paginates_across_duplicate_ids(docs_dir, capsys):
+    """Pagination uses document order rather than treating IDs as unique keys."""
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: _impl(
+            ["agent_a", "agent_b"], docs_dir, topic="Preferences",
+            start_index=2, limit=1,
+        ),
+    )
+    out = capsys.readouterr().out
+
+    assert "1: Donor Details" in out
+    assert "1: Details" not in out
 
 
 def test_list_documents_sets_last_topic_id(docs_dir):

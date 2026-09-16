@@ -28,7 +28,6 @@ from statek.document import (
     find_document,
     find_topic,
     load_documents,
-    validate_unique_document_ids,
 )
 from statek.settings import get_statek_settings
 from statek.system import tool
@@ -91,7 +90,6 @@ def _list_documents(topic_key, agent_name, all_topics, start_index, limit):
     perm_ctx_set(last_topic_id=matched.ord_no)
 
     docs = [d for d in matched.documents if d.match_audience(agent_name)]
-    validate_unique_document_ids(docs)
     total = len(docs)
     print(f"# Document ID: Document name ({total} total)")
     for d in docs[start_index:start_index + limit]:

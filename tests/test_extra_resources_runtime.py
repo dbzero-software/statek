@@ -15,13 +15,33 @@ from statek.agents.agent import (
     show_document as show_document_wrapper,
     show_example as show_example_wrapper,
 )
+from statek.agents.dialog_agent import DialogAgent
+from statek.agents.researcher import Researcher
 from statek.executors.job import Job, JobDef
-from statek.executors.utils import exec_step, exec_tool
+from statek.executors.utils import exec_cli_step, exec_step, exec_tool
 from statek.extra_resources import parse_extra_resources
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, select_request_tools
 from statek.prompt_config import make_system_prompt
 from statek.system import tool
 from statek.utils import CallSpec, get_current_agent, get_current_job
+
+
+DIALOG_MESSAGES: list[tuple[str, object]] = []
+
+
+def record_dialog_message(body: str, media=None) -> None:
+    """Record dialog output without accepting framework context keywords."""
+    DIALOG_MESSAGES.append((body, media))
+
+
+def research_message(message: str) -> str:
+    """Return a researcher response without accepting framework context keywords."""
+    return f"response:{message}"
+
+
+def context_observing_message(message: str) -> str:
+    """Read the active job without accepting framework context keywords."""
+    return f"{get_current_job().job_def.agent.role}:{message}"
 
 
 @tool
@@ -60,6 +80,12 @@ def schedule_action(value: str, **kwargs) -> str:  # pylint: disable=unused-argu
 def _preference_internal(value: str, **kwargs) -> str:  # pylint: disable=unused-argument
     """Return an internal preference helper value."""
     return f"internal:{value}"
+
+
+@tool(hidden=True)
+def hidden_preference_action(**kwargs) -> str:  # pylint: disable=unused-argument
+    """Return a value that must remain unavailable to formal tool calls."""
+    return "hidden preference"
 
 
 @pytest.fixture
@@ -341,6 +367,88 @@ async def test_exec_tool_calls_inherited_action_in_receiver_context(
 
     assert error is None
     assert result == "receiver:receiver:saved"
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_rejects_inherited_hidden_action(
+    resource_tool_job: Job, resource_agents: dict[str, Agent],
+) -> None:
+    """Hidden donor tools remain unavailable after capability expansion."""
+    resource_agents["preferences_assistant"]._tools.append(hidden_preference_action)
+
+    result, error = await exec_tool(
+        CallSpec(id="hidden-donor", func_name="hidden_preference_action", args=[], kwargs={}),
+        resource_tool_job,
+    )
+
+    assert error is not None
+    assert "hidden_preference_action" in result
+
+
+@pytest.mark.asyncio
+async def test_exec_step_calls_dialog_answer_without_context_keyword(
+    db0_fixture,  # pylint: disable=unused-argument
+) -> None:
+    """Name-registered dialog tools retain their original callable signature."""
+    DIALOG_MESSAGES.clear()
+    agent = DialogAgent(
+        send_message=record_dialog_message,
+        _metadata={"MODEL": "test-model"},
+    )
+    job = Job(job_def=agent.create_job_def())
+
+    running = await exec_step("answer('finished')", job)
+
+    assert running is False
+    assert DIALOG_MESSAGES == [("finished", None)]
+    assert job.py_env.exit_status == "Success"
+
+
+@pytest.mark.asyncio
+async def test_exec_cli_step_calls_researcher_tool_without_context_keyword(
+    db0_fixture,  # pylint: disable=unused-argument
+) -> None:
+    """Python CLI can call a name-registered tool that has no framework kwargs."""
+    agent = Researcher(send_message=research_message)
+    job = Job(job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}))
+
+    await exec_cli_step("result = ask('question')", job, lambda _output: None)
+
+    assert job.py_env.local_state["result"] == "response:question"
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_calls_researcher_tool_without_context_keyword(
+    db0_fixture,  # pylint: disable=unused-argument
+) -> None:
+    """Formal calls preserve signatures of name-registered context tools."""
+    agent = Researcher(send_message=research_message)
+    job = Job(job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}))
+
+    result, error = await exec_tool(
+        CallSpec(id="research", func_name="ask", args=[], kwargs={"question": "question"}),
+        job,
+    )
+
+    assert error is None
+    assert result == "response:question"
+
+
+@pytest.mark.asyncio
+async def test_non_injectable_context_tool_observes_receiver_job(
+    db0_fixture,  # pylint: disable=unused-argument
+) -> None:
+    """Signature compatibility does not remove the receiver's Statek context."""
+    agent = Researcher(send_message=context_observing_message, role="receiver")
+    job = Job(job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}))
+
+    result, error = await exec_tool(
+        CallSpec(id="context", func_name="ask", args=[], kwargs={"question": "question"}),
+        job,
+    )
+
+    assert error is None
+    assert result == "receiver:question"
 
 
 @pytest.mark.asyncio
