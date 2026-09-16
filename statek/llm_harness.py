@@ -37,7 +37,7 @@ class LLM_Harness:
         max_token_usage: Total allowed maximum token usage (None for unlimited)
         limit_extension_per_completion: Fraction by which limits are extended
             after each job completion. Formula:
-            effective = base + (1.0 + extension) * num_completions
+            effective = base * (1.0 + extension * num_completions)
     """
 
     def __init__(self, max_turns: Optional[int], max_exceptions: int,  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -53,7 +53,7 @@ class LLM_Harness:
                          num_completions: Optional[int]) -> Optional[float]:
         """Compute the effective limit after job completions.
 
-        Formula: base_limit + (1.0 + limit_extension_per_completion) * num_completions
+        Formula: base_limit * (1.0 + limit_extension_per_completion * num_completions)
 
         Returns None when base_limit is None (unlimited), or base_limit
         unchanged when num_completions is None (not tracked).
@@ -62,7 +62,7 @@ class LLM_Harness:
             return None
         if num_completions is None:
             return base_limit
-        return base_limit + (1.0 + self.limit_extension_per_completion) * num_completions
+        return base_limit * (1.0 + self.limit_extension_per_completion * num_completions)
 
     def _check_exception_limits(self, job, num_completions):
         """Check exception-count limits shared by before- and after-step checks."""
