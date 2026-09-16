@@ -27,6 +27,7 @@ from statek.llm_harness import LLM_Harness
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, CallParams, OpenRouter_API
 from statek.settings import LLM_API_Settings
 from statek.task import SubTaskHandler
+from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec
 
 
@@ -298,6 +299,34 @@ class TestRunJobStepToolCallResponse:
         llm_resp = job.chat_log[0].llm_resp
         assert isinstance(llm_resp, str)
         assert llm_resp == "x = 42"
+
+    @pytest.mark.asyncio
+    async def test_stores_request_difficulty_before_waiting_for_response(
+        self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A difficulty change while awaiting the provider keeps the request snapshot."""
+        job_def = job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        })
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+        mock_response = _llm_response("x = 42")
+
+        async def process_request(**kwargs):  # pylint: disable=unused-argument
+            job.panic()
+            return mock_response
+
+        mock_api = MagicMock()
+        mock_api.process_request = process_request
+        mock_harness = MagicMock()
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api_cls, \
+             patch("statek.executors.utils.get_llm_harness", return_value=mock_harness):
+            mock_llm_api_cls.get.return_value = mock_api
+            await run_job_step(job, provider="OPENROUTER")
+
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+        assert job.chat_log[0].request_difficulty == TaskDifficulty.low
 
 
 class TestRunJobStepHarnessIsolation:

@@ -18,7 +18,7 @@ from statek.agents.agent import (
 from statek.executors.job import Job, JobDef
 from statek.executors.utils import exec_step, exec_tool
 from statek.extra_resources import parse_extra_resources
-from statek.llm_api import select_request_tools
+from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, select_request_tools
 from statek.prompt_config import make_system_prompt
 from statek.system import tool
 from statek.utils import CallSpec, get_current_agent, get_current_job
@@ -314,6 +314,19 @@ async def test_exec_step_calls_inherited_action_in_receiver_context(
 
 
 @pytest.mark.asyncio
+async def test_exec_step_refreshes_inherited_tools_after_panic_in_same_block(
+    resource_tool_job: Job,
+) -> None:
+    """A tool activated by panic is callable by the following statement."""
+    await exec_step(
+        "panic()\nresult = schedule_action('expanded')",
+        resource_tool_job,
+    )
+
+    assert resource_tool_job.py_env.local_state["result"] == "schedule:expanded"
+
+
+@pytest.mark.asyncio
 async def test_exec_tool_calls_inherited_action_in_receiver_context(
     resource_tool_job: Job,
 ) -> None:
@@ -378,6 +391,45 @@ async def test_receiver_tool_name_takes_precedence_over_donor_tool(
     assert [tool_fn.__name__ for tool_fn in tools].count("receiver_action") == 1
     await exec_step("collision_result = receiver_action('ok')", resource_tool_job)
     assert resource_tool_job.py_env.local_state["collision_result"] == "receiver:ok"
+
+
+def test_historical_requests_keep_resources_from_their_original_difficulty(
+    resource_tool_job: Job,
+) -> None:
+    """Later escalation must not add tools to an earlier request preview."""
+    low_difficulty = resource_tool_job.get_current_difficulty()
+    low_request = resource_tool_job.get_next_request()
+    resource_tool_job.append_chat_log(
+        low_request,
+        LLM_Response(
+            step_data=LLM_StepData(text="low response", call_requests=None),
+            stats=LLM_Stats(0, 0, None),
+        ),
+        request_difficulty=low_difficulty,
+    )
+    resource_tool_job.panic()
+    medium_difficulty = resource_tool_job.get_current_difficulty()
+    medium_request = resource_tool_job.get_next_request()
+    resource_tool_job.append_chat_log(
+        medium_request,
+        LLM_Response(
+            step_data=LLM_StepData(text="medium response", call_requests=None),
+            stats=LLM_Stats(0, 0, None),
+        ),
+        request_difficulty=medium_difficulty,
+    )
+    resource_tool_job.panic()
+
+    low_tools = [
+        tool_fn.__name__ for tool_fn in resource_tool_job.get_request_data(0)["available_tools"]
+    ]
+    medium_tools = [
+        tool_fn.__name__ for tool_fn in resource_tool_job.get_request_data(1)["available_tools"]
+    ]
+
+    assert "preference_action" in low_tools
+    assert "schedule_action" not in low_tools
+    assert "schedule_action" in medium_tools
 
 
 def test_resource_wrappers_pass_active_agent_roles(resource_tool_job: Job) -> None:

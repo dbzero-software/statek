@@ -1070,6 +1070,20 @@ def test_panic_raises_when_already_high(job_def_factory):
         _run_with_current_job(job, job.panic)
 
 
+def test_old_job_without_dynamic_difficulty_field_uses_static_default(job_def_factory):
+    """Jobs persisted before the dynamic field existed remain executable."""
+    job_def = job_def_factory(metadata={
+        "MODEL": "L:small,M:medium,H:large",
+        "DEFAULT_DIFFICULTY": "low",
+    })
+    job = Job(job_def=job_def, job_status=JobStatus.READY)
+    del job._Job__last_difficulty  # pylint: disable=protected-access
+
+    assert job.get_current_difficulty() == TaskDifficulty.low
+    job.panic()
+    assert job.get_current_difficulty() == TaskDifficulty.medium
+
+
 def test_get_current_model_returns_plain_model(job_def_factory):
     """MODEL without difficulty labels is returned unchanged."""
     job_def = job_def_factory(metadata={"MODEL": "test-model"})
@@ -1529,6 +1543,71 @@ class TestJobGetRequestData:
         ]
         assert history_2[1].content_src == ContentSource.CONSOLE
         assert historical_2["model"] == "test-model"
+
+    def test_get_request_data_keeps_historical_model_and_prompt_difficulty(
+        self, job_def_factory,
+    ):
+        """Historical previews use the difficulty captured for each request."""
+        job_def = job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        })
+        job_def.agent.update_system_prompt(parse_system_prompt(
+            "Intro.\n\n"
+            "--- low: Scope ---\nLow instructions.\n\n"
+            "--- medium: Scope ---\nMedium instructions.\n\n"
+            "--- high: Scope ---\nHigh instructions."
+        ))
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+
+        low_difficulty = job.get_current_difficulty()
+        low_request = job.get_next_request()
+        job.append_chat_log(
+            low_request,
+            LLM_Response(
+                step_data=LLM_StepData(text="low response", call_requests=None),
+                stats=LLM_Stats(0, 0, None),
+            ),
+            request_difficulty=low_difficulty,
+        )
+        job.panic()
+        medium_difficulty = job.get_current_difficulty()
+        medium_request = job.get_next_request()
+        job.append_chat_log(
+            medium_request,
+            LLM_Response(
+                step_data=LLM_StepData(text="medium response", call_requests=None),
+                stats=LLM_Stats(0, 0, None),
+            ),
+            request_difficulty=medium_difficulty,
+        )
+        job.panic()
+
+        historical_low = job.get_request_data(0)
+        historical_medium = job.get_request_data(1)
+
+        assert historical_low["model"] == "small"
+        assert "Low instructions." in historical_low["system_prompt"]
+        assert "Medium instructions." not in historical_low["system_prompt"]
+        assert historical_medium["model"] == "medium"
+        assert "Medium instructions." in historical_medium["system_prompt"]
+        assert "High instructions." not in historical_medium["system_prompt"]
+
+    def test_get_request_data_supports_legacy_log_item_without_difficulty_snapshot(
+        self, job_def_factory,
+    ):
+        """Old log items fall back to the job's current request behavior."""
+        job_def = job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        })
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="legacy response"))
+        job.panic()
+
+        historical = job.get_request_data(0)
+
+        assert historical["model"] == "medium"
 
     def test_get_request_data_rejects_out_of_range_turn(self, job_factory):
         """Missing historical turns raise IndexError."""

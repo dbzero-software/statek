@@ -7,13 +7,16 @@ import dbzero as db0
 import pytest
 
 from statek.agents.dialog_agent import DialogAgent
-from statek.executors.job import Job, JobDef, job_def_identity_tag_for_job_def
+from statek.executors.chat_log_item import LLM_LogItem
+from statek.executors.job import Job, JobDef, JobStatus, job_def_identity_tag_for_job_def
 from statek.executors.utils import (
     AgentLoopDef, find_existing_job_def, run_agentic_fleet, run_agentic_loop,
 )
 from statek.extra_resources import parse_extra_resources
+from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats
 from statek.prompt_config import PromptDef, parse_prompt_file, update_prompt_config
 from statek.task import create_new_job
+from statek.task_difficulty import TaskDifficulty
 from tests.conftest import DB0_DIR
 
 
@@ -145,6 +148,69 @@ def test_extra_resources_persistence_and_ordered_identity(supervised_agent) -> N
     assert restored.extra_resources == (["a", "b"], None, ["c"])
     assert find_existing_job_def(agent, None, extra_resources=(["a", "b"], None, ["c"])) is restored
     assert find_existing_job_def(agent, None, extra_resources=(["b", "a"], None, ["c"])) is None
+
+
+def test_request_difficulty_and_escalation_survive_reopen(supervised_agent) -> None:
+    """Persisted jobs retain request snapshots and their current escalation level."""
+    definition = JobDef(
+        agent=supervised_agent,
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        },
+    )
+    job = Job(job_def=definition, job_status=JobStatus.STARTED)
+    request_difficulty = job.get_current_difficulty()
+    request = job.get_next_request()
+    job.append_chat_log(
+        request,
+        LLM_Response(
+            step_data=LLM_StepData(text="response", call_requests=None),
+            stats=LLM_Stats(0, 0, None),
+        ),
+        request_difficulty=request_difficulty,
+    )
+    job.panic()
+    identifier = db0.uuid(job)
+
+    db0.close()
+    db0.init(DB0_DIR, read_write=True)
+    db0.open("test_prefix", "rw")
+    restored = db0.fetch(identifier)
+
+    assert restored.get_current_difficulty() == TaskDifficulty.medium
+    assert restored.chat_log[0].request_difficulty == TaskDifficulty.low
+    assert restored.get_request_data(0)["model"] == "small"
+
+
+def test_legacy_job_and_log_item_without_difficulty_fields_survive_reopen(
+    supervised_agent,
+) -> None:
+    """Records written without difficulty fields retain legacy fallback behavior."""
+    definition = JobDef(
+        agent=supervised_agent,
+        metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        },
+    )
+    item = LLM_LogItem(console_pos=0, llm_resp="legacy response")
+    del item.request_difficulty
+    job = Job(
+        job_def=definition,
+        job_status=JobStatus.STARTED,
+        chat_log=[item],
+    )
+    del job._Job__last_difficulty  # pylint: disable=protected-access
+    identifier = db0.uuid(job)
+
+    db0.close()
+    db0.init(DB0_DIR, read_write=True)
+    db0.open("test_prefix", "rw")
+    restored = db0.fetch(identifier)
+
+    assert restored.get_current_difficulty() == TaskDifficulty.low
+    assert restored.get_request_data(0)["model"] == "small"
 
 
 def test_extra_resources_empty_and_redundant_internal_values(supervised_agent) -> None:

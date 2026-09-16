@@ -460,6 +460,8 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
             value = asyncio.get_running_loop().run_until_complete(value)
         return value
 
+    tracks_resource_expansion = bool(getattr(job.job_def, "extra_resources", None))
+    execution_difficulty = job.get_current_difficulty() if tracks_resource_expansion else None
     with _setup_execution_context(job, global_context, local_context, print_fn=print_fn):
         if policy is not None:
             try:
@@ -511,6 +513,14 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
 
             try:
                 is_expression = isinstance(node, ast.Expr)
+
+                current_difficulty = (
+                    job.get_current_difficulty() if tracks_resource_expansion else None
+                )
+                if tracks_resource_expansion and current_difficulty != execution_difficulty:
+                    for tool in job.get_resource_tools():
+                        global_context[tool.__name__] = inject_context(tool, global_context)
+                    execution_difficulty = current_difficulty
 
                 global_context.update(local_context)
                 sync_local = _MirrorDict(
@@ -1188,7 +1198,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 12: Get next request parameters — log pending console batch first
     _log_pending_console(job)
-    request = job.get_next_request()
+    request_difficulty = job.get_current_difficulty()
+    request = job.get_next_request(difficulty=request_difficulty)
     request["metadata"] = dict(request["metadata"] or {})
     request["metadata"]["PROVIDER"] = provider_to_use
     # Materialize chat_history generator so it can be consumed by process_request
@@ -1222,7 +1233,11 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         return False
 
     processed_response = LLM_Response(step_data=processed_step, stats=response.stats)
-    job.append_chat_log(request, processed_response)
+    job.append_chat_log(
+        request,
+        processed_response,
+        request_difficulty=request_difficulty,
+    )
 
     # Step 15: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
     dialog_error = False
