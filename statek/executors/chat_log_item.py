@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 import dbzero as db0
 
+from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock
 
 if TYPE_CHECKING:
@@ -90,6 +91,8 @@ class LLM_LogItem(ChatLogItem):
     llm_resp: Union[str, CodeBlock] = None
     # Opaque provider continuation material replayed only by its matching formatter.
     llm_reasoning_payload: Optional[Any] = None
+    # Non-default difficulty used to build this request; None means the job's static default.
+    request_difficulty: Optional[TaskDifficulty] = None
 
 
 @db0.memo(no_default_tags=True)

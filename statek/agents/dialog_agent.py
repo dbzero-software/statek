@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Iterable, Optional
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.chat_style import ChatStyle
+from statek.extra_resources import ExtraResources
 
 if TYPE_CHECKING:
     from statek.executors.job import Job
@@ -238,6 +239,7 @@ class DialogAgent(SupervisedAgent):
         locale=None,
         post_processing=None,
         provider_config=None,
+        extra_resources: ExtraResources | None = None,
         **kwargs
     ):
         """Create a JobDef with a dialog chat style.
@@ -254,6 +256,7 @@ class DialogAgent(SupervisedAgent):
             chat_style: chat style override; if omitted, falls back to prompt metadata
             locale: optional locale for job execution
             post_processing: optional resolved post-processor or sequence of post-processors
+            extra_resources: parsed prompt resources forwarded to the parent
             **kwargs: job-specific parameters forwarded to the parent
         """
         if chat_style is None and self._metadata and 'CHAT_STYLE' in self._metadata:
@@ -265,6 +268,7 @@ class DialogAgent(SupervisedAgent):
             locale=locale,
             post_processing=post_processing,
             provider_config=provider_config,
+            extra_resources=extra_resources,
             **kwargs
         )
         job_def.set_chat_style(chat_style or ChatStyle.MD_DIALOG)  # pylint: disable=no-member

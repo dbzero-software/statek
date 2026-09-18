@@ -32,7 +32,25 @@ from .utils import find_locals, get_current_agent_name, get_current_job, _statek
 _TOOL_REGISTRY: list[Callable] = []
 
 
+def _accepts_local_context(func: Callable) -> bool:
+    """Return whether a callable accepts Statek's injected local context."""
+    try:
+        parameters = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.name == "_local_context"
+            and parameter.kind != inspect.Parameter.POSITIONAL_ONLY
+        )
+        for parameter in parameters
+    )
+
+
 def inject_context(func, __local_context):
+    accepts_local_context = _accepts_local_context(func)
+
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
         if "_local_context" in kwargs:
@@ -40,7 +58,8 @@ def inject_context(func, __local_context):
 
         # defensive copy per invocation
         local_context = copy(__local_context)
-        kwargs["_local_context"] = local_context
+        if accepts_local_context:
+            kwargs["_local_context"] = local_context
 
         statek_ctx = local_context.get("_STATEK_CTX")
         if isinstance(statek_ctx, dict):

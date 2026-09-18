@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import lru_cache
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 
 _REQUIRED_KEYS = ("ord_no", "topic", "title")
@@ -32,7 +32,7 @@ class Document:
     """Body of text - organized by lines"""
     body: List[str] = field(default_factory=list)
 
-    def match_audience(self, agent_name: str) -> bool:
+    def match_audience(self, agent_name: str | Sequence[str]) -> bool:
         """Check if a specific agent is the target audience.
 
         If "audience" is not specified, the document targets all agents.
@@ -40,7 +40,8 @@ class Document:
         audience = self.document_metadata.get("audience")
         if audience is None:
             return True
-        return agent_name in audience
+        agent_names = (agent_name,) if isinstance(agent_name, str) else agent_name
+        return any(name in audience for name in agent_names)
 
 
 @dataclass
@@ -50,7 +51,7 @@ class Topic:
     topic: str
     documents: List[Document] = field(default_factory=list)
 
-    def count(self, agent_name: str) -> int:
+    def count(self, agent_name: str | Sequence[str]) -> int:
         """Count documents accessible to a given agent.
 
         Args:
@@ -147,7 +148,7 @@ def load_documents(path: str) -> List[Topic]:
     return list(topics_map.values())
 
 
-def find_topic(key: Union[int, str], agent_name: str,
+def find_topic(key: Union[int, str], agent_name: str | Sequence[str],
                all_topics: List[Topic]) -> Optional[Topic]:
     """Find a topic by index, name, or name fragment.
 
@@ -192,7 +193,7 @@ def find_topic(key: Union[int, str], agent_name: str,
     raise ValueError(f"Ambiguous topic '{key}', matches: {listing}")
 
 
-def find_document(key: Union[int, str], agent_name: str,
+def find_document(key: Union[int, str], agent_name: str | Sequence[str],
                   topic: Topic) -> Optional[Document]:
     """Find a document within a topic by index, title, or title fragment.
 
@@ -214,17 +215,35 @@ def find_document(key: Union[int, str], agent_name: str,
     accessible = [d for d in topic.documents if d.match_audience(agent_name)]
 
     if isinstance(key, int):
-        for doc in accessible:
-            if doc.document_metadata["ord_no"] == key:
-                return doc
-        return None
+        matches = [
+            doc for doc in accessible
+            if doc.document_metadata["ord_no"] == key
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            return None
+        listing = ", ".join(
+            f"{doc.document_metadata['title']} (#{doc.document_metadata['ord_no']})"
+            for doc in matches
+        )
+        raise ValueError(f"Ambiguous document ID '{key}', matches: {listing}")
 
     key_lower = key.lower()
 
     # Exact title match takes priority
-    for doc in accessible:
-        if doc.document_metadata["title"].lower() == key_lower:
-            return doc
+    exact_matches = [
+        doc for doc in accessible
+        if doc.document_metadata["title"].lower() == key_lower
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        listing = ", ".join(
+            f"{doc.document_metadata['title']} (#{doc.document_metadata['ord_no']})"
+            for doc in exact_matches
+        )
+        raise ValueError(f"Ambiguous document '{key}', matches: {listing}")
 
     matches = [d for d in accessible
                if key_lower in d.document_metadata["title"].lower()]

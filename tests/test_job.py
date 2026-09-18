@@ -860,6 +860,64 @@ def test_get_current_difficulty_uses_example_difficulty(job_def_factory):
     assert job._Job__last_difficulty == TaskDifficulty.high  # pylint: disable=protected-access
 
 
+def test_get_current_difficulty_uses_source_aware_donor_example(
+    job_def_factory, agent_factory,
+):
+    """A persisted example source resolves difficulty against its donor's local ID."""
+    donor = agent_factory(role="donor")
+    job = Job(
+        job_def=job_def_factory(extra_resources=(["donor"], None, None)),
+        job_status=JobStatus.READY,  # pylint: disable=no-member
+    )
+    job.py_env.local_state["_PERM_CTX"] = {
+        "last_example_id": 7,
+        "last_example_source": {"agent_name": "donor", "example_id": 1},
+    }
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.high,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.high
+
+    mock_get_example_difficulty.assert_called_once_with("donor", 1)
+    assert donor in job.get_resource_agents()
+
+
+def test_get_current_difficulty_malformed_source_uses_legacy_receiver_id(job_def_factory):
+    """Malformed persisted source data falls back to the legacy receiver-local ID."""
+    job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {
+        "last_example_id": 3,
+        "last_example_source": {"agent_name": "donor", "example_id": "invalid"},
+    }
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.medium,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+
+    mock_get_example_difficulty.assert_called_once_with("test", 3)
+
+
+def test_get_current_difficulty_unconfigured_source_uses_legacy_receiver_id(job_def_factory):
+    """A forged source outside configured resources cannot influence job difficulty."""
+    job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
+    job.py_env.local_state["_PERM_CTX"] = {
+        "last_example_id": 3,
+        "last_example_source": {"agent_name": "../foreign", "example_id": 0},
+    }
+
+    with patch(
+        "statek.executors.job._get_example_difficulty_for_job",
+        return_value=TaskDifficulty.medium,
+    ) as mock_get_example_difficulty:
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+
+    mock_get_example_difficulty.assert_called_once_with("test", 3)
+
+
 def test_get_current_difficulty_uses_registered_job_perm_ctx_example_id(job_def_factory):
     """The registered job's PyEnv context supplies the last example ID."""
     job_def = job_def_factory(
@@ -1010,6 +1068,20 @@ def test_panic_raises_when_already_high(job_def_factory):
 
     with pytest.raises(RuntimeError, match="already at high difficulty"):
         _run_with_current_job(job, job.panic)
+
+
+def test_old_job_without_dynamic_difficulty_field_uses_static_default(job_def_factory):
+    """Jobs persisted before the dynamic field existed remain executable."""
+    job_def = job_def_factory(metadata={
+        "MODEL": "L:small,M:medium,H:large",
+        "DEFAULT_DIFFICULTY": "low",
+    })
+    job = Job(job_def=job_def, job_status=JobStatus.READY)
+    del job._Job__last_difficulty  # pylint: disable=protected-access
+
+    assert job.get_current_difficulty() == TaskDifficulty.low
+    job.panic()
+    assert job.get_current_difficulty() == TaskDifficulty.medium
 
 
 def test_get_current_model_returns_plain_model(job_def_factory):
@@ -1471,6 +1543,90 @@ class TestJobGetRequestData:
         ]
         assert history_2[1].content_src == ContentSource.CONSOLE
         assert historical_2["model"] == "test-model"
+
+    def test_get_request_data_keeps_historical_model_and_prompt_difficulty(
+        self, job_def_factory,
+    ):
+        """Historical previews use the difficulty captured for each request."""
+        job_def = job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        })
+        job_def.agent.update_system_prompt(parse_system_prompt(
+            "Intro.\n\n"
+            "--- low: Scope ---\nLow instructions.\n\n"
+            "--- medium: Scope ---\nMedium instructions.\n\n"
+            "--- high: Scope ---\nHigh instructions."
+        ))
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+
+        low_difficulty = job.get_current_difficulty()
+        low_request = job.get_next_request()
+        job.append_chat_log(
+            low_request,
+            LLM_Response(
+                step_data=LLM_StepData(text="low response", call_requests=None),
+                stats=LLM_Stats(0, 0, None),
+            ),
+            request_difficulty=low_difficulty,
+        )
+        job.panic()
+        medium_difficulty = job.get_current_difficulty()
+        medium_request = job.get_next_request()
+        job.append_chat_log(
+            medium_request,
+            LLM_Response(
+                step_data=LLM_StepData(text="medium response", call_requests=None),
+                stats=LLM_Stats(0, 0, None),
+            ),
+            request_difficulty=medium_difficulty,
+        )
+        job.panic()
+
+        historical_low = job.get_request_data(0)
+        historical_medium = job.get_request_data(1)
+
+        assert historical_low["model"] == "small"
+        assert "Low instructions." in historical_low["system_prompt"]
+        assert "Medium instructions." not in historical_low["system_prompt"]
+        assert historical_medium["model"] == "medium"
+        assert "Medium instructions." in historical_medium["system_prompt"]
+        assert "High instructions." not in historical_medium["system_prompt"]
+        assert job.chat_log[0].request_difficulty is None
+        assert job.chat_log[1].request_difficulty == medium_difficulty
+
+    def test_get_request_data_supports_legacy_log_item_without_difficulty_snapshot(
+        self, job_def_factory,
+    ):
+        """Old log items without a snapshot reconstruct at the static default."""
+        job_def = job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "low",
+        })
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="legacy response"))
+        job.panic()
+
+        historical = job.get_request_data(0)
+
+        assert historical["model"] == "small"
+
+    def test_get_request_data_resolves_none_to_medium_static_default(
+        self, job_def_factory,
+    ):
+        """A None snapshot resolves to the configured default rather than current difficulty."""
+        job_def = job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "medium",
+        })
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+        job.chat_log.append(LLM_LogItem(
+            console_pos=0, llm_resp="default response", request_difficulty=None,
+        ))
+        job.panic()
+
+        assert job.get_current_difficulty() == TaskDifficulty.high
+        assert job.get_request_data(0)["model"] == "medium"
 
     def test_get_request_data_rejects_out_of_range_turn(self, job_factory):
         """Missing historical turns raise IndexError."""

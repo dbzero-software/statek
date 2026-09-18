@@ -35,6 +35,9 @@ from typing import (
 import dbzero as db0
 from dbzero import memo, enum
 from statek.pyenv import Error, ErrorKind, PyEnv
+from statek.extra_resources import (
+    ExtraResources, extra_resources_from_metadata, extra_resources_identity, normalize_extra_resources,
+)
 from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
@@ -85,6 +88,7 @@ from statek.task_difficulty import (
 )
 
 if TYPE_CHECKING:
+    from statek.agents.agent import Agent
     from statek.agents.dialog_agent import Reminder
     from statek.task import SubTaskHandler
 
@@ -356,6 +360,7 @@ def _job_def_identity_hash(
     chat_style,
     post_processing,
     provider_config=None,
+    extra_resources=None,
 ) -> str:
     payload = (
         warmup_code,
@@ -366,6 +371,7 @@ def _job_def_identity_hash(
         chat_style,
         post_processing_identity(post_processing),
         provider_config_identity(provider_config),
+        extra_resources_identity(extra_resources),
     )
     encoded = str(payload).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:4]
@@ -380,10 +386,11 @@ def _job_def_identity_tag(
     chat_style,
     post_processing=None,
     provider_config=None,
+    extra_resources=None,
 ) -> str:
     return (
         f"{_JOBDEF_HASH_TAG_PREFIX}"
-        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing, provider_config)}"
+        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing, provider_config, extra_resources)}"
     )
 
 
@@ -398,6 +405,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
         getattr(job_def, "_chat_style", None),
         job_def.post_processing,
         job_def.provider_config,
+        job_def.extra_resources,
     )
 
 
@@ -421,9 +429,11 @@ class JobDef:
     # Optional locale for language-specific behaviour
     locale: Optional["StatekLocale"] = None
     # Optional post-processing sequence applied after LLM responses
-    post_processing: PostProcessingInput = None
+    post_processing: Optional[PostProcessingInput] = None
     # Durable provider configuration snapshot used to create this job definition.
     provider_config: Optional[ProviderConfig] = None
+    # Incremental prompt resource additions at L/M/H, kept out of LLM metadata.
+    extra_resources: Optional[ExtraResources] = None
 
     def __post_init__(self):
         if self.metadata is None:
@@ -432,6 +442,14 @@ class JobDef:
                 if self.agent is not None and self.agent._metadata
                 else {}
             )
+
+        resources = self.extra_resources
+        if resources is None:
+            resources = extra_resources_from_metadata(self.metadata)
+        resources = normalize_extra_resources(resources)
+        self.extra_resources = resources if any(resources) else None
+        if "EXTRA_RESOURCES" in self.metadata:
+            self.metadata = {key: value for key, value in self.metadata.items() if key != "EXTRA_RESOURCES"}
 
         metadata_model = self.metadata.get('MODEL') if self.metadata else None
         if metadata_model is None:
@@ -753,9 +771,16 @@ class Job:
         """Return the agent system prompt formatted for this job's current difficulty."""
         if self.job_def is None or self.job_def.agent is None:
             return ""
+        resolved_difficulty = (
+            difficulty if difficulty is not None else self.get_current_difficulty()
+        )
         return self.job_def.agent.system_prompt(
-            task_difficulty=difficulty or self.get_current_difficulty(),
+            task_difficulty=resolved_difficulty,
             job_params=self.job_def.job_params,
+            available_tools=self.get_resource_tools(
+                include_internal=False,
+                difficulty=resolved_difficulty,
+            ),
         )
 
     def _ensure_ext_ref_storage(self):
@@ -1376,12 +1401,16 @@ class Job:
         chat_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem]]] = None,
         console: Optional[Sequence[str]] = None,
         push_log: Optional[Dict[int, Union[str, List[str]]]] = None,
+        difficulty: Optional[TaskDifficulty] = None,
     ) -> Dict[str, Any]:
         """Build request params for the provided append-only job state."""
         metadata = dict(self.job_def.metadata or {})
-        model = LLM_API.require_model(self.get_current_model())
+        resolved_difficulty = (
+            difficulty if difficulty is not None else self.get_current_difficulty()
+        )
+        model = LLM_API.require_model(self.get_current_model(difficulty=resolved_difficulty))
         temperature = LLM_API.parse_temperature(metadata.get("TEMPERATURE"))
-        system_prompt = self.system_prompt()
+        system_prompt = self.system_prompt(difficulty=resolved_difficulty)
 
         if (
             self.job_def.locale is not None
@@ -1400,7 +1429,10 @@ class Job:
             "system_prompt": system_prompt,
             "model": model,
             "metadata": metadata,
-            "available_tools": self.job_def.agent.all_tools,
+            "available_tools": self.get_resource_tools(
+                include_internal=False,
+                difficulty=resolved_difficulty,
+            ),
             "provider_config": self.job_def.provider_config,
         }
         if temperature is not None:
@@ -1411,7 +1443,10 @@ class Job:
 
         return request_params
 
-    def get_next_request(self) -> Dict[str, Any]:
+    def get_next_request(
+        self,
+        difficulty: Optional[TaskDifficulty] = None,
+    ) -> Dict[str, Any]:
         """Build the parameter dict consumed by ``LLM_API.process_request``.
 
         ``chat_history`` is the lazy generator returned by
@@ -1424,7 +1459,7 @@ class Job:
             ``available_tools`` (list), and optionally ``chat_style``,
             ``temperature``, and ``provider_config``.
         """
-        return self._build_request_data()
+        return self._build_request_data(difficulty=difficulty)
 
     def get_request_data(self, turn_num: int) -> Dict[str, Any]:
         """Reconstruct the request params used for a historical LLM turn."""
@@ -1432,6 +1467,7 @@ class Job:
             raise IndexError(f"turn_num out of range: {turn_num}")
 
         target_idx = None
+        target_item = None
         console_limit = 0
         llm_turn_num = 0
         for idx, item in enumerate(self.chat_log):
@@ -1439,6 +1475,7 @@ class Job:
                 continue
             if llm_turn_num == turn_num:
                 target_idx = idx
+                target_item = item
                 console_limit = item.console_pos
                 break
             llm_turn_num += 1
@@ -1454,21 +1491,95 @@ class Job:
             key: value for key, value in push_log.items()
             if key <= console_limit
         }
+        request_difficulty = getattr(target_item, "request_difficulty", None)
+        if request_difficulty is None:
+            request_difficulty = _get_static_task_difficulty(self.job_def.metadata)
         return self._build_request_data(
             chat_log=history_chat_log,
             console=history_console,
             push_log=history_push_log,
+            difficulty=request_difficulty,
         )
 
-    def get_current_model(self) -> str:
+    def get_resource_agents(
+        self,
+        difficulty: Optional[TaskDifficulty] = None,
+    ) -> List["Agent"]:
+        """Return the receiver and configured donors active at this job's difficulty.
+
+        Donors are resolved by role in the receiver's prefix, independently of
+        running jobs. Lower-level declarations remain active at higher levels;
+        donor declarations are not expanded recursively. The returned list is
+        job-local and does not modify any agent's configuration.
+
+        Raises:
+            ValueError: If an activated role has no configured agent.
+        """
+        receiver = self.job_def.agent
+        resources = getattr(self.job_def, "extra_resources", None)
+        if not resources:
+            return [receiver]
+
+        resolved_difficulty = (
+            difficulty if difficulty is not None else self.get_current_difficulty()
+        )
+        level = tuple(TaskDifficulty.values()).index(resolved_difficulty)
+        roles = dict.fromkeys(
+            role for index in range(level + 1) for role in resources[index] or ()
+            if role != receiver.role
+        )
+        if not roles:
+            return [receiver]
+
+        # Agent imports JobDef from this module, so defer the runtime import.
+        from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel
+
+        prefix = db0.get_prefix_of(receiver).name
+        configured = {agent.role: agent for agent in db0.find(Agent, prefix=prefix)}
+        result = [receiver]
+        for role in roles:
+            if role not in configured:
+                raise ValueError(
+                    f"EXTRA_RESOURCES for {receiver.role!r}: agent {role!r} "
+                    f"is not configured in prefix {prefix!r}"
+                )
+            result.append(configured[role])
+        return result
+
+    def get_resource_tools(
+        self,
+        include_internal: bool = True,
+        difficulty: Optional[TaskDifficulty] = None,
+    ) -> List[Callable]:
+        """Return active receiver and donor tools, keeping the first tool per name.
+
+        Receiver tools precede donor tools, so a donor cannot replace an
+        existing receiver binding. Internal tools are included for execution by
+        default but can be omitted from LLM-facing prompt documentation.
+        """
+        result = []
+        seen: set[str] = set()
+        for agent in self.get_resource_agents(difficulty=difficulty):
+            tools = agent.all_tools if include_internal else agent.tools
+            for tool_fn in tools:
+                name = getattr(tool_fn, "__name__", "")
+                if name in seen:
+                    continue
+                seen.add(name)
+                result.append(tool_fn)
+        return result
+
+    def get_current_model(self, difficulty: Optional[TaskDifficulty] = None) -> str:
         """Return the concrete model configured for the job's current difficulty."""
         metadata = self.job_def.metadata or {}
         model_config = metadata.get("MODEL")
         if not _is_model_mapping(model_config):
             return str(model_config) if model_config is not None else None
 
-        difficulty = self.get_current_difficulty()
-        return model_config[difficulty]
+        resolved_difficulty = (
+            difficulty if difficulty is not None else self.get_current_difficulty()
+        )
+        return model_config[resolved_difficulty]
 
     def _get_last_example_id(self) -> Optional[int]:
         perm_ctx = self.py_env.perm_ctx or {}
@@ -1488,6 +1599,37 @@ class Job:
         if "default_example_id" in local_state:
             return local_state["default_example_id"]        
         return None
+
+    def _get_last_example_source(self) -> Optional[Tuple[str, int]]:
+        """Return a validated source role/local ID for the last shown example."""
+        perm_ctx = self.py_env.perm_ctx or {}
+        source = perm_ctx.get("last_example_source")
+        if source is None and get_current_job() is self:
+            source = perm_ctx_get("last_example_source", None)
+        if not hasattr(source, "get"):
+            return None
+        agent_name = source.get("agent_name")
+        example_id = source.get("example_id")
+        if not isinstance(agent_name, str) or not isinstance(example_id, int):
+            return None
+
+        baseline = getattr(self, "_Job__last_difficulty", None)
+        baseline = baseline or _get_static_task_difficulty(self.job_def.metadata)
+        level = tuple(TaskDifficulty.values()).index(baseline)
+        allowed_roles = {self.job_def.agent.role}
+        resources = getattr(self.job_def, "extra_resources", None)
+        if resources:
+            allowed_roles.update(
+                role for index in range(level + 1) for role in resources[index] or ()
+            )
+        if agent_name not in allowed_roles:
+            return None
+
+        from statek.agents.agent import Agent  # pylint: disable=import-outside-toplevel
+        prefix = db0.get_prefix_of(self.job_def.agent).name
+        if not any(agent.role == agent_name for agent in db0.find(Agent, prefix=prefix)):
+            return None
+        return agent_name, example_id
     
     def get_current_difficulty(self) -> TaskDifficulty:
         """Return the current task difficulty for this job.
@@ -1496,24 +1638,29 @@ class Job:
         metadata, then settings. Example difficulty is dynamic: it updates the
         stored value only when it would keep or raise the current difficulty.
         """        
+        last_difficulty = getattr(self, "_Job__last_difficulty", None)
         last_example_id = self._get_last_example_id()
 
-        if last_example_id is not None:            
-            agent = self.job_def.agent if self.job_def is not None else None
-            agent_name = agent.role if agent is not None else None
-            difficulty = _get_example_difficulty_for_job(agent_name, last_example_id)
+        if last_example_id is not None:
+            source = self._get_last_example_source()
+            if source is None:
+                agent = self.job_def.agent if self.job_def is not None else None
+                source = (agent.role if agent is not None else None, last_example_id)
+            difficulty = _get_example_difficulty_for_job(*source)
             # update the dynamically resolved difficulty                 
             if difficulty is not None:
-                if self.__last_difficulty is None:
+                if last_difficulty is None:
                     self.__last_difficulty = difficulty
+                    last_difficulty = difficulty
                 else:
-                    max_difficulty = max_task_difficulty(self.__last_difficulty, difficulty)
+                    max_difficulty = max_task_difficulty(last_difficulty, difficulty)
                     # only update if changed
-                    if self.__last_difficulty != max_difficulty:
-                        self.__last_difficulty = max_difficulty                    
+                    if last_difficulty != max_difficulty:
+                        self.__last_difficulty = max_difficulty
+                        last_difficulty = max_difficulty
 
-        if self.__last_difficulty is not None:
-            return self.__last_difficulty
+        if last_difficulty is not None:
+            return last_difficulty
         
         return _get_static_task_difficulty(self.job_def.metadata)
 
@@ -1522,7 +1669,12 @@ class Job:
         current_difficulty = self.get_current_difficulty()
         self.__last_difficulty = _next_task_difficulty(current_difficulty)
 
-    def append_chat_log(self, request: Dict, llm_resp: LLM_Response):
+    def append_chat_log(
+        self,
+        request: Dict,
+        llm_resp: LLM_Response,
+        request_difficulty: Optional[TaskDifficulty] = None,
+    ):
         """
         Register the LLM response in the Job's chat_log container.
 
@@ -1534,10 +1686,17 @@ class Job:
         Args:
             request: The original request parameters (compatible with LLM_API.process_request)
             llm_resp: The LLM's response as an LLM_Response object
+            request_difficulty: Concrete difficulty captured when the request
+                was built, or None for the static default.
 
         The console_pos is set to len(console), marking the position past the end
         of the current console output.
         """
+        if (
+            request_difficulty is not None
+            and request_difficulty == _get_static_task_difficulty(self.job_def.metadata)
+        ):
+            request_difficulty = None
         chat_style = self.job_def.chat_style
         is_md_style = chat_style in (  # pylint: disable=no-member
             ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)
@@ -1577,6 +1736,7 @@ class Job:
             console_pos=len(self.py_env.console) if self.py_env.console else 0,
             llm_resp=stored_resp,
             llm_reasoning_payload=step_data.reasoning_payload,
+            request_difficulty=request_difficulty,
         )
         self.chat_log.append(chat_item)
 

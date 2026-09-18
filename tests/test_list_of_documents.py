@@ -30,6 +30,13 @@ DOC_TOOLS_0 = """\
 # title: Tool Guide
 Body."""
 
+DOC_PREFS_2 = """\
+# ord_no: 1
+# topic: Preferences
+# audience: agent_b
+# title: Donor Details
+Body."""
+
 
 @pytest.fixture(autouse=True)
 def clear_cache():
@@ -42,6 +49,7 @@ def clear_cache():
 def docs_dir(temp_dir):
     _write(temp_dir, "prefs0.txt", DOC_PREFS_0)
     _write(temp_dir, "prefs1.txt", DOC_PREFS_1)
+    _write(temp_dir, "prefs2.txt", DOC_PREFS_2)
     _write(temp_dir, "tools0.txt", DOC_TOOLS_0)
     return temp_dir
 
@@ -70,7 +78,39 @@ def test_list_documents_filters_by_audience(docs_dir, capsys):
     run_with_statek_job(job, lambda: _impl("agent_b", docs_dir, topic="Preferences"))
     out = capsys.readouterr().out
     assert "Overview" in out
-    assert "Details" not in out
+    assert "1: Details" not in out
+
+
+def test_list_documents_unions_resource_audiences_without_duplicate_public_docs(
+    docs_dir, capsys,
+):
+    """Multiple active roles see their union and each shared document only once."""
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: _impl(["agent_a", "agent_b"], docs_dir, topic="Preferences"),
+    )
+    out = capsys.readouterr().out
+
+    assert out.count("Overview") == 1
+    assert "1: Details" in out
+    assert "1: Donor Details" in out
+
+
+def test_list_documents_paginates_across_duplicate_ids(docs_dir, capsys):
+    """Pagination uses document order rather than treating IDs as unique keys."""
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: _impl(
+            ["agent_a", "agent_b"], docs_dir, topic="Preferences",
+            start_index=2, limit=1,
+        ),
+    )
+    out = capsys.readouterr().out
+
+    assert "1: Donor Details" in out
+    assert "1: Details" not in out
 
 
 def test_list_documents_sets_last_topic_id(docs_dir):

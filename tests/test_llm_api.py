@@ -1674,10 +1674,21 @@ class TestGetNextRequestAvailableTools:
         assert isinstance(request["available_tools"], list)
 
     def test_get_next_request_available_tools_matches_agent(self, job_factory, agent):
-        """available_tools in the request matches the agent's all_tools."""
+        """available_tools in the request matches the agent's LLM-visible tools."""
         job = job_factory()
         request = job.get_next_request()
-        assert set(request["available_tools"]) == set(job.job_def.agent.all_tools)
+        assert set(request["available_tools"]) == set(job.job_def.agent.tools)
+
+    def test_get_next_request_skips_unresolved_dynamic_tool(self, job_factory, agent):
+        """A volatile named tool missing from context does not block a normal request."""
+        agent.append_tool("not_initialized")
+        job = job_factory()
+
+        request = job.get_next_request()
+
+        assert "not_initialized" not in {
+            tool_fn.__name__ for tool_fn in request["available_tools"]
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -128,6 +128,34 @@ def hidden_tool(**kwargs):  # pylint: disable=unused-argument
     return "hidden"
 
 
+HIDDEN_ALIAS_CALLS: list[str] = []
+
+
+@tool(hidden=True)
+def hidden_alias_target(**kwargs):  # pylint: disable=unused-argument
+    """Record if a hidden callable is reached through a context alias."""
+    HIDDEN_ALIAS_CALLS.append("called")
+    return "hidden alias"
+
+
+@tool(hidden=True)
+def formal_visibility_collision(**kwargs):  # pylint: disable=unused-argument
+    """Hidden registration used to test selected-callable precedence."""
+    return "hidden collision"
+
+
+HIDDEN_FORMAL_VISIBILITY_COLLISION = formal_visibility_collision
+
+
+@tool  # pylint: disable=function-redefined
+def formal_visibility_collision(**kwargs):  # pylint: disable=unused-argument,function-redefined
+    """Visible receiver tool sharing a name with a hidden registration."""
+    return "visible collision"
+
+
+VISIBLE_FORMAL_VISIBILITY_COLLISION = formal_visibility_collision
+
+
 @tool
 def _internal_tool(**kwargs):  # pylint: disable=unused-argument
     return "internal"
@@ -989,6 +1017,77 @@ async def test_hidden_internal_and_unknown_tools_fail(db0_fixture, tool_name):  
 
     assert error is not None
     assert tool_name in result
+
+
+@pytest.mark.asyncio
+async def test_hidden_receiver_context_alias_fails_before_call(db0_fixture):  # pylint: disable=unused-argument
+    """Formal execution rejects the hidden callable selected by alias fallback."""
+    HIDDEN_ALIAS_CALLS.clear()
+    job = _job_with_tools([visible_tool])
+    job.job_def.agent.context["hidden_alias"] = hidden_alias_target
+
+    result, error = await exec_tool(_call_spec("hidden_alias"), job)
+
+    assert error is not None
+    assert "hidden_alias" in result
+    assert not HIDDEN_ALIAS_CALLS
+
+
+@pytest.mark.asyncio
+async def test_visible_receiver_context_alias_executes(db0_fixture):  # pylint: disable=unused-argument
+    """Visible fallback context callables remain executable by alias."""
+    job = _job_with_tools()
+    job.job_def.agent.context["visible_alias"] = visible_tool
+
+    result, error = await exec_tool(
+        _call_spec("visible_alias", kwargs={"value": "ok"}), job,
+    )
+
+    assert error is None
+    assert result == "visible: ok"
+
+
+@pytest.mark.asyncio
+async def test_visible_receiver_tool_wins_over_hidden_registered_name(db0_fixture):  # pylint: disable=unused-argument
+    """Formal resolution validates the selected visible receiver callable."""
+    job = _job_with_tools([VISIBLE_FORMAL_VISIBILITY_COLLISION])
+
+    result, error = await exec_tool(_call_spec("formal_visibility_collision"), job)
+
+    assert error is None
+    assert result == "visible collision"
+
+
+@pytest.mark.asyncio
+async def test_explicit_allow_list_permits_hidden_context_alias(db0_fixture):  # pylint: disable=unused-argument
+    """An explicit sandbox allow-list entry retains precedence."""
+    statek.init(StatekSettings(
+        prompt_defs={}, python_sandbox_allowed_tools="hidden_alias",
+    ))
+    HIDDEN_ALIAS_CALLS.clear()
+    job = _job_with_tools()
+    job.job_def.agent.context["hidden_alias"] = hidden_alias_target
+
+    result, error = await exec_tool(_call_spec("hidden_alias"), job)
+
+    assert error is None
+    assert result == "hidden alias"
+    assert HIDDEN_ALIAS_CALLS == ["called"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_off_permits_hidden_context_alias(db0_fixture):  # pylint: disable=unused-argument
+    """Disabling the sandbox retains unrestricted formal-call behavior."""
+    statek.init(StatekSettings(prompt_defs={}), restricted=False)
+    HIDDEN_ALIAS_CALLS.clear()
+    job = _job_with_tools()
+    job.job_def.agent.context["hidden_alias"] = hidden_alias_target
+
+    result, error = await exec_tool(_call_spec("hidden_alias"), job)
+
+    assert error is None
+    assert result == "hidden alias"
+    assert HIDDEN_ALIAS_CALLS == ["called"]
 
 
 @pytest.mark.asyncio

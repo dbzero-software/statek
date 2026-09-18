@@ -94,7 +94,7 @@ class TestCheckAfterStep:
 class TestEffectiveLimit:  # pylint: disable=protected-access
     """Tests for _effective_limit calculation.
 
-    Formula: limit = base_limit + (1.0 + extension) * num_completions
+    Formula: limit = base_limit * (1.0 + extension * num_completions)
     """
 
     def test_none_base_returns_none(self):
@@ -118,26 +118,34 @@ class TestEffectiveLimit:  # pylint: disable=protected-access
                               limit_extension_per_completion=0.5)
         assert harness._effective_limit(5, 0) == 5
 
-    def test_one_completion_extends_by_one_plus_fraction(self):
-        """1 completion with extension=0.5 adds 1.5 to base."""
+    def test_one_completion_extends_by_base_fraction(self):
+        """1 completion with extension=0.5 adds half the base."""
         harness = LLM_Harness(max_turns=5, max_exceptions=3,
                               max_consecutive_exceptions=1, max_token_usage=None,
                               limit_extension_per_completion=0.5)
-        assert harness._effective_limit(5, 1) == 6.5
+        assert harness._effective_limit(5, 1) == 7.5
 
     def test_two_completions(self):
-        """2 completions with extension=0.5 adds 3.0 to base."""
+        """2 completions with extension=0.5 double the base."""
         harness = LLM_Harness(max_turns=5, max_exceptions=3,
                               max_consecutive_exceptions=1, max_token_usage=None,
                               limit_extension_per_completion=0.5)
-        assert harness._effective_limit(5, 2) == 8.0
+        assert harness._effective_limit(5, 2) == 10.0
 
     def test_zero_extension(self):
-        """Extension=0.0 means each completion adds exactly 1.0."""
+        """Zero extension preserves the base despite completions."""
         harness = LLM_Harness(max_turns=10, max_exceptions=3,
                               max_consecutive_exceptions=1, max_token_usage=None,
                               limit_extension_per_completion=0.0)
-        assert harness._effective_limit(10, 3) == 13.0
+        assert harness._effective_limit(10, 3) == 10.0
+
+    @pytest.mark.parametrize(
+        "completions, expected", [(0, 50000), (1, 55000), (2, 60000), (3, 65000)]
+    )
+    def test_token_limit_grows_by_base_fraction(self, completions: int, expected: int) -> None:
+        """Each completion adds ten percent of the original token budget."""
+        harness = LLM_Harness(None, 3, 1, 50000, limit_extension_per_completion=0.1)
+        assert harness._effective_limit(50000, completions) == pytest.approx(expected)
 
 
 class TestLimitExtensionBeforeStep:
@@ -165,10 +173,10 @@ class TestLimitExtensionBeforeStep:
             harness.check_before_step(_make_job(exception_count=5, num_completions=1))
 
     def test_consecutive_exceptions_extended(self):
-        """max_consecutive_exceptions=1, extension=0.0, 2 completions → effective=3.0."""
+        """max_consecutive_exceptions=1, extension=1.0, 2 completions → effective=3.0."""
         harness = LLM_Harness(max_turns=None, max_exceptions=100,
                               max_consecutive_exceptions=1, max_token_usage=None,
-                              limit_extension_per_completion=0.0)
+                              limit_extension_per_completion=1.0)
         harness.check_before_step(_make_job(max_consecutive_exceptions=3, num_completions=2))
         with pytest.raises(LLM_HarnessError, match="consecutive"):
             harness.check_before_step(_make_job(max_consecutive_exceptions=4, num_completions=2))
@@ -187,13 +195,13 @@ class TestLimitExtensionAfterStep:
     """check_after_step uses extended limits when num_completions is set."""
 
     def test_token_usage_extended_after_completions(self):
-        """max_token_usage=1000, extension=0.5, 2 completions → effective=1003.0."""
+        """max_token_usage=1000, extension=0.5, 2 completions → effective=2000.0."""
         harness = LLM_Harness(max_turns=None, max_exceptions=100,
                               max_consecutive_exceptions=100, max_token_usage=1000,
                               limit_extension_per_completion=0.5)
-        harness.check_after_step(_make_job(approx_token_usage=1003, num_completions=2))
+        harness.check_after_step(_make_job(approx_token_usage=2000, num_completions=2))
         with pytest.raises(LLM_HarnessError, match="token"):
-            harness.check_after_step(_make_job(approx_token_usage=1004, num_completions=2))
+            harness.check_after_step(_make_job(approx_token_usage=2001, num_completions=2))
 
     def test_exceptions_extended_after_step(self):
         """max_exceptions=3, extension=0.5, 1 completion → effective=4.5."""

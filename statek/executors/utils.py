@@ -26,6 +26,7 @@ from contextlib import contextmanager
 import dbzero as db0
 
 from statek.exceptions import FutureError, LLM_HarnessError
+from statek.extra_resources import extra_resources_from_metadata, extra_resources_identity
 from statek.future import FutureResult
 
 
@@ -265,9 +266,7 @@ def _setup_execution_context(job: Job, global_context: dict, local_context: dict
     # Merge agent's private context if available
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         global_context.update(job.job_def.agent.context)
-    all_direct_tools = list(job.job_def.agent._tools)
-    if job.job_def.agent._internal_tools:
-        all_direct_tools.extend(job.job_def.agent._internal_tools)
+    all_direct_tools = job.get_resource_tools()
     # Include system tools from the global registry (not stored on agents)
     from statek.system import find_tools  # pylint: disable=import-outside-toplevel
     agent_tool_names = {t.__name__ for t in all_direct_tools}
@@ -394,23 +393,12 @@ def _execution_sandbox_policy(allowed_tools: Optional[Set[str]] = None):
     return policy
 
 
-def _is_hidden_tool_call(call_spec: CallSpec, job: Job, policy) -> bool:
+def _is_hidden_tool_call(call_spec: CallSpec, tool_fn: Optional[Callable], policy) -> bool:
     if policy is None or call_spec.func_name in policy.allowed_tools:
         return False
-    if call_spec.func_name in policy.blocked_tools:
-        return True
-
-    agent = job.job_def.agent
-    if agent is None:
-        return False
-
-    for tool_fn in agent._tools:  # pylint: disable=protected-access
-        if (getattr(tool_fn, "__name__", None) == call_spec.func_name
-                and getattr(tool_fn, "tool_hidden", False)):
-            return True
-
-    context_fn = agent.context.get(call_spec.func_name)
-    return bool(callable(context_fn) and getattr(context_fn, "tool_hidden", False))
+    if tool_fn is not None:
+        return bool(getattr(tool_fn, "tool_hidden", False))
+    return call_spec.func_name in policy.blocked_tools
 
 
 def _compile_exec_node(node: ast.AST, filename: str):
@@ -466,6 +454,8 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
             value = asyncio.get_running_loop().run_until_complete(value)
         return value
 
+    tracks_resource_expansion = bool(getattr(job.job_def, "extra_resources", None))
+    execution_difficulty = job.get_current_difficulty() if tracks_resource_expansion else None
     with _setup_execution_context(job, global_context, local_context, print_fn=print_fn):
         if policy is not None:
             try:
@@ -517,6 +507,14 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
 
             try:
                 is_expression = isinstance(node, ast.Expr)
+
+                current_difficulty = (
+                    job.get_current_difficulty() if tracks_resource_expansion else None
+                )
+                if tracks_resource_expansion and current_difficulty != execution_difficulty:
+                    for tool in job.get_resource_tools():
+                        global_context[tool.__name__] = inject_context(tool, global_context)
+                    execution_difficulty = current_difficulty
 
                 global_context.update(local_context)
                 sync_local = _MirrorDict(
@@ -830,13 +828,6 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         private_console.append(output.rstrip('\n'))
 
     policy = _execution_sandbox_policy()
-    if _is_hidden_tool_call(call_spec, job, policy):
-        error_msg = f"NameError: tool '{call_spec.func_name}' is not exposed to this job"
-        full_agent_trace(
-            "tool.error",
-            {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "error": error_msg},
-        )
-        return error_msg, error_msg
 
     # Build global and local contexts — mirrors exec_step
     if job.py_env.global_state is None:
@@ -850,26 +841,32 @@ async def exec_tool(call_spec: CallSpec, job: Job,
         # Re-wrap the original tool with a combined context (global + local) so that
         # _bind_by_name / find_locals can resolve string arguments to actual objects
         # (e.g. docstr(what='some_tool') → the actual callable, not the string).
-        agent = job.job_def.agent
         original_tool = None
-        if agent:
-            for t in agent._tools:  # pylint: disable=protected-access
-                if t.__name__ == call_spec.func_name:
-                    original_tool = t
+        for tool_fn in job.get_resource_tools():
+            if tool_fn.__name__ == call_spec.func_name:
+                original_tool = tool_fn
+                break
+        # Also search system tools from the global registry
+        if original_tool is None:
+            from statek.system import find_tools  # pylint: disable=import-outside-toplevel
+            for tool_fn in find_tools("SYSTEM", include_hidden=True):
+                if tool_fn.__name__ == call_spec.func_name:
+                    original_tool = tool_fn
                     break
-            # Also search system tools from the global registry
-            if original_tool is None:
-                from statek.system import find_tools  # pylint: disable=import-outside-toplevel
-                for t in find_tools("SYSTEM", include_hidden=True):
-                    if t.__name__ == call_spec.func_name:
-                        original_tool = t
-                        break
 
         if original_tool is not None:
             combined_ctx = {**global_context, **local_context}
             func = inject_context(original_tool, combined_ctx)
         else:
             func = global_context.get(call_spec.func_name) or local_context.get(call_spec.func_name)
+
+        if _is_hidden_tool_call(call_spec, func, policy):
+            error_msg = f"NameError: tool '{call_spec.func_name}' is not exposed to this job"
+            full_agent_trace(
+                "tool.error",
+                {"job_uuid": job_uuid, "tool_name": call_spec.func_name, "error": error_msg},
+            )
+            return error_msg, error_msg
 
         if func is None:
             error_msg = f"NameError: tool '{call_spec.func_name}' not found"
@@ -1196,7 +1193,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 12: Get next request parameters — log pending console batch first
     _log_pending_console(job)
-    request = job.get_next_request()
+    request_difficulty = job.get_current_difficulty()
+    request = job.get_next_request(difficulty=request_difficulty)
     request["metadata"] = dict(request["metadata"] or {})
     request["metadata"]["PROVIDER"] = provider_to_use
     # Materialize chat_history generator so it can be consumed by process_request
@@ -1230,7 +1228,11 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         return False
 
     processed_response = LLM_Response(step_data=processed_step, stats=response.stats)
-    job.append_chat_log(request, processed_response)
+    job.append_chat_log(
+        request,
+        processed_response,
+        request_difficulty=request_difficulty,
+    )
 
     # Step 15: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message
     dialog_error = False
@@ -1523,12 +1525,15 @@ def find_existing_job_def(
     chat_style: object = _MATCH_UNSET,
     post_processing: object = None,
     provider_config: Optional[ProviderConfig] = None,
+    extra_resources: object = _MATCH_UNSET,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
     Args:
         agent: the Agent the JobDef must be associated with
         warmup_code: the warmup code to match (compared after parsing)
+        extra_resources: parsed resource criterion; omitted means no filter,
+            while None or an empty triple matches no additional resources
 
     Returns:
         The first matching JobDef, or None if not found
@@ -1553,15 +1558,19 @@ def find_existing_job_def(
             return False
         if not provider_configs_match(job_def.provider_config, provider_config):
             return False
+        if extra_resources is not _MATCH_UNSET and extra_resources_identity(job_def.extra_resources) != resource_identity:
+            return False
         return True
 
     parsed = parse_warmup_code(warmup_code)
+    resource_identity = extra_resources_identity(extra_resources) if extra_resources is not _MATCH_UNSET else None
     agent_tag = db0.as_tag(agent)
     if (
         model is not None
         and job_params is not _MATCH_UNSET
         and locale is not _MATCH_UNSET
         and chat_style is not _MATCH_UNSET
+        and extra_resources is not _MATCH_UNSET
     ):
         resolved_model_family = model_family or ensure_model_name(model).model_family
         lookup_tag = _job_def_identity_tag(
@@ -1573,6 +1582,7 @@ def find_existing_job_def(
             chat_style,
             post_processing,
             provider_config,
+            extra_resources,
         )
         for job_def in db0.find(JobDef, agent_tag, lookup_tag):
             if _matches(job_def):
@@ -1725,6 +1735,7 @@ async def run_agentic_loop(agent: 'Agent',
     # Reuse an existing matching job definition or create a new one
     model_family, model_to_use = _resolve_job_def_model(agent, provider)
     provider_config = resolve_settings_provider_config(get_statek_settings())
+    extra_resources = extra_resources_from_metadata(agent._metadata)  # pylint: disable=protected-access
     job_def = find_existing_job_def(
         agent,
         warmup_code,
@@ -1734,6 +1745,7 @@ async def run_agentic_loop(agent: 'Agent',
         locale=None,
         chat_style=None,
         provider_config=provider_config,
+        extra_resources=extra_resources,
     )
     if job_def:
         # Clear any previous errors on the job definition they might'be been fixed after process restart
@@ -1747,6 +1759,7 @@ async def run_agentic_loop(agent: 'Agent',
             job_params=None,
             warmup_code=parsed_warmup_code,
             provider_config=provider_config,
+            extra_resources=extra_resources,
         )
     
     start_jobs_func = _make_start_jobs_func(agent, job_def, task_queue_size_func, provider)
@@ -1791,6 +1804,7 @@ async def run_agentic_fleet(
 
         model_family, model_to_use = _resolve_job_def_model(agent, provider)
         provider_config = resolve_settings_provider_config(get_statek_settings())
+        extra_resources = extra_resources_from_metadata(agent._metadata)  # pylint: disable=protected-access
         job_def = find_existing_job_def(
             agent,
             warmup_code,
@@ -1800,6 +1814,7 @@ async def run_agentic_fleet(
             locale=None,
             chat_style=None,
             provider_config=provider_config,
+            extra_resources=extra_resources,
         )
         if job_def:
             job_def.clear_errors()
@@ -1812,6 +1827,7 @@ async def run_agentic_fleet(
                 job_params=None,
                 warmup_code=parsed_warmup_code,
                 provider_config=provider_config,
+                extra_resources=extra_resources,
             )
 
         start_jobs_funcs.append(_make_start_jobs_func(agent, job_def, task_queue_size_func, provider))

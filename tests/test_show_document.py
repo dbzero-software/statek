@@ -24,6 +24,13 @@ DOC_RESTRICTED = """\
 # title: Secret Guide
 Restricted content."""
 
+DOC_DONOR = """\
+# ord_no: 1
+# topic: Guide
+# audience: agent_b
+# title: Donor Guide
+Donor content."""
+
 
 @pytest.fixture(autouse=True)
 def clear_cache():
@@ -36,6 +43,7 @@ def clear_cache():
 def docs_dir(temp_dir):
     _write(temp_dir, "doc0.txt", DOC_LONG)
     _write(temp_dir, "doc1.txt", DOC_RESTRICTED)
+    _write(temp_dir, "doc2.txt", DOC_DONOR)
     return temp_dir
 
 
@@ -104,6 +112,34 @@ def test_show_document_fuzzy_match_below_threshold(docs_dir, capsys):
     )
     out = capsys.readouterr().out
     assert "not found" in out
+
+
+def test_show_document_accepts_any_active_resource_audience(docs_dir, capsys):
+    """A donor-restricted document is visible through the combined audience."""
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: show_document(
+            ["receiver", "agent_a"], docs_dir, key="Secret Guide", topic="Guide",
+        ),
+    )
+    out = capsys.readouterr().out
+
+    assert "Restricted content." in out
+
+
+def test_show_document_by_unique_title_with_duplicate_resource_ids(docs_dir, capsys):
+    """A donor document remains retrievable by title when active IDs collide."""
+    job = StatekContextJob()
+    run_with_statek_job(
+        job,
+        lambda: show_document(
+            ["agent_a", "agent_b"], docs_dir, key="Donor Guide", topic="Guide",
+        ),
+    )
+    out = capsys.readouterr().out
+
+    assert "Donor content." in out
 
 
 def _write(directory, filename, content):
