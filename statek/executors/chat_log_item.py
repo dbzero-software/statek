@@ -91,7 +91,7 @@ class LLM_LogItem(ChatLogItem):
     llm_resp: Union[str, CodeBlock] = None
     # Opaque provider continuation material replayed only by its matching formatter.
     llm_reasoning_payload: Optional[Any] = None
-    # Difficulty used to build this request; None identifies legacy log items.
+    # Non-default difficulty used to build this request; None means the job's static default.
     request_difficulty: Optional[TaskDifficulty] = None
 
 

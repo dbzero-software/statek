@@ -1592,11 +1592,13 @@ class TestJobGetRequestData:
         assert historical_medium["model"] == "medium"
         assert "Medium instructions." in historical_medium["system_prompt"]
         assert "High instructions." not in historical_medium["system_prompt"]
+        assert job.chat_log[0].request_difficulty is None
+        assert job.chat_log[1].request_difficulty == medium_difficulty
 
     def test_get_request_data_supports_legacy_log_item_without_difficulty_snapshot(
         self, job_def_factory,
     ):
-        """Old log items fall back to the job's current request behavior."""
+        """Old log items without a snapshot reconstruct at the static default."""
         job_def = job_def_factory(metadata={
             "MODEL": "L:small,M:medium,H:large",
             "DEFAULT_DIFFICULTY": "low",
@@ -1607,7 +1609,24 @@ class TestJobGetRequestData:
 
         historical = job.get_request_data(0)
 
-        assert historical["model"] == "medium"
+        assert historical["model"] == "small"
+
+    def test_get_request_data_resolves_none_to_medium_static_default(
+        self, job_def_factory,
+    ):
+        """A None snapshot resolves to the configured default rather than current difficulty."""
+        job_def = job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large",
+            "DEFAULT_DIFFICULTY": "medium",
+        })
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+        job.chat_log.append(LLM_LogItem(
+            console_pos=0, llm_resp="default response", request_difficulty=None,
+        ))
+        job.panic()
+
+        assert job.get_current_difficulty() == TaskDifficulty.high
+        assert job.get_request_data(0)["model"] == "medium"
 
     def test_get_request_data_rejects_out_of_range_turn(self, job_factory):
         """Missing historical turns raise IndexError."""

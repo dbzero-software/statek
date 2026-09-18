@@ -179,14 +179,14 @@ def test_request_difficulty_and_escalation_survive_reopen(supervised_agent) -> N
     restored = db0.fetch(identifier)
 
     assert restored.get_current_difficulty() == TaskDifficulty.medium
-    assert restored.chat_log[0].request_difficulty == TaskDifficulty.low
+    assert restored.chat_log[0].request_difficulty is None
     assert restored.get_request_data(0)["model"] == "small"
 
 
 def test_legacy_job_and_log_item_without_difficulty_fields_survive_reopen(
     supervised_agent,
 ) -> None:
-    """Records written without difficulty fields retain legacy fallback behavior."""
+    """Records written without difficulty fields reconstruct at the static default."""
     definition = JobDef(
         agent=supervised_agent,
         metadata={
@@ -209,7 +209,8 @@ def test_legacy_job_and_log_item_without_difficulty_fields_survive_reopen(
     db0.open("test_prefix", "rw")
     restored = db0.fetch(identifier)
 
-    assert restored.get_current_difficulty() == TaskDifficulty.low
+    restored.panic()
+    assert restored.get_current_difficulty() == TaskDifficulty.medium
     assert restored.get_request_data(0)["model"] == "small"
 
 

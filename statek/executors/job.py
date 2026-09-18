@@ -1491,11 +1491,14 @@ class Job:
             key: value for key, value in push_log.items()
             if key <= console_limit
         }
+        request_difficulty = getattr(target_item, "request_difficulty", None)
+        if request_difficulty is None:
+            request_difficulty = _get_static_task_difficulty(self.job_def.metadata)
         return self._build_request_data(
             chat_log=history_chat_log,
             console=history_console,
             push_log=history_push_log,
-            difficulty=getattr(target_item, "request_difficulty", None),
+            difficulty=request_difficulty,
         )
 
     def get_resource_agents(
@@ -1683,11 +1686,17 @@ class Job:
         Args:
             request: The original request parameters (compatible with LLM_API.process_request)
             llm_resp: The LLM's response as an LLM_Response object
-            request_difficulty: Difficulty captured when the request was built.
+            request_difficulty: Concrete difficulty captured when the request
+                was built, or None for the static default.
 
         The console_pos is set to len(console), marking the position past the end
         of the current console output.
         """
+        if (
+            request_difficulty is not None
+            and request_difficulty == _get_static_task_difficulty(self.job_def.metadata)
+        ):
+            request_difficulty = None
         chat_style = self.job_def.chat_style
         is_md_style = chat_style in (  # pylint: disable=no-member
             ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG)

@@ -301,10 +301,10 @@ class TestRunJobStepToolCallResponse:
         assert llm_resp == "x = 42"
 
     @pytest.mark.asyncio
-    async def test_stores_request_difficulty_before_waiting_for_response(
+    async def test_stores_default_request_as_none_before_waiting_for_response(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
-        """A difficulty change while awaiting the provider keeps the request snapshot."""
+        """A provider-time escalation cannot rewrite a default request snapshot."""
         job_def = job_def_factory(metadata={
             "MODEL": "L:small,M:medium,H:large",
             "DEFAULT_DIFFICULTY": "low",
@@ -326,7 +326,8 @@ class TestRunJobStepToolCallResponse:
             await run_job_step(job, provider="OPENROUTER")
 
         assert job.get_current_difficulty() == TaskDifficulty.medium
-        assert job.chat_log[0].request_difficulty == TaskDifficulty.low
+        assert job.chat_log[0].request_difficulty is None
+        assert job.get_request_data(0)["model"] == "small"
 
 
 class TestRunJobStepHarnessIsolation:
