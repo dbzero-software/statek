@@ -8,6 +8,16 @@ from statek.executors.job import Job, JobDef
 from statek.executors.utils import process_agent_events
 from statek.prompt_config import make_system_prompt
 from statek.statek_push_queue import StatekPushQueue
+from statek.system import error_handler
+
+
+_critical_error_calls = []
+
+
+@error_handler
+def _capture_critical_error(context, error=None):
+    """Capture application critical-error notifications for event tests."""
+    _critical_error_calls.append((context, error))
 
 
 def _current_queue_prefixes():
@@ -44,6 +54,26 @@ def test_process_agent_events_creates_job_with_event_shared_var(db0_fixture):
     job = jobs[0]
     assert job.job_def.agent is agent
     assert job.py_env.local_state["event"] is event
+
+
+def test_process_agent_events_binds_event_as_critical_error_context(db0_fixture):
+    """A queued event is bound before its newly created job can execute."""
+    _critical_error_calls.clear()
+    agent = _make_agent()
+    agent.context["critical_error_handler"] = _capture_critical_error
+    event = _QueuedEvent("hello")
+    queue = StatekPushQueue()
+    queue.push_to_agent_queue(agent, event)
+
+    process_agent_events(
+        agents={agent}, max_count=10, queue_prefixes=_current_queue_prefixes()
+    )
+
+    job = next(iter(db0.find(Job, db0.as_tag(agent))))
+    failure = RuntimeError("event failed")
+    job.notify_handlers(error=failure)
+
+    assert _critical_error_calls == [(event, failure)]
 
 
 def test_process_agent_events_reuses_matching_job_def(db0_fixture):

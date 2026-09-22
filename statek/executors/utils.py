@@ -1371,7 +1371,8 @@ def process_agent_events(
                 break
             events = queue.pop_from_agent_queue(agent, max_count - processed)
             for event in events:
-                create_new_job(agent, shared_vars={local_name: event})
+                job = create_new_job(agent, shared_vars={local_name: event})
+                job.bind_critical_error_context(event)
                 processed += 1
 
 

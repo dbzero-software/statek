@@ -585,6 +585,17 @@ class ErrorHandler:
             pass
 
 
+def _notify_bound_critical_error(
+    binding: Tuple[Callable, Any], error: Optional[Exception] = None
+) -> None:
+    """Invoke an application handler stored as a replaceable error-handler entry."""
+    error_handler, context = binding
+    error_handler(context, error=error)
+
+
+_notify_bound_critical_error.is_error_handler = True
+
+
 @memo
 @db0.tag_fields("agent", "job_def", "job_status")
 class Job:
@@ -822,6 +833,38 @@ class Job:
     def add_error_handlers_from(self, parent_job: 'Job') -> None:
         """Copy all registered error handlers from *parent_job* into this job."""
         self.error_handlers.extend(parent_job.error_handlers)
+
+    def bind_critical_error_context(self, context: Any) -> None:
+        """Bind the latest accepted application input to critical job failure.
+
+        The job's agent may expose a ``critical_error_handler`` adapter. An
+        inherited binding is retained when the child agent does not expose its
+        own adapter. Only the previous latest-input binding is replaced; other
+        registered error handlers remain unchanged.
+
+        Args:
+            context: Application-specific input to report if the job fails.
+        """
+        current = next(
+            (
+                entry
+                for entry in self.error_handlers
+                if entry.error_handler is _notify_bound_critical_error
+            ),
+            None,
+        )
+        handler = self.agent.get_adapter("critical_error_handler")
+        if handler is None and current is not None:
+            handler = current.context[0]
+        self.error_handlers = [
+            entry
+            for entry in self.error_handlers
+            if entry.error_handler is not _notify_bound_critical_error
+        ]
+        if handler is not None:
+            self.add_error_handler(
+                _notify_bound_critical_error, (handler, context)
+            )
 
     def notify_handlers(self, error: Optional[Exception] = None) -> None:
         """Invoke all registered error handlers and clear the handler list.
@@ -2370,6 +2413,7 @@ class Job:
         Returns:
             True if the job was transitioned DONE → STARTED, False otherwise.
         """
+        source_message = message
         message = self._resolve_user_message(message)
 
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
@@ -2389,6 +2433,7 @@ class Job:
             else:
                 self.py_env.push_log[key] = [existing, message]
 
+        reactivated = False
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
             self.num_completions = 1 if self.num_completions is None else self.num_completions + 1
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
@@ -2397,5 +2442,7 @@ class Job:
                 console_pos=len(self.py_env.console) if self.py_env.console else 0,
                 llm_resp=None
             ))
-            return True
-        return False  # pylint: disable=no-member
+            reactivated = True
+
+        self.bind_critical_error_context(source_message)
+        return reactivated

@@ -21,7 +21,17 @@ from statek.exceptions import FutureError
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt
 from statek.settings import StatekSettings
+from statek.system import error_handler
 from statek.utils import CodeBlock, _statek_ctx_scope
+
+_critical_error_calls = []
+
+
+@error_handler
+def _capture_critical_error(context, error=None):
+    """Capture application critical-error notifications for delegation tests."""
+    _critical_error_calls.append((context, error))
+
 
 def _noop_error_handler(context, error=None):
     """Minimal error handler for tests."""
@@ -393,6 +403,24 @@ class TestDelegateTask:
         child_result = delegate_task(supervised_agent, parent_job=parent_job)
         assert len(child_result.job.error_handlers) == 1
         assert child_result.job.error_handlers[0].error_handler is _noop_error_handler
+
+    def test_delegate_task_snapshots_parent_critical_error_context(
+        self, db0_fixture, supervised_agent, mock_settings
+    ):
+        """A delayed child failure retains the parent's context at delegation time."""
+        _critical_error_calls.clear()
+        supervised_agent.context["critical_error_handler"] = _capture_critical_error
+        parent_job = delegate_task(supervised_agent).job
+        parent_job.bind_critical_error_context("delegated-message")
+
+        child_job = delegate_task(
+            supervised_agent, parent_job=parent_job
+        ).job
+        parent_job.push_user_message("new-parent-message")
+        failure = RuntimeError("child failed")
+        child_job.notify_handlers(error=failure)
+
+        assert _critical_error_calls == [("delegated-message", failure)]
 
     def test_delegate_task_with_parent_job_stores_parent_job(
         self, db0_fixture, supervised_agent, mock_settings
@@ -1307,6 +1335,25 @@ class TestStartDialog:
         assert len(child_job.error_handlers) == 1
         assert child_job.error_handlers[0].error_handler is _noop_error_handler
         assert child_job.parent_job is parent_job
+
+    def test_start_dialog_rebinds_inherited_context_to_initial_message(
+        self, db0_fixture, mock_settings
+    ):
+        """A child dialog failure targets its own last accepted user message."""
+        _critical_error_calls.clear()
+        agent = DialogAgent(
+            send_message=_make_send_message, _metadata={"MODEL": "test-model"}
+        )
+        agent.context["critical_error_handler"] = _capture_critical_error
+        parent_job = start_dialog(agent, message="parent-message")
+
+        child_job = start_dialog(
+            agent, message="child-message", parent_job=parent_job
+        )
+        failure = RuntimeError("child failed")
+        child_job.notify_handlers(error=failure)
+
+        assert _critical_error_calls == [("child-message", failure)]
 
     def test_start_dialog_dict_shared_vars_populates_local_state(
         self, db0_fixture, mock_settings
