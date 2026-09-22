@@ -26,9 +26,19 @@ from statek.exceptions import FutureError
 from statek.llm_harness import LLM_Harness
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, CallParams, OpenRouter_API
 from statek.settings import LLM_API_Settings
+from statek.system import error_handler
 from statek.task import SubTaskHandler
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec
+
+
+_critical_error_calls = []
+
+
+@error_handler
+def _capture_critical_error(context, error=None):
+    """Capture application critical-error notifications from warmup failures."""
+    _critical_error_calls.append((context, error))
 
 
 @db0.memo
@@ -841,6 +851,33 @@ class TestRunJobStepWarmupException:
         await run_job_step(job)
 
         assert job.status == JobStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_warmup_exception_notifies_bound_application_handler(
+        self, db0_fixture  # pylint: disable=unused-argument
+    ):
+        """A critical warmup failure reports the context bound before execution."""
+        _critical_error_calls.clear()
+        agent = Agent(
+            role="warmup_exc_handler",
+            _system_prompt=make_system_prompt("Test"),
+            _metadata={"MODEL": "test-model"},
+            _tools=[],
+        )
+        agent.context["critical_error_handler"] = _capture_critical_error
+        job_def = JobDef(
+            agent=agent,
+            job_params=None,
+            warmup_code="raise ValueError('boom')",
+        )
+        job = Job(job_def=job_def, job_status=JobStatus.READY)
+        job.bind_critical_error_context("event-message")
+
+        await run_job_step(job)
+
+        assert len(_critical_error_calls) == 1
+        assert _critical_error_calls[0][0] == "event-message"
+        assert isinstance(_critical_error_calls[0][1], ValueError)
 
     @pytest.mark.asyncio
     async def test_warmup_exception_calls_set_error_on_job_def(self, db0_fixture):  # pylint: disable=unused-argument

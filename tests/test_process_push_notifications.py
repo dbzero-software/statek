@@ -7,6 +7,16 @@ from statek.prompt_config import make_system_prompt
 from statek.locale import StatekCountryCode, StatekLangCode, StatekLocale
 from statek.statek_push_queue import StatekPushQueue
 from statek.executors.utils import process_push_notifications
+from statek.system import error_handler
+
+
+_critical_error_calls = []
+
+
+@error_handler
+def _capture_critical_error(context, error=None):
+    """Capture application critical-error notifications for push tests."""
+    _critical_error_calls.append((context, error))
 
 
 def _current_queue_prefixes():
@@ -23,6 +33,13 @@ def _make_started_job():
     job_def = JobDef(agent=agent)
     return Job(job_def=job_def, model_family="test", model="test-model",
                job_status=JobStatus.STARTED)  # pylint: disable=no-member
+
+
+def _make_started_job_with_critical_error_handler():
+    """Create a started job configured with an application critical handler."""
+    job = _make_started_job()
+    job.job_def.agent.context["critical_error_handler"] = _capture_critical_error
+    return job
 
 
 @db0.memo
@@ -122,6 +139,41 @@ class TestProcessPushNotifications:
         assert not isinstance(val, str)
         assert "msg1" in val
         assert "msg2" in val
+
+    def test_critical_error_targets_last_accepted_notification(self, db0_fixture):
+        """Only the latest message accepted into active processing is reported."""
+        _critical_error_calls.clear()
+        job = _make_started_job_with_critical_error_handler()
+        queue = StatekPushQueue()
+        first = _QueuedMessage("first")
+        second = _QueuedMessage("second")
+        queue.push_to_job_console(db0.uuid(job), first)
+        queue.push_to_job_console(db0.uuid(job), second)
+
+        process_push_notifications(queue_prefixes=_current_queue_prefixes())
+        failure = RuntimeError("processing failed")
+        job.notify_handlers(error=failure)
+
+        assert _critical_error_calls == [(second, failure)]
+
+    def test_critical_error_does_not_target_unaccepted_notification(self, db0_fixture):
+        """A message left in the queue is not selected by an earlier failure."""
+        _critical_error_calls.clear()
+        job = _make_started_job_with_critical_error_handler()
+        queue = StatekPushQueue()
+        accepted = _QueuedMessage("accepted")
+        queued = _QueuedMessage("queued")
+        queue.push_to_job_console(db0.uuid(job), accepted)
+        queue.push_to_job_console(db0.uuid(job), queued)
+
+        process_push_notifications(
+            max_count=1, queue_prefixes=_current_queue_prefixes()
+        )
+        failure = RuntimeError("processing failed")
+        job.notify_handlers(error=failure)
+
+        assert _critical_error_calls == [(accepted, failure)]
+        assert queue.pop_from_job_console(10) == [(db0.uuid(job), queued)]
 
     def test_notification_keeps_job_definition_locale(self, db0_fixture):
         """An English message does not change a Polish job's response locale."""

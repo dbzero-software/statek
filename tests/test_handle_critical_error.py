@@ -6,6 +6,7 @@ import asyncio
 from typing import Callable
 from unittest.mock import AsyncMock, patch
 
+import dbzero as db0
 import pytest
 
 from statek.exceptions import LLM_HarnessError
@@ -15,16 +16,24 @@ from statek.executors.chat_log_item import LLM_LogItem
 from statek.executors.utils import handle_critical_error, job_worker
 from statek.system import error_handler
 from statek.utils import _statek_ctx_scope
+from tests.conftest import DB0_DIR
 
 
 # Module-level capture list — mutations visible across calls
 _call_log = []
+_application_call_log = []
 
 
 @error_handler
 def _capture(context, error=None):  # pylint: disable=unused-argument
     """Append received (context, error) to the module-level capture list."""
     _call_log.append((context, error))
+
+
+@error_handler
+def _capture_application_error(context, error=None):
+    """Capture the job's application-level critical-error notification."""
+    _application_call_log.append((context, error))
 
 
 class TestHandleCriticalError:
@@ -42,6 +51,51 @@ class TestHandleCriticalError:
 
         assert len(_call_log) == 1
         assert _call_log[0][1] is exc
+
+    def test_bound_application_handler_uses_existing_handler_collection(
+        self, job_factory
+    ):
+        """Latest-input binding replaces itself without adding state to Job."""
+        _call_log.clear()
+        _application_call_log.clear()
+        job = job_factory()
+        job.job_def.agent.context["critical_error_handler"] = (
+            _capture_application_error
+        )
+        job.add_error_handler(_capture, "ordinary-context")
+        job.bind_critical_error_context("first-message")
+        job.bind_critical_error_context("latest-message")
+
+        assert not hasattr(job, "_Job__critical_error_handler")
+        assert len(job.error_handlers) == 2
+
+        exc = RuntimeError("boom")
+        with _statek_ctx_scope({'job': job}):
+            handle_critical_error(exc)
+            handle_critical_error(exc)
+
+        assert _call_log == [("ordinary-context", exc)]
+        assert _application_call_log == [("latest-message", exc)]
+        assert job.error_handlers == []
+
+    def test_bound_application_handler_survives_reopen(self, job_factory):
+        """The standard persisted handler collection retains the active binding."""
+        _application_call_log.clear()
+        job = job_factory()
+        job.job_def.agent.context["critical_error_handler"] = (
+            _capture_application_error
+        )
+        job.bind_critical_error_context("latest-message")
+        identifier = db0.uuid(job)
+
+        db0.close()
+        db0.init(DB0_DIR, read_write=True)
+        db0.open("test_prefix", "rw")
+        restored = db0.fetch(identifier)
+        failure = RuntimeError("after reopen")
+        restored.notify_handlers(error=failure)
+
+        assert _application_call_log == [("latest-message", failure)]
 
     def test_no_job_in_context_does_not_raise(self):
         """handle_critical_error is a no-op when no job is found in context."""
@@ -118,3 +172,21 @@ class TestHandleCriticalError:
         assert job.error.error_message == "unexpected failure"
         assert job.exception_count == 1
         assert job.py_env.exceptions[0].kind == ErrorKind.EXECUTION
+
+    @pytest.mark.asyncio
+    async def test_job_worker_notifies_bound_application_handler(self, job_factory):
+        """A worker-level critical exception reports the captured application context."""
+        _application_call_log.clear()
+        job = job_factory()
+        job.job_def.agent.context["critical_error_handler"] = (
+            _capture_application_error
+        )
+        job.bind_critical_error_context("latest-message")
+        semaphore = asyncio.Semaphore(1)
+
+        exc = ValueError("unexpected failure")
+        with patch('statek.executors.utils.run_job_step', new_callable=AsyncMock) as mock_step:
+            mock_step.side_effect = exc
+            await job_worker(semaphore, job)
+
+        assert _application_call_log == [("latest-message", exc)]
