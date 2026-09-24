@@ -497,25 +497,15 @@ class TestRunJobStepToolExecution:
             return "counted"
 
         call_spec = CallSpec(id="STATEK-001", func_name="counting_tool", args=[], kwargs={})
-        warmup_code = CodeBlock(
-            code='result = future_val\nexit("ok")',
-            tool_calls=[call_spec],
-        )
+        warmup_code = CodeBlock(code='exit("ok")', tool_calls=[call_spec])
         job = _make_job_with_tool("role_cont", "counting_tool", counting_tool, warmup_code)
-        future = create_future_not_ready()
-        job.py_env.local_state["future_val"] = future
+        # Simulate a FutureError continuation: status stays WARMING_UP, next_instr_num is set
+        job.set_status(JobStatus.WARMING_UP)
+        job.next_instr_num = 0
 
         await run_job_step(job)
-        assert call_count == 1
 
-        future.deps.value = 42
-        future.set_complement_functions(
-            complement=_fetch_result_from_deps,
-            condition=_check_condition_true,
-        )
-        await run_job_step(job)
-
-        assert call_count == 1
+        assert call_count == 0
 
     @pytest.mark.asyncio
     async def test_no_tool_calls_leaves_warmup_item_tool_log_none(self, db0_fixture):  # pylint: disable=unused-argument

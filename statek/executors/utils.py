@@ -1046,8 +1046,6 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     if not _release_ready_continuation(job):
         return False
 
-    is_continuation = job.next_instr_num is not None
-
     # Build shared local_context for all context-aware functions in this step
     local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
 
@@ -1068,24 +1066,17 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         # Extract the code string (CodeBlock stores code + tool_calls; exec needs the string)
         code_str = code.code if isinstance(code, CodeBlock) else code
 
-        warmup_log_item = None
+        # Create WarmupLogItem before warmup block execution
         if job.status == JobStatus.WARMING_UP:
             block_num = job.warmup_block_num if job.warmup_block_num is not None else 0
-            if is_continuation:
-                warmup_log_item = next(
-                    item for item in reversed(job.chat_log)
-                    if isinstance(item, WarmupLogItem)
-                    and item.warmup_block_num == block_num
-                )
-            else:
-                warmup_log_item = WarmupLogItem(
-                    console_pos=len(job.py_env.console) if job.py_env.console else 0,
-                    warmup_block_num=block_num
-                )
-                job.chat_log.append(warmup_log_item)
+            warmup_log_item = WarmupLogItem(
+                console_pos=len(job.py_env.console) if job.py_env.console else 0,
+                warmup_block_num=block_num
+            )
+            job.chat_log.append(warmup_log_item)
 
         # Log warmup block before execution
-        if job.status == JobStatus.WARMING_UP and code_str and not is_continuation:
+        if job.status == JobStatus.WARMING_UP and code_str:
             chat_style = get_statek_settings().chat_style
             log_code = f"```python\n{code_str}\n```" if chat_style in (ChatStyle.MARKDOWN, ChatStyle.MD_DIALOG, ChatStyle.DIRECT) else code_str  # pylint: disable=no-member
             job._log(log_code)  # pylint: disable=protected-access
@@ -1101,26 +1092,22 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             job.console_append(error_msg, error=Error(ErrorKind.EXECUTION, error_msg))
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
-        execution_log_item = (
-            warmup_log_item
-            if job.status == JobStatus.WARMING_UP
-            else job.chat_log[-1] if job.chat_log else None
-        )
+        last_chat_log_item = job.chat_log[-1] if job.chat_log else None
 
-        if isinstance(code, CodeBlock) and code.tool_calls and not is_continuation:
+        if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
             # Pre-allocate tool_log slots aligned 1-to-1 with the full
             # tool_calls order so both regular (Step 5) and python_cli
             # (Step 6 finally) results can be written directly at their
             # correct index.  Default slot value "" keeps get_tool_result(j)
             # well-defined even if a call is skipped.
-            if execution_log_item is not None:
-                execution_log_item.tool_log = ["" for _ in code.tool_calls]
+            if last_chat_log_item is not None:
+                last_chat_log_item.tool_log = ["" for _ in code.tool_calls]
             for j, call_spec in enumerate(code.tool_calls):
                 if call_spec.func_name == "python_cli":
                     continue  # CLI calls are executed and logged in Step 6
                 result, error = await exec_tool(call_spec, job, local_context=dict(local_context))
-                if execution_log_item is not None:
-                    execution_log_item.tool_log[j] = (
+                if last_chat_log_item is not None:
+                    last_chat_log_item.tool_log[j] = (
                         ToolError(err_message=error) if error is not None else result
                     )
                 job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
@@ -1174,37 +1161,14 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 for cli_idx in range(len(cli_calls)):
                     joined = "\n".join(cli_outputs.get(cli_idx, []))
                     error = "\n".join(cli_errors.get(cli_idx, []))
-                    if (execution_log_item is not None
-                            and execution_log_item.tool_log is not None
+                    if (last_chat_log_item is not None
+                            and last_chat_log_item.tool_log is not None
                             and cli_idx < len(cli_tool_log_positions)):
                         j = cli_tool_log_positions[cli_idx]
-                        if j < len(execution_log_item.tool_log):
-                            previous = execution_log_item.tool_log[j]
-                            if error:
-                                previous_text = (
-                                    previous.err_message
-                                    if isinstance(previous, ToolError)
-                                    else previous
-                                )
-                                combined_error = (
-                                    f"{previous_text}\n{error}"
-                                    if is_continuation and previous_text
-                                    else error
-                                )
-                                execution_log_item.tool_log[j] = ToolError(
-                                    err_message=combined_error
-                                )
-                            elif joined:
-                                if is_continuation and isinstance(previous, ToolError):
-                                    execution_log_item.tool_log[j] = ToolError(
-                                        err_message=f"{previous.err_message}\n{joined}"
-                                    )
-                                elif is_continuation and previous:
-                                    execution_log_item.tool_log[j] = f"{previous}\n{joined}"
-                                else:
-                                    execution_log_item.tool_log[j] = joined
-                            elif not is_continuation:
-                                execution_log_item.tool_log[j] = ""
+                        if j < len(last_chat_log_item.tool_log):
+                            last_chat_log_item.tool_log[j] = (
+                                ToolError(err_message=error) if error else joined
+                            )
 
         # Step 9: If code has finished, transition to DONE and return True
         if job.py_env.exit_status is not None:
