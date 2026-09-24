@@ -1001,6 +1001,20 @@ def _with_statek_job_context(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapped
 
 
+def _release_ready_continuation(job: Job) -> bool:
+    """Return whether a job may run, releasing a satisfied continuation once."""
+    awaited_result = job.awaited_result
+    if awaited_result is None:
+        return True
+    if not awaited_result.check_condition():
+        return False
+
+    job.awaited_result = None
+    if job.status == JobStatus.SUSPENDED:
+        job.set_status(JobStatus.STARTED)
+    return True
+
+
 @_with_statek_job_context
 async def run_job_step(job: Job, provider: str = None) -> bool:
     """
@@ -1027,6 +1041,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     # Step 1: If job status is DONE, exit with True
     if job.status == JobStatus.DONE:
         return True
+
+    # Keep waiting continuations dormant until their recorded future is ready.
+    if not _release_ready_continuation(job):
+        return False
 
     # Build shared local_context for all context-aware functions in this step
     local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
@@ -1378,23 +1396,17 @@ def process_agent_events(
 
 def unsuspend_jobs():
     """
-    Review continuation conditions of suspended jobs and change their status to STARTED
-    where the continuation criteria are satisfied.
+    Review waiting jobs and release continuations whose criteria are satisfied.
     
-    This function finds all jobs with status SUSPENDED, checks if their awaited_result
-    condition is satisfied, and changes their status to STARTED if the condition is met.
+    Ordinary suspended jobs transition to STARTED when released. Warmup jobs retain
+    WARMING_UP so execution can continue in the active warmup block.
     
-    Note: This implementation might be slow for a large number of suspended jobs.
+    Note: This implementation might be slow for a large number of waiting jobs.
     Future versions will introduce a more robust Notifier engine and job expiration conditions.
     """
-    # Find all suspended jobs
-    suspended_jobs = db0.find(Job, JobStatus.SUSPENDED)
-    for job in suspended_jobs:
-        # Check if the job has an awaited_result and if its condition is satisfied
-        condition_met = job.awaited_result.check_condition()
-        if job.awaited_result is not None and condition_met:
-            # Change status from SUSPENDED to STARTED
-            job.set_status(JobStatus.STARTED)
+    waiting_jobs = db0.find(Job, [JobStatus.SUSPENDED, JobStatus.WARMING_UP])
+    for job in waiting_jobs:
+        _release_ready_continuation(job)
 
 
 def handle_critical_error(error: Optional[Exception] = None) -> None:
@@ -1477,8 +1489,16 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
             available_capacity = max_concurrency - len(pending_tasks)
             start_jobs_func(available_capacity)
         
-        ready_or_started_jobs = db0.filter(lambda found_job: found_job not in pending_tasks,
-                                            db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED]))
+        ready_or_started_jobs = db0.filter(
+            lambda found_job: (
+                found_job not in pending_tasks
+                and not (
+                    found_job.status == JobStatus.WARMING_UP
+                    and found_job.awaited_result is not None
+                )
+            ),
+            db0.find(Job, [JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED]),
+        )
         # Make sure not to exceed max_concurrency
         if len(pending_tasks) < max_concurrency:
             for job in ready_or_started_jobs:

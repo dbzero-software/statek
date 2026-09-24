@@ -308,9 +308,12 @@ class TestRunJobStepMultipleBlocks:
         # warmup_block_num should NOT advance since block didn't complete
         assert job.warmup_block_num == 1
 
-        # Make the future ready
-        future_ready = create_future_ready(42)
-        job.py_env.local_state['future_val'] = future_ready
+        # Resolve the exact future recorded on the job.
+        future_not_ready.deps.value = 42
+        future_not_ready.set_complement_functions(
+            complement=_fetch_result_from_deps,
+            condition=_check_condition_true,
+        )
 
         # Resume second block - should complete and advance
         result3 = await run_job_step(job)
