@@ -216,9 +216,12 @@ class TestRunJobStepFutureErrorResumption:
         assert job.next_instr_num == 2  # suspended at idx 2
         assert job.warmup_block_num is None  # block did not advance (None means block 0)
 
-        # Make the future ready and replace it in env
-        future_ready = create_future_ready(99)
-        job.py_env.local_state['future_val'] = future_ready
+        # Resolve the exact future recorded on the job.
+        future_not_ready.deps.value = 99
+        future_not_ready.set_complement_functions(
+            complement=_fetch_result_from_deps,
+            condition=_check_condition_true,
+        )
 
         # Second run: resumes from idx 2, skipping idx 0 and 1.
         # counter must stay 1 (not incremented again).
@@ -494,15 +497,25 @@ class TestRunJobStepToolExecution:
             return "counted"
 
         call_spec = CallSpec(id="STATEK-001", func_name="counting_tool", args=[], kwargs={})
-        warmup_code = CodeBlock(code='exit("ok")', tool_calls=[call_spec])
+        warmup_code = CodeBlock(
+            code='result = future_val\nexit("ok")',
+            tool_calls=[call_spec],
+        )
         job = _make_job_with_tool("role_cont", "counting_tool", counting_tool, warmup_code)
-        # Simulate a FutureError continuation: status stays WARMING_UP, next_instr_num is set
-        job.set_status(JobStatus.WARMING_UP)
-        job.next_instr_num = 0
+        future = create_future_not_ready()
+        job.py_env.local_state["future_val"] = future
 
         await run_job_step(job)
+        assert call_count == 1
 
-        assert call_count == 0
+        future.deps.value = 42
+        future.set_complement_functions(
+            complement=_fetch_result_from_deps,
+            condition=_check_condition_true,
+        )
+        await run_job_step(job)
+
+        assert call_count == 1
 
     @pytest.mark.asyncio
     async def test_no_tool_calls_leaves_warmup_item_tool_log_none(self, db0_fixture):  # pylint: disable=unused-argument

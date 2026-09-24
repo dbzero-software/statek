@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import pytest
 import dbzero as db0
 
+from statek.chat_history import ChatRole
+from statek.executors.chat_log_item import UserLogItem, WarmupLogItem
 from statek.executors.job import (
     Job,
     JobStatus,
@@ -307,10 +309,19 @@ class TestRunJobStepMultipleBlocks:
         assert job.next_instr_num == 0  # Suspended at result = future_val instruction
         # warmup_block_num should NOT advance since block didn't complete
         assert job.warmup_block_num == 1
+        warmup_items = [
+            item for item in job.chat_log if isinstance(item, WarmupLogItem)
+        ]
+        assert len(warmup_items) == 2
+        waiting_item = warmup_items[-1]
+        job.chat_log.append(UserLogItem(message="arrived while waiting"))
 
-        # Make the future ready
-        future_ready = create_future_ready(42)
-        job.py_env.local_state['future_val'] = future_ready
+        # Resolve the exact future recorded on the job.
+        future_not_ready.deps.value = 42
+        future_not_ready.set_complement_functions(
+            complement=_fetch_result_from_deps,
+            condition=_check_condition_true,
+        )
 
         # Resume second block - should complete and advance
         result3 = await run_job_step(job)
@@ -318,12 +329,150 @@ class TestRunJobStepMultipleBlocks:
         assert job.status == JobStatus.WARMING_UP
         assert "42" in job.py_env.console[0]
         assert job.warmup_block_num == 2
+        warmup_items = [
+            item for item in job.chat_log if isinstance(item, WarmupLogItem)
+        ]
+        assert len(warmup_items) == 2
+        assert warmup_items[-1] is waiting_item
+        matching_history_items = [
+            item for item in job.get_chat_history()
+            if item.role == ChatRole.ASSISTANT
+            and item.content == 'result = future_val\nprint(result)'
+        ]
+        assert len(matching_history_items) == 1
 
         # Third block: exit
         result4 = await run_job_step(job)
         assert result4 is True
         assert job.status == JobStatus.DONE
         assert job.py_env.exit_status == "done"
+
+
+class TestWarmupContinuationHistory:
+    """Warmup continuation output remains attached to one history item."""
+
+    @pytest.mark.asyncio
+    async def test_cli_output_is_merged_across_future_wait(
+        self, job_def_factory, db0_fixture
+    ):  # pylint: disable=unused-argument
+        """CLI output before and after suspension shares one positional tool result."""
+        regular_call_count = 0
+
+        def setup_tool():
+            nonlocal regular_call_count
+            regular_call_count += 1
+            return "setup-result"
+
+        regular_call = CallSpec(
+            id="REGULAR-001",
+            func_name="setup_tool",
+            args=[],
+            kwargs={},
+        )
+        cli_call = CallSpec(
+            id="CLI-001",
+            func_name="python_cli",
+            kwargs={
+                "code": (
+                    'print("before")\n'
+                    "result = future_val\n"
+                    'print("after", result)'
+                )
+            },
+        )
+        job = Job(
+            job_def=job_def_factory(
+                warmup_code=[
+                    CodeBlock(code=None, tool_calls=[regular_call, cli_call]),
+                    'exit("done")',
+                ]
+            ),
+            job_status=JobStatus.READY,
+        )
+        job.job_def.agent.context["setup_tool"] = setup_tool
+        future = create_future_not_ready()
+        job.py_env.local_state["future_val"] = future
+
+        assert await run_job_step(job) is False
+        warmup_items = [
+            item for item in job.chat_log if isinstance(item, WarmupLogItem)
+        ]
+        assert len(warmup_items) == 1
+        warmup_item = warmup_items[0]
+        assert "setup-result" in warmup_item.tool_log[0]
+        assert warmup_item.tool_log[1] == "before"
+        assert regular_call_count == 1
+        job.chat_log.append(UserLogItem(message="arrived while waiting"))
+
+        future.deps.value = 42
+        future.set_complement_functions(
+            complement=_fetch_result_from_deps,
+            condition=_check_condition_true,
+        )
+        assert await run_job_step(job) is False
+
+        warmup_items = [
+            item for item in job.chat_log if isinstance(item, WarmupLogItem)
+        ]
+        assert warmup_items == [warmup_item]
+        assert len(warmup_item.tool_log) == 2
+        assert "setup-result" in warmup_item.tool_log[0]
+        assert warmup_item.tool_log[1] == "before\nafter 42"
+        assert regular_call_count == 1
+        history = list(job.get_chat_history())
+        assistant_items = [
+            item for item in history
+            if item.role == ChatRole.ASSISTANT and item.tool_calls
+        ]
+        tool_items = [
+            item for item in history
+            if item.role == ChatRole.TOOL and item.tool_calls.id == "CLI-001"
+        ]
+        assert len(assistant_items) == 1
+        assert len(tool_items) == 1
+        assert tool_items[0].content == "before\nafter 42"
+
+    @pytest.mark.asyncio
+    async def test_cli_resume_without_output_preserves_existing_result(
+        self, job_def_factory, db0_fixture
+    ):  # pylint: disable=unused-argument
+        """An output-free continuation does not erase earlier CLI output."""
+        cli_call = CallSpec(
+            id="CLI-002",
+            func_name="python_cli",
+            kwargs={"code": 'print("before")\nresult = future_val'},
+        )
+        job = Job(
+            job_def=job_def_factory(
+                warmup_code=[CodeBlock(code=None, tool_calls=[cli_call]), 'exit("done")']
+            ),
+            job_status=JobStatus.READY,
+        )
+        future = create_future_not_ready()
+        job.py_env.local_state["future_val"] = future
+
+        assert await run_job_step(job) is False
+        warmup_item = next(
+            item for item in job.chat_log if isinstance(item, WarmupLogItem)
+        )
+        assert warmup_item.tool_log == ["before"]
+
+        future.deps.value = 42
+        future.set_complement_functions(
+            complement=_fetch_result_from_deps,
+            condition=_check_condition_true,
+        )
+        assert await run_job_step(job) is False
+
+        warmup_items = [
+            item for item in job.chat_log if isinstance(item, WarmupLogItem)
+        ]
+        assert warmup_items == [warmup_item]
+        assert warmup_item.tool_log == ["before"]
+
+
+class TestWarmupExecutionModes:
+    """Warmup blocks retain their execution semantics across chat styles."""
 
     @pytest.mark.asyncio
     async def test_direct_warmup_plain_code_executes(
