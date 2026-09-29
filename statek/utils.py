@@ -24,6 +24,7 @@ from contextvars import ContextVar as _PyContextVar
 from dataclasses import dataclass, is_dataclass, fields as dataclass_fields
 from datetime import datetime
 from decimal import Decimal
+from types import UnionType
 from typing import (
     Any,
     Callable,
@@ -639,8 +640,8 @@ def _type_to_json_schema(type_hint) -> str:
     origin = get_origin(type_hint)
     args = get_args(type_hint)
 
-    # Optional[X] = Union[X, None] and other Union types
-    if origin is Union:
+    # Optional[X] = Union[X, None]; support both typing.Union and X | Y.
+    if origin in (Union, UnionType):
         non_none = [a for a in args if a is not _NONE_TYPE]
         return _type_to_json_schema(non_none[0]) if non_none else "null"
 

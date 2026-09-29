@@ -70,6 +70,7 @@ from .task import (
     complete_sub_task,
     create_new_job,
     create_sub_task,
+    send_notification_to,
 )
 from .runner import start_statek, start_statek_async
 from . import task
@@ -188,6 +189,7 @@ __all__ = [
     "create_sub_task",
     "find_sub_task_handler",
     "get_pending_notifications",
+    "send_notification_to",
     "ContextCategory",
     "ContextCategoryDict",
     "ContextVar",

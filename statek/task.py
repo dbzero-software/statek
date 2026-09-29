@@ -410,6 +410,30 @@ class SubTaskHandler:
             parent_job.push_notification(self)
 
 
+@tool(system=True)
+def send_notification_to(target: SubTaskHandler | Job, message: str, **kwargs) -> None:  # pylint: disable=unused-argument
+    """Send plain text to an existing job or subtask handler's job.
+
+    The message is recorded now but delivered at the recipient's next safe
+    execution boundary, not by interrupting its current code or awaited future.
+    A completed job is restarted to handle the new notification.
+
+    Args:
+        target: An existing Job or SubTaskHandler for the recipient job.
+        message: Plain-text message to deliver without executing it as code.
+
+    Raises:
+        TypeError: If target is not a Job or SubTaskHandler.
+    """
+    if isinstance(target, SubTaskHandler):
+        job = target.job
+    elif isinstance(target, Job):
+        job = target
+    else:
+        raise TypeError("target must be a Job or SubTaskHandler")
+    job.send_notification(message)
+
+
 def complete_sub_task(result: Optional[Any] = None, error: Optional[str] = None) -> None:
     """Complete the subtask handler registered in the current child job locals."""
     job = get_current_job()
