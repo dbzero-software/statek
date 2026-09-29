@@ -52,7 +52,7 @@ from .llm_harness import LLM_Harness, get_llm_harness
 from .executors.post_processor import FinalCheck, PostProcessor
 from .system import (tool, subtask, docstr, get_any, get_all, error_handler,
                      is_valid_error_handler, docs_style, find_sub_task_handler,
-                     find_tools)
+                     get_pending_notifications, find_tools)
 from .shared_context import (
     ContextCategory,
     ContextCategoryDict,
@@ -187,6 +187,7 @@ __all__ = [
     "create_new_job",
     "create_sub_task",
     "find_sub_task_handler",
+    "get_pending_notifications",
     "ContextCategory",
     "ContextCategoryDict",
     "ContextVar",
