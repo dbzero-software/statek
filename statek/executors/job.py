@@ -764,6 +764,24 @@ class Job:
             return
         self._pending_notifications().append(item)
 
+    def send_notification(self, message: str) -> None:
+        """Record a plain-text notification for this job's next safe boundary.
+
+        A completed job resumes with the notification in its history. Other
+        jobs queue it without disturbing their pending execution or future.
+        """
+        item = NotificationLogItem(
+            console_pos=len(self.py_env.console) if self.py_env.console else 0,
+            message=message,
+        )
+        item.tool_log = format_default_llm_repr([item])
+        if self.status == JobStatus.DONE:  # pylint: disable=no-member
+            self.chat_log.append(item)
+            self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
+            self.py_env.exit_status = None
+            return
+        self._pending_notifications().append(item)
+
     def _current_model_pricing(self):
         """Return pricing for the concrete model used by the current LLM request."""
         metadata = self.job_def.metadata or {}

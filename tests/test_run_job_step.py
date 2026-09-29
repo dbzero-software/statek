@@ -9,6 +9,7 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import Agent
+import statek.settings as notification_settings
 from statek.chat_history import ChatRole
 from statek.prompt_config import make_system_prompt
 from statek.agents.dialog_agent import DialogAgent
@@ -83,6 +84,117 @@ class TestTextNotificationDrain:
 
 
 # pylint: enable=protected-access
+
+
+class TestSendNotificationExecution:
+    """Sending a notification does not bypass existing job execution boundaries."""
+
+    @pytest.mark.asyncio
+    async def test_reopened_done_job_sees_saved_message_without_replaying_code(self, job_factory):
+        """A restarted job has no stale exit and asks the provider about the message."""
+        job = job_factory()
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="exit('old')"))
+        job.set_status(JobStatus.DONE)
+        job.py_env.exit_status = "old"
+        job.send_notification("new information")
+        mock_api = MagicMock(process_request=AsyncMock(return_value=_llm_response("pass")))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api, \
+             patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()):
+            mock_llm_api.get.return_value = mock_api
+            await run_job_step(job)
+
+        history = mock_api.process_request.await_args.kwargs["chat_history"]
+        assert any(
+            item.role == ChatRole.TOOL and "new information" in item.content
+            for item in history
+        )
+        assert job.status == JobStatus.STARTED
+        assert job.py_env.exit_status is None
+
+    @pytest.mark.asyncio
+    async def test_ready_warmup_keeps_pending_message_until_warmup_finishes(self, job_def_factory):
+        """A notification sent during warmup waits for its safe request boundary."""
+        job = Job(job_def=job_def_factory(warmup_code="print('warmup')"))
+        job.send_notification("warmup message")
+        mock_api = MagicMock(process_request=AsyncMock(return_value=_llm_response("pass")))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api, \
+             patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()):
+            mock_llm_api.get.return_value = mock_api
+            await run_job_step(job)
+
+        history = mock_api.process_request.await_args.kwargs["chat_history"]
+        assert any(
+            item.role == ChatRole.TOOL and "warmup message" in item.content
+            for item in history
+        )
+        assert job.status == JobStatus.STARTED
+
+    @pytest.mark.asyncio
+    async def test_send_during_suspended_future_does_not_release_it(self, job_factory):
+        """No provider call occurs while the recipient's future is unresolved."""
+        job = job_factory()
+        job.set_status(JobStatus.SUSPENDED)
+        future = create_future_not_ready()
+        job.awaited_result = future
+        job.send_notification("wait for me")
+
+        with patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()), \
+             patch("statek.executors.utils.LLM_API") as mock_llm_api:
+            assert await run_job_step(job) is False
+
+        mock_llm_api.get.assert_not_called()
+        assert job.awaited_result is future
+        assert job.status == JobStatus.SUSPENDED
+        assert not job.chat_log
+
+    @pytest.mark.asyncio
+    async def test_code_exit_waits_for_notification_follow_up(self, job_factory):
+        """A pending message gets a request before code-triggered DONE."""
+        job = job_factory()
+        job.set_status(JobStatus.STARTED)
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="exit('done')"))
+        job.send_notification("read this first")
+        mock_api = MagicMock(process_request=AsyncMock(return_value=_llm_response("pass")))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api, \
+             patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()):
+            mock_llm_api.get.return_value = mock_api
+            assert await run_job_step(job) is False
+            assert job.status == JobStatus.STARTED
+            assert await run_job_step(job) is False
+
+        history = mock_api.process_request.await_args.kwargs["chat_history"]
+        assert any(
+            item.role == ChatRole.TOOL and "read this first" in item.content
+            for item in history
+        )
+        assert job.py_env.exit_status is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chat_style", [
+        notification_settings.ChatStyle.DIRECT,
+        notification_settings.ChatStyle.MD_DIALOG,
+    ])
+    async def test_dialog_autofinalization_includes_notification(self, job_def_factory, chat_style):
+        """A dialog reply can finish after it has received the queued message."""
+        job_def = job_def_factory()
+        job_def.set_chat_style(chat_style)
+        job = Job(job_def=job_def, job_status=JobStatus.STARTED)
+        job.send_notification("dialog note")
+        mock_api = MagicMock(process_request=AsyncMock(return_value=_llm_response("reply")))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api, \
+             patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()), \
+             patch("statek.executors.utils.handle_dialog", new_callable=AsyncMock):
+            mock_llm_api.get.return_value = mock_api
+            result = await run_job_step(job)
+
+        history = mock_api.process_request.await_args.kwargs["chat_history"]
+        assert any(item.role == ChatRole.TOOL and "dialog note" in item.content for item in history)
+        assert result is True
+        assert job.status == JobStatus.DONE
 
 
 @error_handler
