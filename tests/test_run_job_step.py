@@ -9,10 +9,12 @@ import pytest
 import dbzero as db0
 
 from statek.agents.agent import Agent
+from statek.chat_history import ChatRole
 from statek.prompt_config import make_system_prompt
 from statek.agents.dialog_agent import DialogAgent
 from statek.executors.chat_log_item import (
     LLM_LogItem,
+    NotificationLogItem,
     PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
@@ -33,6 +35,54 @@ from statek.utils import CodeBlock, CallSpec
 
 
 _critical_error_calls = []
+
+
+# pylint: disable=protected-access
+class TestTextNotificationDrain:
+    """Queued text notifications reach the next safe provider request."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [JobStatus.READY, JobStatus.STARTED])
+    async def test_queued_message_is_visible_before_request(self, job_factory, status):
+        """Plain code without exit and fresh jobs both drain before the LLM call."""
+        job = job_factory()
+        job.set_status(status)
+        if status == JobStatus.STARTED:
+            job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="print('output')"))
+        notification = NotificationLogItem(console_pos=0, message="hello", tool_log="hello")
+        job._pending_notifications().append(notification)
+        mock_api = MagicMock()
+        mock_api.process_request = AsyncMock(return_value=_llm_response("pass"))
+
+        with patch("statek.executors.utils.LLM_API") as mock_llm_api, \
+             patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()):
+            mock_llm_api.get.return_value = mock_api
+            await run_job_step(job)
+
+        sent_history = mock_api.process_request.await_args.kwargs["chat_history"]
+        assert any(item.role == ChatRole.TOOL and item.content == "hello" for item in sent_history)
+        if status == JobStatus.STARTED:
+            assert notification.console_pos == 1
+            assert any(item.content == "output" for item in sent_history)
+        assert not job._pending_notifications()
+
+    @pytest.mark.asyncio
+    async def test_unresolved_future_keeps_notification_pending(self, job_factory):
+        """A message must not wake a job waiting for its own future."""
+        job = job_factory()
+        job.set_status(JobStatus.STARTED)
+        job.set_status(JobStatus.SUSPENDED)
+        job.awaited_result = create_future_not_ready()
+        job._pending_notifications().append(NotificationLogItem(console_pos=0, message="hello"))
+        with patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()), \
+             patch("statek.executors.utils.LLM_API") as mock_llm_api:
+            assert await run_job_step(job) is False
+        mock_llm_api.get.assert_not_called()
+        assert len(job._pending_notifications()) == 1
+        assert not job.chat_log
+
+
+# pylint: enable=protected-access
 
 
 @error_handler
@@ -1915,10 +1965,10 @@ class TestRunJobStepDirect:
 
 
     @pytest.mark.asyncio
-    async def test_direct_text_only_response_with_pending_subtask_continues(
+    async def test_direct_text_only_response_with_pending_subtask_in_request(
         self, job_def_factory, db0_fixture  # pylint: disable=unused-argument
     ):
-        """Pending subtask notifications are processed before DIRECT auto-exit."""
+        """A pending subtask is visible in the request before DIRECT auto-exit."""
         job = self._make_job(job_def_factory)
         handler = _completed_subtask_handler(
             Job(job_def=job.job_def, job_status=JobStatus.READY),
@@ -1941,11 +1991,12 @@ class TestRunJobStepDirect:
             mock_llm_api_cls.get.return_value = mock_api
             result = await run_job_step(job)
 
-        assert result is False
-        assert job.status == JobStatus.STARTED
-        assert isinstance(job.chat_log[-1], SubTaskLogItem)
-        assert job.chat_log[-1].handler is handler
-        assert job.py_env.exit_status is None
+        assert result is True
+        assert job.status == JobStatus.DONE
+        assert isinstance(job.chat_log[-2], SubTaskLogItem)
+        assert job.chat_log[-2].handler is handler
+        sent_history = mock_api.process_request.await_args.kwargs["chat_history"]
+        assert any(item.role == ChatRole.TOOL and item.content == "done" for item in sent_history)
 
 class TestHandleDialogMarkdownMedia:
     """Tests markdown media-link preservation during dialog delivery."""

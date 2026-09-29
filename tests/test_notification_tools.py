@@ -5,7 +5,7 @@
 import pytest
 
 from statek import get_pending_notifications
-from statek.executors.chat_log_item import SubTaskLogItem
+from statek.executors.chat_log_item import NotificationLogItem, SubTaskLogItem
 from statek.executors.utils import _setup_execution_context
 from statek.llm_api import select_request_tools
 from statek.system import find_tools, get_pending_notifications as system_get_pending_notifications
@@ -50,6 +50,20 @@ def test_pending_notifications_initializes_old_job_queue(job_factory):
     job._Job__pending_chat_log = None
     with _statek_ctx_scope({"job": job}):
         assert not get_pending_notifications()
+
+
+def test_pending_notifications_includes_mixed_items(job_factory):
+    """The getter retains text and subtask notifications in arrival order."""
+    job = job_factory()
+    subtask = SubTaskLogItem(console_pos=0, handler=SubTaskHandler(job=job))
+    message = NotificationLogItem(console_pos=0, message="hello")
+    job._pending_notifications().extend([message, subtask])
+
+    with _statek_ctx_scope({"job": job}):
+        assert get_pending_notifications() == [message, subtask]
+        assert get_pending_notifications() == [message, subtask]
+
+    assert not job.chat_log
 
 
 def test_pending_notifications_requires_current_job():

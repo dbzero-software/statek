@@ -42,6 +42,7 @@ from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
     ChatLogItem,
     LLM_LogItem,
+    NotificationLogItem,
     PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
@@ -64,6 +65,7 @@ from statek.utils import (
     build_warmup_code,
     extract_dialog,
     get_current_job,
+    format_default_llm_repr,
     parse_tool_log,
     parse_warmup_block,
     perm_ctx_get,
@@ -693,8 +695,8 @@ class Job:
         """Inject additional values into this job's Python local state."""
         self.py_env.update_locals(**kwargs)
 
-    def _pending_notifications(self) -> List[SubTaskLogItem]:
-        """Return pending subtask notifications, initializing old jobs lazily."""
+    def _pending_notifications(self) -> List[Union[SubTaskLogItem, NotificationLogItem]]:
+        """Return pending chat-log notifications, initializing old jobs lazily."""
         if not hasattr(self, "_Job__pending_chat_log") or self.__pending_chat_log is None:
             self.__pending_chat_log = []
         return self.__pending_chat_log
@@ -702,7 +704,7 @@ class Job:
     def find_sub_task_handler(self, id: Optional[Any] = None) -> Optional["SubTaskHandler"]:  # pylint: disable=redefined-builtin
         """Find a pending or logged subtask handler by id, or the most recent one."""
         for item in reversed(self._pending_notifications()):
-            if id is None or item.handler.id == id:
+            if isinstance(item, SubTaskLogItem) and (id is None or item.handler.id == id):
                 return item.handler
         for item in reversed(self.chat_log):
             if isinstance(item, SubTaskLogItem) and (id is None or item.handler.id == id):
@@ -730,10 +732,15 @@ class Job:
         return True
 
     def _process_pending_notifications(self) -> bool:
-        """Move pending subtask notifications to chat_log at safe boundaries."""
+        """Move finalized pending notifications into the ordered chat history."""
         pending = self._pending_notifications()
         if not pending or not self._chat_log_finalized_for_notifications():
             return False
+        console_pos = len(self.py_env.console) if self.py_env.console else 0
+        for item in pending:
+            item.console_pos = console_pos
+            if isinstance(item, NotificationLogItem) and item.tool_log is None:
+                item.tool_log = format_default_llm_repr([item])
         self.chat_log.extend(pending)
         self.__pending_chat_log = []
         return True
@@ -1062,6 +1069,16 @@ class Job:
             kwargs={"code": Job._subtask_lookup_code(handler)},
         )
 
+    @staticmethod
+    def _notification_tool_call(idx: int) -> CallSpecWrapper:
+        """Return the synthetic python_cli call for one delivered text message."""
+        return CallSpecWrapper(
+            id=f"STATEK-NOTIFICATION-{idx:03d}",
+            func_name="python_cli",
+            args=None,
+            kwargs={"code": "print(get_pending_notifications())"},
+        )
+
     def get_next_prompt(self) -> str:
         """
         Generate the next prompt to be included in the LLM chat.
@@ -1237,6 +1254,7 @@ class Job:
                     PostProcessedItem,
                     ReminderLogItem,
                     SubTaskLogItem,
+                    NotificationLogItem,
                 )):
                     next_pos = items[j].console_pos
                     break
@@ -1317,6 +1335,25 @@ class Job:
                         content_src=ContentSource.CONSOLE,
                         tool_calls=[call],
                     )
+                continue
+
+            if isinstance(item, NotificationLogItem):
+                call = self._notification_tool_call(idx)
+                yield ChatHistoryItem(
+                    role=ChatRole.ASSISTANT,
+                    content=None,
+                    content_src=ContentSource.SYSTEM,
+                    tool_calls=[call],
+                )
+                result = item.tool_log if item.tool_log is not None else format_default_llm_repr([item])
+                if isinstance(result, ToolError):
+                    result = result.err_message
+                yield ChatHistoryItem(
+                    role=ChatRole.TOOL,
+                    content=result,
+                    content_src=ContentSource.CONSOLE,
+                    tool_calls=[call],
+                )
                 continue
 
             # Determine the source content of the assistant turn.
