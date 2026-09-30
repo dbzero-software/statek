@@ -125,6 +125,18 @@ class SubTaskLogItem(ChatLogItem):
 
 
 @db0.memo(no_default_tags=True)
+@dataclass(kw_only=True)
+class NotificationLogItem(ChatLogItem):
+    """An arbitrary plain-text message delivered between jobs."""
+
+    message: str
+
+    def __llm_repr__(self) -> str:
+        """Show the message without recursively formatting its saved tool result."""
+        return f"NotificationLogItem(message={self.message!r})"
+
+
+@db0.memo(no_default_tags=True)
 @dataclass
 class UserLogItem:
     """User message submitted for job initiation or as a push notification."""

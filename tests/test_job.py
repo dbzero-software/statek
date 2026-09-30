@@ -9,7 +9,7 @@ from decimal import Decimal
 from unittest.mock import patch, MagicMock
 import dbzero as db0
 import pytest
-from tests.conftest import create_chat_log_item, set_warmup_positions
+from tests.conftest import DB0_DIR, create_chat_log_item, set_warmup_positions
 from statek.executors.job import (
     DialogItem,
     Job,
@@ -33,6 +33,7 @@ from statek.chat_history import ChatRole, ContentSource, format_chat_history_ite
 from statek.agents.dialog_agent import RecurringReminder
 from statek.executors.chat_log_item import (
     LLM_LogItem,
+    NotificationLogItem,
     PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
@@ -41,10 +42,11 @@ from statek.executors.chat_log_item import (
 )
 from statek.executors.post_processor import PostProcessor
 from statek.executors.utils import _log_pending_console
+from statek.future import FutureResult
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
-from statek.utils import CodeBlock, CallSpec, _statek_ctx_scope
+from statek.utils import CodeBlock, CallSpec, _statek_ctx_scope, format_default_llm_repr
 from statek.system import find_sub_task_handler
 from statek.task import SubTaskHandler, TaskError
 
@@ -3056,6 +3058,216 @@ class TestSubTaskNotifications:
         assert job._process_pending_notifications() is False  # pylint: disable=protected-access
 
 
+# pylint: disable=protected-access
+class TestTextNotificationHistory:
+    """A plain-text notification is a durable, synthetic tool-result event."""
+
+    def test_notification_is_persisted_and_formatted_without_recursive_tool_log(self, job_factory):
+        """The message is required and the saved result does not expand itself."""
+        job = job_factory()
+        item = NotificationLogItem(console_pos=0, message="Żółw\n<script>")
+        item.tool_log = format_default_llm_repr([item])
+        job._pending_notifications().append(item)
+
+        assert job._pending_notifications()[0].message == "Żółw\n<script>"
+        assert "Żółw" in item.tool_log
+        assert "tool_log" not in item.tool_log
+        assert job._process_pending_notifications() is True
+        assert job.chat_log[-1] is item
+
+    def test_mixed_queue_keeps_order_and_lookup_ignores_text_items(self, job_factory):
+        """Text messages never masquerade as completed subtask handlers."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job_factory(), subtask_id="child", result="done")
+        subtask = SubTaskLogItem(console_pos=0, handler=handler, tool_log="done")
+        notification = NotificationLogItem(console_pos=0, message="hello", tool_log="hello")
+        job._pending_notifications().extend([subtask, notification])
+
+        assert job.find_sub_task_handler(id="child") is handler
+        assert job.find_sub_task_handler() is handler
+        assert job._process_pending_notifications() is True
+        assert job.chat_log == [subtask, notification]
+        assert job._process_pending_notifications() is False
+        history = list(job.get_chat_history())
+        codes = [
+            entry.tool_calls[0].kwargs["code"]
+            for entry in history if entry.role == ChatRole.ASSISTANT
+        ]
+        assert codes == [
+            "print(find_sub_task_handler(id='child'))",
+            "print(get_pending_notifications())",
+        ]
+
+    def test_multiple_messages_get_distinct_saved_results_and_call_ids(self, job_factory):
+        """Each queued message retains order and has an independent synthetic pair."""
+        job = job_factory()
+        first = NotificationLogItem(console_pos=0, message="same")
+        second = NotificationLogItem(console_pos=0, message="same")
+        job._pending_notifications().extend([first, second])
+
+        assert job._process_pending_notifications() is True
+        assert first.tool_log == second.tool_log
+        assert "same" in first.tool_log
+        assert "tool_log" not in first.tool_log
+        history = list(job.get_chat_history())
+        assert [entry.role for entry in history] == [
+            ChatRole.ASSISTANT, ChatRole.TOOL, ChatRole.ASSISTANT, ChatRole.TOOL,
+        ]
+        ids = [history[0].tool_calls[0].id, history[2].tool_calls[0].id]
+        assert ids == ["STATEK-NOTIFICATION-000", "STATEK-NOTIFICATION-001"]
+        assert history[1].tool_calls[0].id == ids[0]
+        assert history[3].tool_calls[0].id == ids[1]
+
+    def test_synthetic_history_has_stable_pair_and_no_extra_turn(self, job_factory):
+        """A text notification yields one paired synthetic call, not an LLM action."""
+        job = job_factory()
+        job.chat_log.append(NotificationLogItem(
+            console_pos=0, message="hello", tool_log="message: hello",
+        ))
+
+        history = list(job.get_chat_history())
+        formatted = [format_chat_history_item(entry, ChatStyle.DIRECT) for entry in history]
+
+        assert [entry.role for entry in history] == [ChatRole.ASSISTANT, ChatRole.TOOL]
+        assert history[0].content_src == ContentSource.SYSTEM
+        assert history[0].tool_calls[0].kwargs == {"code": "print(get_pending_notifications())"}
+        assert formatted[0]["tool_calls"][0]["id"] == "STATEK-NOTIFICATION-000"
+        assert formatted[1]["tool_call_id"] == "STATEK-NOTIFICATION-000"
+        assert formatted[1]["content"] == "message: hello"
+        assert job.count_llm_actions() == 0
+        assert job.num_turns == 0
+
+    def test_delivery_preserves_preceding_console_and_historical_requests(self, job_factory):
+        """Send-time console positions cannot truncate output printed before drain."""
+        job = job_factory()
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="print('after send')"))
+        notification = NotificationLogItem(console_pos=0, message="hello", tool_log="hello")
+        job._pending_notifications().append(notification)
+        job.py_env.console = ["after send"]
+
+        assert job._process_pending_notifications() is True
+        assert notification.console_pos == 1
+        assert [item.content for item in job.get_chat_history()] == [
+            "print('after send')", "after send", None, "hello",
+        ]
+
+        job.chat_log.append(LLM_LogItem(console_pos=1, llm_resp="print('next')"))
+        history = list(job.get_request_data(0)["chat_history"])
+        assert not history
+        next_history = list(job.get_request_data(1)["chat_history"])
+        assert [entry.content for entry in next_history] == [
+            "print('after send')", "after send", None, "hello",
+        ]
+
+# pylint: enable=protected-access
+
+
+# pylint: disable=protected-access
+class TestSendNotification:
+    """Sending text preserves recipient execution state until a safe boundary."""
+
+    @pytest.mark.parametrize("status", [
+        JobStatus.READY, JobStatus.WARMING_UP, JobStatus.STARTED, JobStatus.SUSPENDED,
+    ])
+    def test_active_statuses_queue_inert_text_without_changing_continuation(
+        self, job_factory, status,
+    ):
+        """Active and suspended recipients retain their current work and future."""
+        job = job_factory()
+        job.set_status(status)
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp=None))
+        job.py_env.console = ["previous output"]
+        job.py_env.exit_status = None
+        job.next_instr_num = 3
+        future = FutureResult(deps=job, state_num=0)
+        job.awaited_result = future
+
+        job.send_notification("Żółw\nexit('not code')")
+
+        assert job.status == status
+        assert job.awaited_result is future
+        assert job.next_instr_num == 3
+        assert job.py_env.exit_status is None
+        assert len(job.chat_log) == 1
+        assert list(job.py_env.console) == ["previous output"]
+        item = job._pending_notifications()[0]
+        assert isinstance(item, NotificationLogItem)
+        assert item.message == "Żółw\nexit('not code')"
+        assert item.console_pos == 1
+        assert "Żółw" in item.tool_log
+        assert "tool_log" not in item.tool_log
+        assert job._process_pending_notifications() is False
+
+    def test_done_job_restarts_with_direct_saved_notification(self, job_factory):
+        """A completed job resumes without stale exit status or an extra user turn."""
+        job = job_factory()
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="pass"))
+        job.py_env.console = ["old output"]
+        job.set_status(JobStatus.DONE)
+        job.py_env.exit_status = "finished"
+
+        job.send_notification("please review")
+
+        assert job.status == JobStatus.STARTED
+        assert job.py_env.exit_status is None
+        assert not job._pending_notifications()
+        assert len(job.chat_log) == 2
+        item = job.chat_log[-1]
+        assert isinstance(item, NotificationLogItem)
+        assert item.message == "please review"
+        assert item.console_pos == 1
+        assert "please review" in item.tool_log
+        assert job.num_turns == 1
+
+    def test_repeated_sends_after_done_keep_each_message_in_order(self, job_factory):
+        """Only the first send reopens DONE; later sends wait in the shared queue."""
+        job = job_factory()
+        job.set_status(JobStatus.DONE)
+        job.py_env.exit_status = "finished"
+
+        job.send_notification("first")
+        first = job.chat_log[-1]
+        job.send_notification("second")
+        job.send_notification("third")
+
+        assert job.status == JobStatus.STARTED
+        assert job.chat_log == [first]
+        assert first.message == "first"
+        assert [item.message for item in job._pending_notifications()] == ["second", "third"]
+        assert job._process_pending_notifications() is True
+        assert [item.message for item in job.chat_log] == ["first", "second", "third"]
+        assert [item.tool_log for item in job.chat_log] == [
+            format_default_llm_repr([item]) for item in job.chat_log
+        ]
+
+    def test_saved_message_survives_dbzero_reopen(self, job_factory):
+        """Both pending messages and their stored results survive reconnecting."""
+        job = job_factory()
+        job.send_notification("persistent")
+        job_id = db0.uuid(job)
+        db0.close()
+        db0.init(DB0_DIR, read_write=True)
+        db0.open("test_prefix", "rw")
+
+        restored = db0.fetch(job_id)
+        assert restored._pending_notifications()[0].message == "persistent"
+        assert "persistent" in restored._pending_notifications()[0].tool_log
+
+    def test_sending_does_not_reopen_a_completed_subtask_handler(self, job_factory):
+        """A second job completion is not manufactured for an existing handler."""
+        job = job_factory()
+        handler = _completed_subtask_handler(job, subtask_id="child", result="finished")
+        job.chat_log.append(SubTaskLogItem(console_pos=0, handler=handler, tool_log="finished"))
+        job.set_status(JobStatus.DONE)
+
+        job.send_notification("extra information")
+
+        assert handler.is_completed
+        assert handler.result == "finished"
+        assert job.find_sub_task_handler(id="child") is handler
+
+
+# pylint: enable=protected-access
 # ---------------------------------------------------------------------------
 # get_next_request with user messages (str / UserLogItem)
 # ---------------------------------------------------------------------------

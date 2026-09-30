@@ -26,6 +26,7 @@ from .chat_style import ChatStyle
 from .dbzero_restricted import as_unrestricted
 from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
+from .executors.chat_log_item import ChatLogItem
 from .utils import find_locals, get_current_agent_name, get_current_job, _statek_ctx_scope
 
 
@@ -449,6 +450,22 @@ def subtask(f=None, *, system: bool = False, target=None):  # pylint: disable=W0
     if f is None:
         return _decorate
     return _decorate(f)
+
+
+@tool(system=True)
+def get_pending_notifications(**kwargs) -> Iterable[ChatLogItem]:  # pylint: disable=unused-argument
+    """Return an ordered snapshot of the current job's unprocessed notifications.
+
+    The snapshot contains pending chat log items, including subtask results,
+    without moving them into the job's history or consuming the queue.
+
+    Raises:
+        RuntimeError: When called without a current job.
+    """
+    job = get_current_job()
+    if job is None:
+        raise RuntimeError("get_pending_notifications requires a current job")
+    return list(job._pending_notifications())  # pylint: disable=protected-access
 
 
 @tool(system=True)

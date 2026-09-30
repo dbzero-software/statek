@@ -938,7 +938,7 @@ def _log_pending_console(job: Job):
 
 
 def _process_pending_notification_follow_up(job: Job, harness) -> bool:
-    """Process pending subtask notifications before a job is finalized."""
+    """Process pending notifications before a job is finalized."""
     if not job._process_pending_notifications():  # pylint: disable=protected-access
         return False
     job.py_env.exit_status = None
@@ -1211,6 +1211,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     # Step 12: Get next request parameters — log pending console batch first
     _log_pending_console(job)
+    job._process_pending_notifications()  # pylint: disable=protected-access
     request_difficulty = job.get_current_difficulty()
     request = job.get_next_request(difficulty=request_difficulty)
     request["metadata"] = dict(request["metadata"] or {})
