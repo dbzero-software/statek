@@ -636,6 +636,21 @@ class LLM_API(ABC):
         Returns:
             LLM_Response containing step data and provider usage stats.
         """
+        settings = getattr(self, "settings", None)
+        if settings is not None or getattr(self, "_provider_settings_missing", False):
+            missing = [
+                suffix for suffix, value in (
+                    ("API_URL", getattr(settings, "api_url", None)),
+                    ("API_KEY", getattr(settings, "api_key", None)),
+                ) if not value
+            ]
+            if missing:
+                provider = getattr(self, "_provider_name", type(self).__name__.upper())
+                names = ", ".join(f"{provider}_{suffix}" for suffix in missing)
+                raise ValueError(
+                    f"Cannot send an LLM request for {provider}: set {names}."
+                )
+
         request_kwargs = self._prepare_request_kwargs(
             system_prompt=system_prompt,
             model=model,
@@ -733,21 +748,26 @@ class LLM_API(ABC):
             settings = custom_provider["settings"]
         else:
             settings = get_provider_settings(provider_key)
-        if not settings:
-            raise ValueError(f"No settings found for {provider_key} provider.")
+        settings_missing = settings is None
+        if settings_missing:
+            settings = LLM_API_Settings(api_url="", api_key="")
 
         if custom_provider is not None:
             provider_kwargs = {**custom_provider["kwargs"], **kwargs}
-            return custom_provider["impl"](settings=settings, **provider_kwargs)
-
-        compatible_provider_cls = OPENAI_COMPATIBLE_API_PROVIDERS.get(provider_key)
-        if compatible_provider_cls is not None:
-            return compatible_provider_cls(settings=settings, **kwargs)
-        if provider_key in ('VERTEXAI', 'VERTEX_AI', 'GOOGLE_VERTEXAI', 'GOOGLE'):
-            return VertexAI_API(settings=settings, **kwargs)
-        if provider_key in ('CLAUDEAI', 'CLAUDE_AI', 'CLAUDE', 'ANTHROPIC'):
-            return ClaudeAI_API(settings=settings, **kwargs)
-        raise ValueError(f"Unsupported LLM API provider: {provider_name}")
+            api = custom_provider["impl"](settings=settings, **provider_kwargs)
+        else:
+            compatible_provider_cls = OPENAI_COMPATIBLE_API_PROVIDERS.get(provider_key)
+            if compatible_provider_cls is not None:
+                api = compatible_provider_cls(settings=settings, **kwargs)
+            elif provider_key in ('VERTEXAI', 'VERTEX_AI', 'GOOGLE_VERTEXAI', 'GOOGLE'):
+                api = VertexAI_API(settings=settings, **kwargs)
+            elif provider_key in ('CLAUDEAI', 'CLAUDE_AI', 'CLAUDE', 'ANTHROPIC'):
+                api = ClaudeAI_API(settings=settings, **kwargs)
+            else:
+                raise ValueError(f"Unsupported LLM API provider: {provider_name}")
+        api._provider_name = provider_key  # pylint: disable=protected-access,attribute-defined-outside-init
+        api._provider_settings_missing = settings_missing  # pylint: disable=protected-access,attribute-defined-outside-init
+        return api
 
 class DefaultLLM_API_Impl(LLM_API):
     """Default OpenAI-compatible chat-completions implementation of LLM_API.

@@ -62,7 +62,7 @@ def sys_tool():
 # LLM_API.get factory
 # ---------------------------------------------------------------------------
 
-class TestLLMAPIGetFactory:
+class TestLLMAPIGetFactory:  # pylint: disable=too-many-public-methods
     """Tests for provider factory selection and caching."""
 
     def setup_method(self):
@@ -82,6 +82,42 @@ class TestLLMAPIGetFactory:
             api = LLM_API.get(provider_name="OPENAI")
 
         assert isinstance(api, OpenAI_API)
+
+    @pytest.mark.parametrize("provider_name", ["OPENROUTER", "CLAUDEAI", "VERTEXAI"])
+    def test_preview_without_provider_settings(self, provider_name):
+        with patch("statek.llm_api.get_provider_settings", return_value=None):
+            api = LLM_API.get(provider_name=provider_name)
+
+        payload = api.preview_request(model="test-model", system_prompt="hello")
+        assert payload
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider_name", ["OPENROUTER", "CLAUDEAI", "VERTEXAI"])
+    async def test_send_without_provider_settings_names_required_variables(self, provider_name):
+        with patch("statek.llm_api.get_provider_settings", return_value=None):
+            api = LLM_API.get(provider_name=provider_name)
+
+        with patch.object(api, "_process_request", new_callable=AsyncMock) as send:
+            with pytest.raises(ValueError) as error:
+                await api.process_request(model="test-model")
+
+        assert f"{provider_name}_API_URL" in str(error.value)
+        assert f"{provider_name}_API_KEY" in str(error.value)
+        send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_with_empty_api_key_names_only_missing_variable(self):
+        settings = LLM_API_Settings(api_url="https://example.test", api_key="")
+        with patch("statek.llm_api.get_provider_settings", return_value=settings):
+            api = LLM_API.get(provider_name="OPENAI")
+
+        assert api.preview_request(model="test-model")
+        with patch.object(api, "_process_request", new_callable=AsyncMock) as send:
+            with pytest.raises(ValueError, match="OPENAI_API_KEY") as error:
+                await api.process_request(model="test-model")
+
+        assert "OPENAI_API_URL" not in str(error.value)
+        send.assert_not_awaited()
 
     def test_openai_and_openrouter_wrap_default_implementation(self):
         openai_settings = LLM_API_Settings(
