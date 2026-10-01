@@ -102,7 +102,7 @@ class LLM_Harness:
         nc = getattr(job, 'num_completions', None)
         eff_tokens = self._effective_limit(self.max_token_usage, nc)
         if eff_tokens is not None:
-            eff_tokens += job.panic_token_extension
+            eff_tokens += job.difficulty_token_extension
 
         if eff_tokens is not None and job.approx_token_usage > eff_tokens:
             raise LLM_HarnessError(

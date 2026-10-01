@@ -93,6 +93,18 @@ class LLM_LogItem(ChatLogItem):
     llm_reasoning_payload: Optional[Any] = None
     # Non-default difficulty used to build this request; None means the job's static default.
     request_difficulty: Optional[TaskDifficulty] = None
+    # Cumulative approximate usage including this response; None for placeholders.
+    cumulative_token_usage: Optional[int] = None
+
+
+@db0.memo(no_default_tags=True)
+@dataclass(kw_only=True)
+class DifficultyChangeLogItem(ChatLogItem):
+    """An upward effective difficulty transition, excluded from conversation history."""
+
+    previous_difficulty: TaskDifficulty
+    difficulty: TaskDifficulty
+    cumulative_token_usage: int
 
 
 @db0.memo(no_default_tags=True)

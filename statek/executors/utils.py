@@ -907,32 +907,9 @@ async def exec_tool(call_spec: CallSpec, job: Job,
 
 
 def _log_pending_console(job: Job):
-    """Log console output accumulated since the last logged boundary.
-
-    Determines from_pos based on job state:
-    - After LLM turns: from last chat_log item's console_pos
-    - After warmup: from the next element's console_pos (or current console length)
-    - Initial state: from 0
-    """
-    if job.chat_log:
-        last = job.chat_log[-1]
-        if isinstance(last, WarmupLogItem):
-            # If a following element exists its console_pos marks where the
-            # warmup batch ended (it was already logged by _log_console_batch).
-            # Otherwise the batch has not been logged yet (e.g. early exit
-            # during warmup), so start from the WarmupLogItem's own position.
-            last_idx = len(job.chat_log) - 1
-            from_pos = (
-                job.chat_log[last_idx + 1].console_pos
-                if last_idx + 1 < len(job.chat_log)
-                else last.console_pos
-            )
-        elif isinstance(last, ChatLogItem):
-            from_pos = last.console_pos
-        else:
-            from_pos = 0
-    else:
-        from_pos = 0
+    """Log console output since the last conversation boundary, ignoring budget metadata."""
+    last = job.last_chat_log_item
+    from_pos = last.console_pos if isinstance(last, ChatLogItem) else 0
     to_pos = len(job.py_env.console) if job.py_env.console else 0
     job._log_console_batch(from_pos, to_pos)  # pylint: disable=protected-access
 
@@ -1092,7 +1069,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             job.console_append(error_msg, error=Error(ErrorKind.EXECUTION, error_msg))
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
-        last_chat_log_item = job.chat_log[-1] if job.chat_log else None
+        last_chat_log_item = job.last_chat_log_item
 
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
             # Pre-allocate tool_log slots aligned 1-to-1 with the full
@@ -1232,6 +1209,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     job.usage.total_cached_tokens += response.stats.cached_tokens
     if response.stats.cost is not None:
         job.usage.total_reported_cost = (job.usage.total_reported_cost or 0.0) + response.stats.cost
+    cumulative_token_usage = job.approx_token_usage
 
     # Step 14: Apply post-processors before committing the response to chat_log.
     processed_step = response.step_data
@@ -1251,6 +1229,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         request,
         processed_response,
         request_difficulty=request_difficulty,
+        cumulative_token_usage=cumulative_token_usage,
     )
 
     # Step 15: MD_DIALOG/DIRECT — dispatch LLM response text to user via send_message

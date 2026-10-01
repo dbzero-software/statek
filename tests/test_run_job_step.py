@@ -501,12 +501,45 @@ class TestRunJobStepToolCallResponse:
             await run_job_step(job, provider="OPENROUTER")
 
         assert job.get_current_difficulty() == TaskDifficulty.medium
-        assert job.chat_log[0].request_difficulty is None
+        assert job.last_chat_log_item.request_difficulty is None
         assert job.get_request_data(0)["model"] == "small"
 
 
 class TestRunJobStepHarnessIsolation:
     """Tests that harness token usage is isolated per job."""
+
+    @pytest.mark.asyncio
+    async def test_two_panics_between_requests_each_grant_bonus(self, job_def_factory) -> None:
+        """Tool-result ownership and distinct escalation events survive a single tool batch."""
+        job = Job(job_def=job_def_factory(
+            warmup_code=None,
+            metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+        ), job_status=JobStatus.STARTED)
+        response = LLM_Response(
+            step_data=LLM_StepData(text=None, call_requests=[
+                CallParams(call_id="first", name="panic", args=[], kwargs={}),
+                CallParams(call_id="second", name="panic", args=[], kwargs={}),
+            ]), stats=LLM_Stats(1600, 0, None),
+        )
+        continuation = LLM_Response(
+            step_data=LLM_StepData(text="pass", call_requests=None),
+            stats=LLM_Stats(2000, 0, None),
+        )
+        api = MagicMock(process_request=AsyncMock(side_effect=[response, continuation]))
+        harness = LLM_Harness(None, 100, 100, 500)
+        with patch("statek.executors.utils.LLM_API") as api_class, \
+             patch("statek.executors.utils.get_llm_harness", return_value=harness):
+            api_class.get.return_value = api
+            assert await run_job_step(job) is False
+            first_turn = job.last_chat_log_item
+            assert await run_job_step(job) is False
+        assert job.difficulty_token_extension == 800
+        assert job.approx_token_usage == 900
+        assert job.get_current_difficulty() == TaskDifficulty.high
+        assert len(first_turn.tool_log) == 2
+        assert all(isinstance(result, str) and result for result in first_turn.tool_log)
+        assert job.num_turns == 2
+        assert job.exception_count == 0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("first_usage", [400, 501])
@@ -538,14 +571,16 @@ class TestRunJobStepHarnessIsolation:
                 with pytest.raises(LLM_HarnessError, match="501/500"):
                     await run_job_step(job)
                 assert job.get_current_difficulty() == TaskDifficulty.low
-                assert job.panic_token_extension == 0
+                assert job.difficulty_token_extension == 0
                 assert api.process_request.await_count == 1
             else:
                 assert await run_job_step(job) is False
-                assert job.panic_token_extension == 0
+                assert job.difficulty_token_extension == 0
                 assert await run_job_step(job) is False
                 assert job.get_current_difficulty() == TaskDifficulty.medium
-                assert job.panic_token_extension == 400
+                assert job.difficulty_token_extension == 400
+                llm_items = [item for item in job.chat_log if isinstance(item, LLM_LogItem)]
+                assert [item.cumulative_token_usage for item in llm_items] == [400, 900]
                 assert job.approx_token_usage == 900
                 job.usage.total_bytes_received += 4
                 with pytest.raises(LLM_HarnessError, match="901/900"):
@@ -1654,6 +1689,31 @@ class TestRunJobStepCliToolCalls:
 
 class TestRunJobStepPostProcessing:
     """Tests runtime post-processor integration in run_job_step."""
+
+    @pytest.mark.asyncio
+    async def test_suppressed_response_usage_is_included_in_later_escalation(
+        self, job_def_factory,
+    ) -> None:
+        """Bonus events capture accounted usage even when no LLM turn is retained."""
+        job = Job(job_def=job_def_factory(
+            warmup_code=None, post_processing=RuntimeSuppressPostProcessor(),
+            metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+        ), job_status=JobStatus.STARTED)
+        api = MagicMock(process_request=AsyncMock(return_value=LLM_Response(
+            step_data=LLM_StepData(text="pass", call_requests=None),
+            stats=LLM_Stats(total_bytes_sent=40000, total_bytes_received=0, cost=None),
+        )))
+        harness = LLM_Harness(None, 100, 100, 50000)
+        with patch("statek.executors.utils.LLM_API") as api_class, \
+             patch("statek.executors.utils.get_llm_harness", return_value=harness):
+            api_class.get.return_value = api
+            assert await run_job_step(job) is False
+        assert not any(isinstance(item, LLM_LogItem) for item in job.chat_log)
+        job.panic()
+        assert job.difficulty_token_extension == 10000
+        job.usage.total_bytes_sent = 240000
+        harness.check_after_step(job)
+
 
     @staticmethod
     def _mock_api_and_harness(response):
