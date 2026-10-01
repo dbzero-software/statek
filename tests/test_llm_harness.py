@@ -9,13 +9,14 @@ from statek.llm_harness import LLM_Harness
 
 
 def _make_job(num_turns=0, exception_count=0, max_consecutive_exceptions=0,
-              approx_token_usage=0, num_completions=None):
+              approx_token_usage=0, num_completions=None, difficulty_token_extension=0):
     job = MagicMock()
     job.num_turns = num_turns
     job.exception_count = exception_count
     job.max_consecutive_exceptions = max_consecutive_exceptions
     job.approx_token_usage = approx_token_usage
     job.num_completions = num_completions
+    job.difficulty_token_extension = difficulty_token_extension
     return job
 
 
@@ -60,6 +61,27 @@ class TestCheckBeforeStep:
 class TestCheckAfterStep:
     """check_after_step should raise only when token usage exceeds the limit."""
 
+    @pytest.mark.parametrize("completions, limit", [(None, 60000), (1, 75000), (2, 90000)])
+    def test_panic_bonus_is_added_after_completion_extension(self, completions, limit) -> None:
+        """The panic bonus is additive, job-local, and enforced at the new boundary."""
+        harness = LLM_Harness(None, 3, 1, 50000, limit_extension_per_completion=0.3)
+        job = _make_job(approx_token_usage=limit, num_completions=completions,
+                        difficulty_token_extension=10000)
+        harness.check_after_step(job)
+        job.approx_token_usage += 1
+        with pytest.raises(LLM_HarnessError, match=f"{limit + 1}/{limit}"):
+            harness.check_after_step(job)
+        assert harness.max_token_usage == 50000
+
+    def test_panic_bonus_does_not_extend_other_limits(self) -> None:
+        """Extra tokens cannot bypass exception or turn safeguards."""
+        harness = LLM_Harness(1, 1, 1, 1000)
+        job = _make_job(num_turns=2, exception_count=2, difficulty_token_extension=10000)
+        with pytest.raises(LLM_HarnessError, match="turns"):
+            harness.check_before_step(job)
+        with pytest.raises(LLM_HarnessError, match="exceptions"):
+            harness.check_after_step(job)
+
     def test_token_usage_allows_equal(self):
         """Exactly at the limit should be fine; over should raise."""
         harness = LLM_Harness(max_turns=None, max_exceptions=100,
@@ -72,7 +94,9 @@ class TestCheckAfterStep:
         """With None token limit, high usage should not raise."""
         harness = LLM_Harness(max_turns=None, max_exceptions=None,
                               max_consecutive_exceptions=None, max_token_usage=None)
-        harness.check_after_step(_make_job(approx_token_usage=999_999))
+        harness.check_after_step(_make_job(
+            approx_token_usage=999_999, difficulty_token_extension=10,
+        ))
 
     def test_max_exceptions_checked_after_step(self):
         """check_after_step should also enforce max_exceptions."""

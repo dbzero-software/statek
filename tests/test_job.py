@@ -21,7 +21,7 @@ from statek.executors.job import (
 )
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, OpenRouter_API
 from statek.model_pricing import set_model_pricing
-from statek.pyenv import Error, ErrorKind
+from statek.pyenv import Error, ErrorKind, PyEnv
 from statek.model_name import (
     ModelName,
     ensure_model_name,
@@ -32,6 +32,7 @@ from statek.model_name import (
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.dialog_agent import RecurringReminder
 from statek.executors.chat_log_item import (
+    DifficultyChangeLogItem,
     LLM_LogItem,
     NotificationLogItem,
     PostProcessedItem,
@@ -43,6 +44,8 @@ from statek.executors.chat_log_item import (
 from statek.executors.post_processor import PostProcessor
 from statek.executors.utils import _log_pending_console
 from statek.future import FutureResult
+from statek.exceptions import LLM_HarnessError
+from statek.llm_harness import LLM_Harness
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
@@ -1026,6 +1029,187 @@ def test_get_current_difficulty_ignores_non_job_task_difficulty_attribute(
     assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.low
 
 
+def test_panic_budget_accumulates_and_survives_reopen(job_def_factory) -> None:
+    """Each successful panic adds total usage without affecting another job's budget."""
+    definition = job_def_factory(metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"})
+    job = Job(job_def=definition, job_status=JobStatus.READY)
+    sibling = Job(job_def=definition, job_status=JobStatus.READY)
+    job.usage.total_bytes_sent = 30000
+    job.usage.total_bytes_received = 10000
+    harness = LLM_Harness(None, 100, 100, 50000)
+
+    job.panic()
+    assert job.difficulty_token_extension == 10000
+    assert job.get_current_difficulty() == TaskDifficulty.medium
+    assert job.approx_token_usage == 10000
+    job.usage.total_bytes_received = 70000
+    job.panic()
+    assert job.difficulty_token_extension == 35000
+    assert job.get_current_difficulty() == TaskDifficulty.high
+    with pytest.raises(RuntimeError, match="already at high difficulty"):
+        job.panic()
+    assert job.difficulty_token_extension == 35000
+    events = [item for item in job.chat_log if isinstance(item, DifficultyChangeLogItem)]
+    assert [item.cumulative_token_usage for item in events] == [10000, 25000]
+    assert [(item.previous_difficulty, item.difficulty) for item in events] == [
+        (TaskDifficulty.low, TaskDifficulty.medium),
+        (TaskDifficulty.medium, TaskDifficulty.high),
+    ]
+
+    job.usage.total_bytes_received = 310000
+    harness.check_after_step(job)
+    sibling.usage.total_bytes_sent = 240000
+    with pytest.raises(LLM_HarnessError, match="60000/50000"):
+        harness.check_after_step(sibling)
+    identifier = db0.uuid(job)
+    db0.close()
+    db0.init(DB0_DIR, read_write=True)
+    db0.open("test_prefix", "rw")
+    restored = db0.fetch(identifier)
+    assert restored.difficulty_token_extension == 35000
+    assert restored.approx_token_usage == 85000
+    harness.check_after_step(restored)
+    restored.usage.total_bytes_received += 4
+    with pytest.raises(LLM_HarnessError, match="85001/85000"):
+        harness.check_after_step(restored)
+
+
+@pytest.mark.parametrize("starting_difficulty", [None, TaskDifficulty.low])
+def test_example_escalation_extends_budget_once(job_def_factory, starting_difficulty) -> None:
+    """Effective static and dynamic baselines both grant a single historical bonus."""
+    job = Job(job_def=job_def_factory(
+        metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+    ))
+    job._Job__last_difficulty = starting_difficulty  # pylint: disable=protected-access
+    job.usage.total_bytes_sent = 40000
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
+    with patch("statek.executors.job._get_example_difficulty_for_job",
+               return_value=TaskDifficulty.medium):
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+        assert job.difficulty_token_extension == 10000
+        job.usage.total_bytes_sent = 100000
+        assert job.get_current_difficulty() == TaskDifficulty.medium
+        assert job.difficulty_token_extension == 10000
+        job.panic()
+        assert job.get_current_difficulty() == TaskDifficulty.high
+    assert job.difficulty_token_extension == 35000
+    assert not hasattr(job, "panic_token_extension")
+
+
+def test_direct_example_jump_is_one_bonus(job_def_factory) -> None:
+    """A single low-to-high change is distinct from two separate escalations."""
+    job = Job(job_def=job_def_factory(
+        metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+    ))
+    job.usage.total_bytes_sent = 40000
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
+    with patch("statek.executors.job._get_example_difficulty_for_job",
+               return_value=TaskDifficulty.high):
+        assert job.get_current_difficulty() == TaskDifficulty.high
+    assert job.difficulty_token_extension == 10000
+
+
+@pytest.mark.parametrize("example_difficulty", [TaskDifficulty.low, TaskDifficulty.medium])
+def test_non_increasing_example_grants_no_bonus(job_def_factory, example_difficulty) -> None:
+    """Initial assignment at or below the static baseline is not an increase."""
+    job = Job(job_def=job_def_factory(
+        metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "medium"},
+    ))
+    job.usage.total_bytes_sent = 40000
+    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
+    with patch("statek.executors.job._get_example_difficulty_for_job",
+               return_value=example_difficulty):
+        assert job.get_current_difficulty() == example_difficulty
+    assert job.difficulty_token_extension == 0
+
+
+def test_panic_with_zero_usage_grants_no_bonus(job_def_factory) -> None:
+    """Escalation is still possible without previous token usage."""
+    job = Job(job_def=job_def_factory(
+        metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+    ))
+    job.panic()
+    assert job.difficulty_token_extension == 0
+    assert job.approx_token_usage == 0
+
+
+def test_example_difficulty_during_initialization_has_zero_usage(job_def_factory) -> None:
+    """Pricing may resolve a default example before the usage object exists."""
+    env = PyEnv()
+    env.local_state["default_example_id"] = 1
+    with patch("statek.executors.job._get_example_difficulty_for_job",
+               return_value=TaskDifficulty.medium):
+        job = Job(job_def=job_def_factory(metadata={
+            "MODEL": "L:small,M:medium,H:large", "DEFAULT_DIFFICULTY": "low",
+        }), py_env=env)
+    assert job.get_current_difficulty() == TaskDifficulty.medium
+    assert job.difficulty_token_extension == 0
+    assert len(job.chat_log) == 1
+    assert job.chat_log[0].cumulative_token_usage == 0
+
+
+def test_difficulty_metadata_preserves_console_and_notification_history(job_def_factory) -> None:
+    """Budget events must not truncate console output or steal notification IDs."""
+    job = Job(job_def=job_def_factory(metadata={
+        "MODEL": "test-model", "DEFAULT_DIFFICULTY": "low",
+    }), job_status=JobStatus.STARTED)
+    response = LLM_LogItem(console_pos=0, llm_resp="pass")
+    job.chat_log.append(response)
+    job.py_env.console = ["before"]
+    job.panic()
+    assert job.last_response == "pass"
+    assert job.get_next_code_block() == "pass"
+    assert job.num_turns == 1
+    assert job.exception_count == 0
+    job.py_env.console.append("after")
+    history = list(job.get_chat_history())
+    assert any(item.content == "before\nafter" for item in history)
+    assert len(history) == 2
+    job.send_notification("notice")
+    assert job._process_pending_notifications() is True  # pylint: disable=protected-access
+    identifier, notification = next(job.iter_notification_log_items())
+    assert notification.message == "notice"
+    assert any(item.tool_calls and item.tool_calls[0].id == identifier
+               for item in job.get_chat_history() if item.role == ChatRole.ASSISTANT)
+
+
+def test_difficulty_metadata_does_not_finalize_pending_tools(job_def_factory) -> None:
+    """Escalation metadata cannot bypass notification delivery's active-call guard."""
+    job = Job(job_def=job_def_factory(metadata={
+        "MODEL": "test-model", "DEFAULT_DIFFICULTY": "low",
+    }), job_status=JobStatus.STARTED)
+    job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp=CodeBlock(
+        code=None, tool_calls=[CallSpec(id="pending", func_name="panic")],
+    )))
+    job.panic()
+    job.send_notification("notice")
+    assert job._process_pending_notifications() is False  # pylint: disable=protected-access
+    assert len(job._pending_notifications()) == 1  # pylint: disable=protected-access
+
+
+def test_resume_placeholder_has_no_usage_snapshot(job_def_factory) -> None:
+    """A resumed conversation's placeholder is not a provider response."""
+    job = Job(job_def=job_def_factory(), job_status=JobStatus.DONE)
+    assert job.push_user_message("continue") is True
+    assert job.chat_log[-1].llm_resp is None
+    assert job.chat_log[-1].cumulative_token_usage is None
+
+
+def test_budget_metadata_preserves_warmup_console_boundary(job_def_factory) -> None:
+    """A metadata event inside warmup is not the warmup output's end boundary."""
+    job = Job(job_def=job_def_factory(
+        warmup_code="pass",
+        metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+    ))
+    job.chat_log.append(WarmupLogItem(console_pos=0, warmup_block_num=0))
+    job.py_env.console = ["before"]
+    job.panic()
+    job.py_env.console.append("after")
+    assert job._warmup_end_positions() == [2]  # pylint: disable=protected-access
+    history = list(job.get_chat_history())
+    assert any(item.content == "before\nafter" for item in history)
+
+
 def test_panic_increases_low_difficulty_to_medium(job_def_factory):
     """panic raises the current difficulty by one level."""
     job_def = job_def_factory(
@@ -1595,7 +1779,8 @@ class TestJobGetRequestData:
         assert "Medium instructions." in historical_medium["system_prompt"]
         assert "High instructions." not in historical_medium["system_prompt"]
         assert job.chat_log[0].request_difficulty is None
-        assert job.chat_log[1].request_difficulty == medium_difficulty
+        llm_items = [item for item in job.chat_log if isinstance(item, LLM_LogItem)]
+        assert llm_items[1].request_difficulty == medium_difficulty
 
     def test_get_request_data_supports_legacy_log_item_without_difficulty_snapshot(
         self, job_def_factory,
@@ -3061,6 +3246,40 @@ class TestSubTaskNotifications:
 # pylint: disable=protected-access
 class TestTextNotificationHistory:
     """A plain-text notification is a durable, synthetic tool-result event."""
+
+    def test_notification_log_items_match_history_ids_without_draining_queue(
+        self, job_factory,
+    ) -> None:
+        """Consumers get Statek-owned call IDs without changing notification delivery."""
+        job = job_factory()
+        first = NotificationLogItem(console_pos=0, message="first", tool_log="first")
+        second = NotificationLogItem(console_pos=0, message="second", tool_log="second")
+        pending = NotificationLogItem(console_pos=0, message="pending")
+        job.chat_log = [
+            LLM_LogItem(console_pos=0, llm_resp="before"),
+            first,
+            LLM_LogItem(console_pos=0, llm_resp="between"),
+            second,
+        ]
+        job._pending_notifications().append(pending)
+
+        entries = list(job.iter_notification_log_items())
+        history_ids = [
+            entry.tool_calls[0].id for entry in job.get_chat_history()
+            if entry.role == ChatRole.ASSISTANT and entry.tool_calls
+        ]
+
+        assert [identifier for identifier, _ in entries] == history_ids
+        assert len(set(history_ids)) == 2
+        assert [item for _, item in entries] == [first, second]
+        assert list(job.iter_notification_log_items()) == entries
+        assert job._pending_notifications() == [pending]
+        assert pending.tool_log is None
+        assert len(job.chat_log) == 4
+
+    def test_notification_log_items_empty(self, job_factory) -> None:
+        """A job with no delivered notifications exposes no notification IDs."""
+        assert not list(job_factory().iter_notification_log_items())
 
     def test_notification_is_persisted_and_formatted_without_recursive_tool_log(self, job_factory):
         """The message is required and the saved result does not expand itself."""

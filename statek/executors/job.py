@@ -40,6 +40,7 @@ from statek.extra_resources import (
 )
 from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
+    DifficultyChangeLogItem,
     ChatLogItem,
     LLM_LogItem,
     NotificationLogItem,
@@ -717,7 +718,7 @@ class Job:
         """Return whether pending notifications can be safely appended now."""
         if not self.chat_log:
             return True
-        last = self.chat_log[-1]
+        last = self.last_chat_log_item
         if not isinstance(last, LLM_LogItem):
             return True
         if last.llm_resp is None:
@@ -1096,6 +1097,16 @@ class Job:
             args=None,
             kwargs={"code": "print(get_pending_notifications())"},
         )
+
+    def iter_notification_log_items(self) -> Iterable[Tuple[str, NotificationLogItem]]:
+        """Yield logged notifications paired with their synthetic history call IDs.
+
+        IDs are scoped to this job's append-only chat log. Pending notifications
+        are excluded; reading this iterator does not deliver or consume them.
+        """
+        for index, item in enumerate(self.chat_log):
+            if isinstance(item, NotificationLogItem):
+                yield self._notification_tool_call(index).id, item
 
     def get_next_prompt(self) -> str:
         """
@@ -1748,13 +1759,13 @@ class Job:
             # update the dynamically resolved difficulty                 
             if difficulty is not None:
                 if last_difficulty is None:
-                    self.__last_difficulty = difficulty
+                    self._set_dynamic_difficulty(difficulty)
                     last_difficulty = difficulty
                 else:
                     max_difficulty = max_task_difficulty(last_difficulty, difficulty)
                     # only update if changed
                     if last_difficulty != max_difficulty:
-                        self.__last_difficulty = max_difficulty
+                        self._set_dynamic_difficulty(max_difficulty)
                         last_difficulty = max_difficulty
 
         if last_difficulty is not None:
@@ -1762,16 +1773,46 @@ class Job:
         
         return _get_static_task_difficulty(self.job_def.metadata)
 
-    def panic(self):
-        """Escalate the current job difficulty to the next higher level."""
+    def _set_dynamic_difficulty(self, difficulty: TaskDifficulty) -> None:
+        """Record each effective increase once, with usage at the transition."""
+        previous = (getattr(self, "_Job__last_difficulty", None)
+                    or _get_static_task_difficulty(self.job_def.metadata))
+        if (previous != difficulty
+                and max_task_difficulty(previous, difficulty) == difficulty):
+            # Model pricing resolves difficulty before usage exists during initialization.
+            usage = self.approx_token_usage if hasattr(self, "usage") else 0
+            self.chat_log.append(DifficultyChangeLogItem(
+                console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                previous_difficulty=previous,
+                difficulty=difficulty,
+                cumulative_token_usage=usage,
+            ))
+        self.__last_difficulty = difficulty
+
+    @property
+    def difficulty_token_extension(self) -> int:
+        """Derive the additional token budget from immutable escalation snapshots."""
+        return sum(item.cumulative_token_usage for item in self.chat_log
+                   if isinstance(item, DifficultyChangeLogItem))
+
+    @property
+    def last_chat_log_item(self) -> Optional[Union[str, ChatLogItem, UserLogItem]]:
+        """Return the current conversation/execution item, ignoring budget metadata."""
+        return next((item for item in reversed(self.chat_log)
+                     if not isinstance(item, DifficultyChangeLogItem)), None)
+
+    def panic(self) -> None:
+        """Escalate difficulty and extend this job's token budget by usage so far."""
         current_difficulty = self.get_current_difficulty()
-        self.__last_difficulty = _next_task_difficulty(current_difficulty)
+        next_difficulty = _next_task_difficulty(current_difficulty)
+        self._set_dynamic_difficulty(next_difficulty)
 
     def append_chat_log(
         self,
         request: Dict,
         llm_resp: LLM_Response,
         request_difficulty: Optional[TaskDifficulty] = None,
+        cumulative_token_usage: Optional[int] = None,
     ):
         """
         Register the LLM response in the Job's chat_log container.
@@ -1786,6 +1827,8 @@ class Job:
             llm_resp: The LLM's response as an LLM_Response object
             request_difficulty: Concrete difficulty captured when the request
                 was built, or None for the static default.
+            cumulative_token_usage: Usage captured after response accounting,
+                before post-processing. Defaults to current usage for direct callers.
 
         The console_pos is set to len(console), marking the position past the end
         of the current console output.
@@ -1835,6 +1878,8 @@ class Job:
             llm_resp=stored_resp,
             llm_reasoning_payload=step_data.reasoning_payload,
             request_difficulty=request_difficulty,
+            cumulative_token_usage=(self.approx_token_usage if cumulative_token_usage is None
+                                    else cumulative_token_usage),
         )
         self.chat_log.append(chat_item)
 
@@ -1927,7 +1972,7 @@ class Job:
         """
         if not self.chat_log:
             return None
-        last = self.chat_log[-1]
+        last = self.last_chat_log_item
         if isinstance(last, LLM_LogItem):
             return last.llm_resp
         return None
@@ -2278,9 +2323,9 @@ class Job:
         for i, item in enumerate(self.chat_log):
             if isinstance(item, WarmupLogItem):
                 end_pos = (
-                    self.chat_log[i + 1].console_pos
-                    if i + 1 < len(self.chat_log)
-                    else console_len
+                    next((following.console_pos for following in self.chat_log[i + 1:]
+                          if isinstance(following, ChatLogItem)
+                          and not isinstance(following, DifficultyChangeLogItem)), console_len)
                 )
                 pairs.append((item.warmup_block_num, end_pos))
         pairs.sort(key=lambda x: x[0])
