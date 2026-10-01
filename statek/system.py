@@ -795,6 +795,8 @@ def panic(**kwargs):  # pylint: disable=unused-argument
 
     Use this when the current task is too difficult for the current model.
     This raises the job difficulty by one level and prints the new difficulty.
+    A successful escalation also extends this job's finite token limit by its
+    approximate token usage so far. Unlimited token limits remain unlimited.
 
     Returns:
         None. Updates the current job and prints the current difficulty.

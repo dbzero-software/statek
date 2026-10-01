@@ -25,7 +25,7 @@ from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.post_processor import PostProcessor
 from statek.executors.utils import handle_dialog, run_job_step
 from statek.future import FutureResult
-from statek.exceptions import FutureError
+from statek.exceptions import FutureError, LLM_HarnessError
 from statek.llm_harness import LLM_Harness
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, CallParams, OpenRouter_API
 from statek.settings import LLM_API_Settings
@@ -507,6 +507,50 @@ class TestRunJobStepToolCallResponse:
 
 class TestRunJobStepHarnessIsolation:
     """Tests that harness token usage is isolated per job."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first_usage", [400, 501])
+    async def test_panic_tool_extends_budget_only_when_executed(
+        self, job_def_factory, first_usage: int,
+    ) -> None:
+        """A pending panic cannot rescue an already over-budget provider response."""
+        job = Job(job_def=job_def_factory(
+            warmup_code=None,
+            metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+        ), job_status=JobStatus.STARTED)
+        response = LLM_Response(
+            step_data=LLM_StepData(text=None, call_requests=[
+                CallParams(call_id="panic_call", name="panic", args=[], kwargs={}),
+            ]),
+            stats=LLM_Stats(total_bytes_sent=first_usage * 4,
+                            total_bytes_received=0, cost=None),
+        )
+        continuation = LLM_Response(
+            step_data=LLM_StepData(text="pass", call_requests=None),
+            stats=LLM_Stats(total_bytes_sent=2000, total_bytes_received=0, cost=None),
+        )
+        api = MagicMock(process_request=AsyncMock(side_effect=[response, continuation]))
+        harness = LLM_Harness(None, 100, 100, 500)
+        with patch("statek.executors.utils.LLM_API") as api_class, \
+             patch("statek.executors.utils.get_llm_harness", return_value=harness):
+            api_class.get.return_value = api
+            if first_usage > 500:
+                with pytest.raises(LLM_HarnessError, match="501/500"):
+                    await run_job_step(job)
+                assert job.get_current_difficulty() == TaskDifficulty.low
+                assert job.panic_token_extension == 0
+                assert api.process_request.await_count == 1
+            else:
+                assert await run_job_step(job) is False
+                assert job.panic_token_extension == 0
+                assert await run_job_step(job) is False
+                assert job.get_current_difficulty() == TaskDifficulty.medium
+                assert job.panic_token_extension == 400
+                assert job.approx_token_usage == 900
+                job.usage.total_bytes_received += 4
+                with pytest.raises(LLM_HarnessError, match="901/900"):
+                    harness.check_after_step(job)
+        assert harness.max_token_usage == 500
 
     @pytest.mark.asyncio
     async def test_two_jobs_same_harness_do_not_share_approx_token_usage(

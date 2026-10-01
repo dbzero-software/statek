@@ -647,6 +647,7 @@ class Job:
         self.usage = LLM_Usage(pricing=self._current_model_pricing())
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
+        self.panic_token_extension: int = 0
         # Application-specific external memo references, created lazily.
         self.__ext_ref = None
         # Subtask notifications received while the current chat item is active.
@@ -1772,10 +1773,13 @@ class Job:
         
         return _get_static_task_difficulty(self.job_def.metadata)
 
-    def panic(self):
-        """Escalate the current job difficulty to the next higher level."""
+    def panic(self) -> None:
+        """Escalate difficulty and extend this job's token budget by usage so far."""
         current_difficulty = self.get_current_difficulty()
-        self.__last_difficulty = _next_task_difficulty(current_difficulty)
+        next_difficulty = _next_task_difficulty(current_difficulty)
+        extension = self.panic_token_extension + self.approx_token_usage
+        self.__last_difficulty = next_difficulty
+        self.panic_token_extension = extension
 
     def append_chat_log(
         self,

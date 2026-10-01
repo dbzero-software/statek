@@ -43,6 +43,8 @@ from statek.executors.chat_log_item import (
 from statek.executors.post_processor import PostProcessor
 from statek.executors.utils import _log_pending_console
 from statek.future import FutureResult
+from statek.exceptions import LLM_HarnessError
+from statek.llm_harness import LLM_Harness
 from statek.settings import ChatStyle, LLM_API_Settings
 from statek.locale import StatekLocale, StatekLangCode, StatekCountryCode
 from statek.prompt_config import make_system_prompt, parse_system_prompt
@@ -1024,6 +1026,55 @@ def test_get_current_difficulty_ignores_non_job_task_difficulty_attribute(
 
     assert job._Job__last_difficulty is None  # pylint: disable=protected-access
     assert _run_with_current_job(job, job.get_current_difficulty) == TaskDifficulty.low
+
+
+def test_panic_budget_accumulates_and_survives_reopen(job_def_factory) -> None:
+    """Each successful panic adds total usage without affecting another job's budget."""
+    definition = job_def_factory(metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"})
+    job = Job(job_def=definition, job_status=JobStatus.READY)
+    sibling = Job(job_def=definition, job_status=JobStatus.READY)
+    job.usage.total_bytes_sent = 30000
+    job.usage.total_bytes_received = 10000
+    harness = LLM_Harness(None, 100, 100, 50000)
+
+    job.panic()
+    assert job.panic_token_extension == 10000
+    assert job.get_current_difficulty() == TaskDifficulty.medium
+    assert job.approx_token_usage == 10000
+    job.usage.total_bytes_received = 70000
+    job.panic()
+    assert job.panic_token_extension == 35000
+    assert job.get_current_difficulty() == TaskDifficulty.high
+    with pytest.raises(RuntimeError, match="already at high difficulty"):
+        job.panic()
+    assert job.panic_token_extension == 35000
+
+    job.usage.total_bytes_received = 310000
+    harness.check_after_step(job)
+    sibling.usage.total_bytes_sent = 240000
+    with pytest.raises(LLM_HarnessError, match="60000/50000"):
+        harness.check_after_step(sibling)
+    identifier = db0.uuid(job)
+    db0.close()
+    db0.init(DB0_DIR, read_write=True)
+    db0.open("test_prefix", "rw")
+    restored = db0.fetch(identifier)
+    assert restored.panic_token_extension == 35000
+    assert restored.approx_token_usage == 85000
+    harness.check_after_step(restored)
+    restored.usage.total_bytes_received += 4
+    with pytest.raises(LLM_HarnessError, match="85001/85000"):
+        harness.check_after_step(restored)
+
+
+def test_panic_with_zero_usage_grants_no_bonus(job_def_factory) -> None:
+    """Escalation is still possible without previous token usage."""
+    job = Job(job_def=job_def_factory(
+        metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
+    ))
+    job.panic()
+    assert job.panic_token_extension == 0
+    assert job.approx_token_usage == 0
 
 
 def test_panic_increases_low_difficulty_to_medium(job_def_factory):
