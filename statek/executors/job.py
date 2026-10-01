@@ -1097,6 +1097,16 @@ class Job:
             kwargs={"code": "print(get_pending_notifications())"},
         )
 
+    def iter_notification_log_items(self) -> Iterable[Tuple[str, NotificationLogItem]]:
+        """Yield logged notifications paired with their synthetic history call IDs.
+
+        IDs are scoped to this job's append-only chat log. Pending notifications
+        are excluded; reading this iterator does not deliver or consume them.
+        """
+        for index, item in enumerate(self.chat_log):
+            if isinstance(item, NotificationLogItem):
+                yield self._notification_tool_call(index).id, item
+
     def get_next_prompt(self) -> str:
         """
         Generate the next prompt to be included in the LLM chat.

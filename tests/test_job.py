@@ -3062,6 +3062,40 @@ class TestSubTaskNotifications:
 class TestTextNotificationHistory:
     """A plain-text notification is a durable, synthetic tool-result event."""
 
+    def test_notification_log_items_match_history_ids_without_draining_queue(
+        self, job_factory,
+    ) -> None:
+        """Consumers get Statek-owned call IDs without changing notification delivery."""
+        job = job_factory()
+        first = NotificationLogItem(console_pos=0, message="first", tool_log="first")
+        second = NotificationLogItem(console_pos=0, message="second", tool_log="second")
+        pending = NotificationLogItem(console_pos=0, message="pending")
+        job.chat_log = [
+            LLM_LogItem(console_pos=0, llm_resp="before"),
+            first,
+            LLM_LogItem(console_pos=0, llm_resp="between"),
+            second,
+        ]
+        job._pending_notifications().append(pending)
+
+        entries = list(job.iter_notification_log_items())
+        history_ids = [
+            entry.tool_calls[0].id for entry in job.get_chat_history()
+            if entry.role == ChatRole.ASSISTANT and entry.tool_calls
+        ]
+
+        assert [identifier for identifier, _ in entries] == history_ids
+        assert len(set(history_ids)) == 2
+        assert [item for _, item in entries] == [first, second]
+        assert list(job.iter_notification_log_items()) == entries
+        assert job._pending_notifications() == [pending]
+        assert pending.tool_log is None
+        assert len(job.chat_log) == 4
+
+    def test_notification_log_items_empty(self, job_factory) -> None:
+        """A job with no delivered notifications exposes no notification IDs."""
+        assert not list(job_factory().iter_notification_log_items())
+
     def test_notification_is_persisted_and_formatted_without_recursive_tool_log(self, job_factory):
         """The message is required and the saved result does not expand itself."""
         job = job_factory()
