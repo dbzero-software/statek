@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from datetime import datetime
 from collections import namedtuple
 import hashlib
@@ -25,6 +26,7 @@ from typing import (
     List,
     Optional,
     Iterable,
+    Iterator,
     Dict,
     Any,
     Sequence,
@@ -631,6 +633,7 @@ class Job:
         self.py_env = py_env if py_env is not None else PyEnv()
         # Current chat state
         self.chat_log = chat_log if chat_log is not None else []
+        self.__first_responses: Dict[int, datetime] = {}
         # Suspended job's awaited result
         self.awaited_result = awaited_result
         # Continuation instruction number
@@ -2103,19 +2106,76 @@ class Job:
             ):
                 yield DialogItem("assistant", body)
 
+    def _pending_response_waits(self) -> tuple[int, ...]:
+        """Identify dialog messages whose wait has not ended yet."""
+        if self.job_def.chat_style not in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
+            return ()
+        responses = getattr(self, "_Job__first_responses", {})
+        return tuple(
+            index for index, item in enumerate(self.chat_log)
+            if index not in responses and (
+                (isinstance(item, str) and item and self.created_at is not None)
+                or (isinstance(item, UserLogItem) and item.message)
+            )
+        )
+
+    def _finish_response_waits(self, pending_indices: tuple[int, ...], timestamp: datetime) -> None:
+        """Persist an endpoint without overwriting an earlier completion."""
+        if not pending_indices:
+            return
+        if not hasattr(self, "_Job__first_responses"):
+            self.__first_responses = {}
+        for index in pending_indices:
+            if index not in self.__first_responses:
+                self.__first_responses[index] = timestamp
+
+    def finish_response_wait(self) -> None:
+        """End outstanding dialog waits when a terminal harness error stops the job.
+
+        This records no reply, changes no execution state, and preserves completed
+        measurements. The worker invokes it before running critical-error handlers.
+        """
+        timestamp = datetime.now()
+        self._finish_response_waits(self._pending_response_waits(), timestamp)
+
+    @contextmanager
+    def response_delivery(self) -> Iterator[None]:
+        """End captured waits only after successful delivery.
+
+        Messages arriving during delivery remain pending. Exceptions and cancellation
+        propagate without recording a successful response.
+        """
+        pending_indices = self._pending_response_waits()
+        yield
+        self._finish_response_waits(pending_indices, datetime.now())
+
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
-        """Return user-message timestamps paired with time-to-first user reply.
+        """Return user-message timestamps paired with time until their wait ended.
 
         Only timestamped user messages stored in ``chat_log`` are included:
         the initial dialog-style message (stored as a plain ``str`` and
         measured from ``created_at``) and any subsequent ``UserLogItem``
-        entries. Warmup items are ignored. Internal dialog-mode execution
-        turns such as tool-call requests or script-only responses are skipped.
-        If no later user-facing ``LLM_LogItem`` responds to a message, its
-        duration is ``None``.
+        entries. Dialog waits end at first successful send completion or terminal
+        harness failure, without changing the execution-driving chat log. Non-dialog jobs retain
+        their LLM-log timing. Still-pending messages have duration ``None``.
         """
         response_times: List[tuple[datetime, Optional[float]]] = []
         pending_indices: List[int] = []
+        if self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
+            responses = getattr(self, "_Job__first_responses", {})
+            for index, item in enumerate(self.chat_log):
+                message_time = None
+                if isinstance(item, str) and item:
+                    message_time = self.created_at
+                elif isinstance(item, UserLogItem) and item.message:
+                    message_time = item.timestamp
+                if message_time is not None:
+                    response_time = responses.get(index)
+                    response_times.append((
+                        message_time,
+                        (response_time - message_time).total_seconds() if response_time is not None else None,
+                    ))
+            return response_times
 
         for item in self.chat_log:
             if isinstance(item, str):

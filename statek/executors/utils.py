@@ -949,9 +949,7 @@ async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
     if dialog is not None:
         dialog = _normalize_dialog_media_links(dialog)
     if dialog and MARKDOWN_MEDIA_LINK_PATTERN.search(dialog):
-        result = agent.send_message(body=dialog)
-        if inspect.iscoroutinefunction(agent.send_message):
-            await result
+        await agent.dispatch_message(body=dialog)
         return
 
     for body, media in parse_dialog(llm_resp):
@@ -959,9 +957,7 @@ async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
             kwargs = {"body": body}
             if media is not None:
                 kwargs["media"] = media
-            result = agent.send_message(**kwargs)
-            if inspect.iscoroutinefunction(agent.send_message):
-                await result
+            await agent.dispatch_message(**kwargs)
 
 
 def _with_statek_job_context(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -1418,6 +1414,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
                            f"cost: ${job.usage.total_cost or 0.0:.4f}", level='info')
             except LLM_HarnessError as e:
+                job.finish_response_wait()
                 error_msg = f"LLM_HarnessError: {e}"
                 statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"

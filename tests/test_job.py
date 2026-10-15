@@ -3686,6 +3686,69 @@ class TestGetNextRequestUserMessages:
 class TestGetResponseTimes:
     """Tests for Job.get_response_times."""
 
+    def test_finish_response_wait_is_idempotent(self, job_factory):
+        """A terminal stop records only outstanding dialog samples once."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.chat_log.append("initial")
+        with patch("statek.executors.job.datetime", wraps=datetime) as clock:
+            clock.now.return_value = t0 + timedelta(seconds=5)
+            job.finish_response_wait()
+            clock.now.return_value = t0 + timedelta(seconds=20)
+            job.finish_response_wait()
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    def test_failed_delivery_keeps_message_pending(self, job_factory):
+        """A failed delivery must not record a response on context exit."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.chat_log.append("initial")
+        with pytest.raises(RuntimeError, match="delivery failed"):
+            with job.response_delivery():
+                raise RuntimeError("delivery failed")
+        assert list(job.get_response_times()) == [(job.created_at, None)]
+
+    def test_overlapping_deliveries_preserve_first_completion(self, job_factory):
+        """An earlier-started send cannot overwrite an already completed reply."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.chat_log.append("initial")
+        with patch("statek.executors.job.datetime", wraps=datetime) as clock:
+            with job.response_delivery():
+                with job.response_delivery():
+                    clock.now.return_value = t0 + timedelta(seconds=5)
+                clock.now.return_value = t0 + timedelta(seconds=20)
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    def test_recorded_first_response_survives_reopen(self, job_factory):
+        """Only first successful sends are persisted, independently of chat turns."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 14, 12)
+        job.created_at = t0
+        job.chat_log.append("initial")
+        with patch("statek.executors.job.datetime", wraps=datetime) as clock:
+            clock.now.return_value = t0 + timedelta(seconds=5)
+            with job.response_delivery():
+                pass
+            clock.now.return_value = t0 + timedelta(seconds=20)
+            with job.response_delivery():
+                pass
+        job.chat_log.append(UserLogItem(message="waiting", timestamp=t0 + timedelta(seconds=800)))
+        job_uuid = db0.uuid(job)
+        db0.close()
+        db0.init(DB0_DIR, read_write=True)
+        db0.open("test_prefix", "rw")
+        restored = db0.fetch(job_uuid)
+        assert list(restored.get_response_times()) == [
+            (t0, 5.0), (t0 + timedelta(seconds=800), None)
+        ]
+        assert len(restored.chat_log) == 2
+
     def test_initial_and_follow_up_messages_measure_to_first_llm_response(
         self, job_factory
     ):
@@ -3749,8 +3812,8 @@ class TestGetResponseTimes:
 
         assert list(job.get_response_times()) == [(t0, 10.0)]
 
-    def test_direct_tool_call_turn_does_not_count_as_first_response(self, job_factory):
-        """DIRECT latency should wait for the first plain dialog reply."""
+    def test_direct_llm_turns_without_send_do_not_count_as_first_response(self, job_factory):
+        """DIRECT latency remains pending until a reply is successfully sent."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
         t0 = datetime(2026, 1, 1, 12, 0, 0)
@@ -3766,10 +3829,10 @@ class TestGetResponseTimes:
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="done"))
         job.chat_log[-1].timestamp = t2
 
-        assert list(job.get_response_times()) == [(t0, 10.0)]
+        assert list(job.get_response_times()) == [(t0, None)]
 
-    def test_md_dialog_script_turn_does_not_count_as_first_response(self, job_factory):
-        """MD_DIALOG latency should skip a pure script turn before dialog text."""
+    def test_md_dialog_llm_turns_without_send_do_not_count_as_first_response(self, job_factory):
+        """MD_DIALOG script and text logs alone are not completed sends."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
         t0 = datetime(2026, 1, 1, 12, 0, 0)
@@ -3782,7 +3845,7 @@ class TestGetResponseTimes:
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="# Done."))
         job.chat_log[-1].timestamp = t2
 
-        assert list(job.get_response_times()) == [(t0, 10.0)]
+        assert list(job.get_response_times()) == [(t0, None)]
 
 
 class TestGetChatResponses:
