@@ -17,6 +17,7 @@ from statek.llm_harness import LLM_Harness
 from statek.exceptions import LLM_HarnessError
 from statek.pyenv import Error, ErrorKind
 from statek.executors.job import Job, JobDefError, JobStatus
+from statek.executors.job import record_response_delivery
 from statek.executors.chat_log_item import LLM_LogItem, UserLogItem
 from statek.executors.utils import handle_critical_error, job_worker
 from statek.system import error_handler
@@ -86,7 +87,7 @@ class TestHandleCriticalError:
         with patch("statek.executors.job.datetime", wraps=datetime) as clock:
             if already_answered:
                 clock.now.return_value = t0 + timedelta(seconds=2)
-                with job.response_delivery():
+                with record_response_delivery(job):
                     pass
             job.chat_log.append(UserLogItem(message="queued", timestamp=t0 + timedelta(seconds=3)))
             expected = [(t0, 2.0 if already_answered else 5.0),
@@ -114,7 +115,7 @@ class TestHandleCriticalError:
             t2 = t0 + timedelta(seconds=800)
             job.chat_log[-2].timestamp = t2
             clock.now.return_value = t2 + timedelta(seconds=2)
-            with job.response_delivery():
+            with record_response_delivery(job):
                 pass
         assert list(job.get_response_times()) == expected + [(t2, 2.0)]
 

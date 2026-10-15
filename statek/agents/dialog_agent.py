@@ -16,7 +16,6 @@
 
 import inspect
 from abc import ABC, abstractmethod
-from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
 import dbzero as db0
@@ -25,7 +24,7 @@ from statek.chat_style import ChatStyle
 from statek.extra_resources import ExtraResources
 from statek.dbzero_restricted import as_unrestricted
 from statek.system import _run_coroutine_result
-from statek.utils import get_current_job
+from statek.executors.job import record_response_delivery
 
 if TYPE_CHECKING:
     from statek.executors.job import Job
@@ -193,22 +192,16 @@ class DialogAgent(SupervisedAgent):
             if self.add_answer_tool:
                 self._create_answer_tool()
 
-    async def dispatch_message(self, **kwargs: Any) -> Any:
-        """Deliver through the trusted callback within the job's response measurement."""
-        with as_unrestricted():
-            job = get_current_job()
-            with job.response_delivery() if job is not None else nullcontext():
-                result = self.send_message(**kwargs)
-                if inspect.isawaitable(result):
-                    result = await result
-                return result
-
     def _create_send_message_tool(self):
         """Populate ``_send_message`` impl in agent context."""
         original = self.send_message
 
         def _send_message(body: str, media: Any = None) -> Any:
-            return _run_coroutine_result(self.dispatch_message(body=body, media=media))
+            with as_unrestricted(), record_response_delivery():
+                result = original(body=body, media=media)
+                if inspect.isawaitable(result):
+                    result = _run_coroutine_result(result)
+                return result
 
         _send_message.__name__ = "_send_message"
         _send_message.__doc__ = getattr(original, "__doc__", None)

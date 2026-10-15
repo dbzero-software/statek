@@ -18,6 +18,8 @@ from statek.executors.job import (
     JobStatus,
     TaskDifficulty,
     parse_model_metadata,
+    record_response_delivery,
+    response_endpoint,
 )
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, OpenRouter_API
 from statek.model_pricing import set_model_pricing
@@ -3686,7 +3688,66 @@ class TestGetNextRequestUserMessages:
 class TestGetResponseTimes:
     """Tests for Job.get_response_times."""
 
-    def test_finish_response_wait_is_idempotent(self, job_factory):
+    def test_initial_normalization_preserves_history_and_has_no_job_cache(self, job_factory):
+        """Attaching delivery facts must not split or duplicate the initial prompt."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.chat_log.append("initial")
+        job.py_env.push_log = {0: ["context", "more context"]}
+        before = [(item.role, item.content) for item in job.get_chat_history()]
+        with record_response_delivery(job):
+            pass
+        assert isinstance(job.chat_log[0], UserLogItem)
+        assert job.chat_log[0].timestamp == job.created_at
+        assert [(item.role, item.content) for item in job.get_chat_history()] == before
+        assert len(job.chat_log) == 1
+        assert not hasattr(job, "_Job__first_responses")
+
+    def test_completion_order_wins_over_clock_and_harness_does_not_overwrite(self, job_factory):
+        """Ordering is recorded explicitly, not inferred from clocks or parent position."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.chat_log.append("initial")
+        with patch("statek.executors.job.datetime", wraps=datetime) as clock:
+            clock.now.return_value = t0 + timedelta(seconds=5)
+            job.console_append("limit", error=Error(
+                ErrorKind.HARNESS, "limit", response_endpoint=response_endpoint(job, 1),
+            ))
+            clock.now.return_value = t0 + timedelta(seconds=3)
+            with record_response_delivery(job):
+                pass
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    def test_delivery_facts_determine_first_eligible_endpoint(self, job_factory):
+        """Read raw completion order, not the order of the owning execution items."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        first = LLM_LogItem(console_pos=0)
+        second = LLM_LogItem(console_pos=0)
+        job.chat_log.extend([
+            "initial", first, UserLogItem("late", t0 + timedelta(seconds=3)), second,
+        ])
+        first.delivery_events = [(2, 4, t0 + timedelta(seconds=9))]
+        second.delivery_events = [(1, 2, t0 + timedelta(seconds=5))]
+        assert list(job.get_response_times()) == [(t0, 5.0), (t0 + timedelta(seconds=3), 6.0)]
+
+    def test_timestamped_terminal_fact_without_execution_item(self, job_factory):
+        """A pre-step harness stop is readable without a synthetic LLM turn."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.chat_log.append("initial")
+        error = Error(ErrorKind.HARNESS, "limit")
+        error.response_endpoint = (1, 1, t0 + timedelta(seconds=5))
+        job.console_append("limit", error=error)
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    def test_repeated_terminal_facts_preserve_first_endpoint(self, job_factory):
         """A terminal stop records only outstanding dialog samples once."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)
@@ -3695,9 +3756,15 @@ class TestGetResponseTimes:
         job.chat_log.append("initial")
         with patch("statek.executors.job.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
-            job.finish_response_wait()
+            job.console_append("limit", error=Error(
+                ErrorKind.HARNESS, "limit",
+                response_endpoint=response_endpoint(job, len(job.chat_log)),
+            ))
             clock.now.return_value = t0 + timedelta(seconds=20)
-            job.finish_response_wait()
+            job.console_append("limit", error=Error(
+                ErrorKind.HARNESS, "limit",
+                response_endpoint=response_endpoint(job, len(job.chat_log)),
+            ))
         assert list(job.get_response_times()) == [(t0, 5.0)]
 
     def test_failed_delivery_keeps_message_pending(self, job_factory):
@@ -3706,7 +3773,7 @@ class TestGetResponseTimes:
         job.job_def.set_chat_style(ChatStyle.DIRECT)
         job.chat_log.append("initial")
         with pytest.raises(RuntimeError, match="delivery failed"):
-            with job.response_delivery():
+            with record_response_delivery(job):
                 raise RuntimeError("delivery failed")
         assert list(job.get_response_times()) == [(job.created_at, None)]
 
@@ -3718,25 +3785,28 @@ class TestGetResponseTimes:
         job.created_at = t0
         job.chat_log.append("initial")
         with patch("statek.executors.job.datetime", wraps=datetime) as clock:
-            with job.response_delivery():
-                with job.response_delivery():
+            with record_response_delivery(job):
+                with record_response_delivery(job):
                     clock.now.return_value = t0 + timedelta(seconds=5)
                 clock.now.return_value = t0 + timedelta(seconds=20)
         assert list(job.get_response_times()) == [(t0, 5.0)]
 
-    def test_recorded_first_response_survives_reopen(self, job_factory):
+    @pytest.mark.parametrize("with_turn", [False, True])
+    def test_recorded_first_response_survives_reopen(self, job_factory, with_turn):
         """Only first successful sends are persisted, independently of chat turns."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
         job.chat_log.append("initial")
+        if with_turn:
+            job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="reply"))
         with patch("statek.executors.job.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
-            with job.response_delivery():
+            with record_response_delivery(job):
                 pass
             clock.now.return_value = t0 + timedelta(seconds=20)
-            with job.response_delivery():
+            with record_response_delivery(job):
                 pass
         job.chat_log.append(UserLogItem(message="waiting", timestamp=t0 + timedelta(seconds=800)))
         job_uuid = db0.uuid(job)
@@ -3747,7 +3817,7 @@ class TestGetResponseTimes:
         assert list(restored.get_response_times()) == [
             (t0, 5.0), (t0 + timedelta(seconds=800), None)
         ]
-        assert len(restored.chat_log) == 2
+        assert len(restored.chat_log) == (3 if with_turn else 2)
 
     def test_initial_and_follow_up_messages_measure_to_first_llm_response(
         self, job_factory

@@ -48,6 +48,7 @@ from statek.executors.chat_log_item import (
     NotificationLogItem,
     PostProcessedItem,
     ReminderLogItem,
+    ResponseEndpoint,
     SubTaskLogItem,
     ToolError,
     WarmupLogItem,
@@ -96,6 +97,60 @@ if TYPE_CHECKING:
     from statek.agents.agent import Agent
     from statek.agents.dialog_agent import Reminder
     from statek.task import SubTaskHandler
+
+
+def iter_response_endpoints(job: "Job") -> Iterable[ResponseEndpoint]:
+    """Read raw successful-delivery and terminal-harness facts from existing logs."""
+    for item in job.chat_log:
+        if isinstance(item, (ChatLogItem, UserLogItem)):
+            yield from (getattr(item, "delivery_events", None) or ())
+    for error in (job.py_env.exceptions or {}).values():
+        endpoint = getattr(error, "response_endpoint", None)
+        if error.kind == ErrorKind.HARNESS and endpoint is not None:
+            yield endpoint
+
+
+def response_endpoint(job: "Job", eligible_before: int) -> ResponseEndpoint:
+    """Capture completion order without a persistent counter or per-message cache.
+
+    Callers must attach the result synchronously before yielding execution.
+    """
+    timestamp = datetime.now()
+    order = max((event[0] for event in iter_response_endpoints(job)), default=0) + 1
+    return order, eligible_before, timestamp
+
+
+@contextmanager
+def record_response_delivery(job: Optional["Job"] = None) -> Iterator[None]:
+    """Log a successful delivery without invoking the sender or managing its awaitable.
+
+    Capture eligibility and the log owner before sending. Only normal exit records
+    success; cancellation and errors propagate. A string-only history is normalized
+    in place after success, preserving positions, message content and its timestamp.
+    """
+    job = get_current_job() if job is None else job
+    if job is None or job.job_def.chat_style not in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
+        yield
+        return
+    cutoff = len(job.chat_log)
+    owner_index = next((index for index in range(cutoff - 1, -1, -1)
+                        if isinstance(job.chat_log[index], (LLM_LogItem, WarmupLogItem))), None)
+    if owner_index is None:
+        owner_index = next((index for index, item in enumerate(job.chat_log)
+                            if (isinstance(item, str) and item)
+                            or (isinstance(item, UserLogItem) and item.message)), None)
+    yield
+    if owner_index is None:
+        return
+    owner = job.chat_log[owner_index]
+    if isinstance(owner, str):
+        owner = UserLogItem(message=owner, timestamp=job.created_at)
+        job.chat_log[owner_index] = owner
+    endpoint = response_endpoint(job, cutoff)
+    if getattr(owner, "delivery_events", None) is None:
+        owner.delivery_events = []
+    owner.delivery_events.append(endpoint)
+
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
 WarmupBlockInput = Union[str, "CodeBlock"]
@@ -633,7 +688,6 @@ class Job:
         self.py_env = py_env if py_env is not None else PyEnv()
         # Current chat state
         self.chat_log = chat_log if chat_log is not None else []
-        self.__first_responses: Dict[int, datetime] = {}
         # Suspended job's awaited result
         self.awaited_result = awaited_result
         # Continuation instruction number
@@ -1246,14 +1300,12 @@ class Job:
             [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
         ) if warmup else []
 
-        # 1) Initial user message — chat_log[0] (str) and/or push_log[0].
+        # 1) Initial user message and/or push_log[0].
         initial_parts: List[str] = []
-        if (
-            chat_log
-            and isinstance(chat_log[0], str)
-            and chat_log[0]
-        ):
-            initial_parts.append(self._with_language_hint(chat_log[0]))
+        initial = chat_log[0] if chat_log else None
+        initial_message = initial.message if isinstance(initial, UserLogItem) else initial
+        if isinstance(initial_message, str) and initial_message:
+            initial_parts.append(self._with_language_hint(initial_message))
         if 0 in push_log:
             v = push_log[0]
             if isinstance(v, list):
@@ -1270,7 +1322,8 @@ class Job:
             )
 
         # 2) Walk chat_log items in chronological order.
-        items = [it for it in chat_log if not isinstance(it, str)]
+        items = [it for index, it in enumerate(chat_log)
+                 if not isinstance(it, str) and not (index == 0 and isinstance(it, UserLogItem))]
 
         # Pre-compute the console end position for each ChatLogItem (the
         # console_pos of the next ChatLogItem, or console_len for the last).
@@ -2106,49 +2159,6 @@ class Job:
             ):
                 yield DialogItem("assistant", body)
 
-    def _pending_response_waits(self) -> tuple[int, ...]:
-        """Identify dialog messages whose wait has not ended yet."""
-        if self.job_def.chat_style not in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
-            return ()
-        responses = getattr(self, "_Job__first_responses", {})
-        return tuple(
-            index for index, item in enumerate(self.chat_log)
-            if index not in responses and (
-                (isinstance(item, str) and item and self.created_at is not None)
-                or (isinstance(item, UserLogItem) and item.message)
-            )
-        )
-
-    def _finish_response_waits(self, pending_indices: tuple[int, ...], timestamp: datetime) -> None:
-        """Persist an endpoint without overwriting an earlier completion."""
-        if not pending_indices:
-            return
-        if not hasattr(self, "_Job__first_responses"):
-            self.__first_responses = {}
-        for index in pending_indices:
-            if index not in self.__first_responses:
-                self.__first_responses[index] = timestamp
-
-    def finish_response_wait(self) -> None:
-        """End outstanding dialog waits when a terminal harness error stops the job.
-
-        This records no reply, changes no execution state, and preserves completed
-        measurements. The worker invokes it before running critical-error handlers.
-        """
-        timestamp = datetime.now()
-        self._finish_response_waits(self._pending_response_waits(), timestamp)
-
-    @contextmanager
-    def response_delivery(self) -> Iterator[None]:
-        """End captured waits only after successful delivery.
-
-        Messages arriving during delivery remain pending. Exceptions and cancellation
-        propagate without recording a successful response.
-        """
-        pending_indices = self._pending_response_waits()
-        yield
-        self._finish_response_waits(pending_indices, datetime.now())
-
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
         """Return user-message timestamps paired with time until their wait ended.
 
@@ -2162,7 +2172,7 @@ class Job:
         response_times: List[tuple[datetime, Optional[float]]] = []
         pending_indices: List[int] = []
         if self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
-            responses = getattr(self, "_Job__first_responses", {})
+            endpoints = sorted(iter_response_endpoints(self), key=lambda event: event[0])
             for index, item in enumerate(self.chat_log):
                 message_time = None
                 if isinstance(item, str) and item:
@@ -2170,7 +2180,8 @@ class Job:
                 elif isinstance(item, UserLogItem) and item.message:
                     message_time = item.timestamp
                 if message_time is not None:
-                    response_time = responses.get(index)
+                    response_time = next((timestamp for _, cutoff, timestamp in endpoints
+                                          if index < cutoff), None)
                     response_times.append((
                         message_time,
                         (response_time - message_time).total_seconds() if response_time is not None else None,
