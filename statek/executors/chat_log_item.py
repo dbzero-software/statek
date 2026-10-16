@@ -20,6 +20,12 @@ import dbzero as db0
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock
 
+ResponseEndpoint = tuple[int, int, datetime]
+"""
+Endpoint for a completed response: its completion order, the exclusive end index of the 
+chat-log entries eligible for that response, and the completion timestamp.
+"""
+
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
     from statek.executors.post_processor import PostProcessor
@@ -42,6 +48,8 @@ class ChatLogItem:
     tool_log: Optional[Union[str, ToolError, List[Union[str, ToolError]]]] = None
     # Date and time of generating this log item
     timestamp: datetime = field(default_factory=datetime.now)
+    # Successful sends completed during this execution, independent of tool outcomes.
+    delivery_events: Optional[List[ResponseEndpoint]] = field(default=None, kw_only=True)
 
     def push_tool_result(self, tool_result: Union[str, ToolError]) -> int:
         """Append a tool result or error to tool_log and return its index.
@@ -152,5 +160,8 @@ class NotificationLogItem(ChatLogItem):
 @dataclass
 class UserLogItem:
     """User message submitted for job initiation or as a push notification."""
+
     message: str
     timestamp: datetime = field(default_factory=datetime.now)
+    # Delivery facts recorded here when no execution log item exists.
+    delivery_events: Optional[List[ResponseEndpoint]] = field(default=None, kw_only=True)

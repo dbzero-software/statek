@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import List, Dict, Optional, Union
 import dbzero as db0
 
@@ -31,6 +32,8 @@ class Error:
 
     kind: ErrorKind
     message: str
+    # Terminal harness closure: recording order, exclusive message cutoff, timestamp.
+    response_endpoint: Optional[tuple[int, int, datetime]] = field(default=None, kw_only=True)
 
 
 @db0.memo

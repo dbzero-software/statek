@@ -17,11 +17,14 @@
 import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.chat_style import ChatStyle
 from statek.extra_resources import ExtraResources
+from statek.dbzero_restricted import as_unrestricted
+from statek.system import _run_coroutine_result
+from statek.executors.job import record_response_delivery
 
 if TYPE_CHECKING:
     from statek.executors.job import Job
@@ -193,8 +196,12 @@ class DialogAgent(SupervisedAgent):
         """Populate ``_send_message`` impl in agent context."""
         original = self.send_message
 
-        def _send_message(body: str, media=None):
-            return original(body=body, media=media)
+        def _send_message(body: str, media: Any = None) -> Any:
+            with as_unrestricted(), record_response_delivery():
+                result = original(body=body, media=media)
+                if inspect.isawaitable(result):
+                    result = _run_coroutine_result(result)
+                return result
 
         _send_message.__name__ = "_send_message"
         _send_message.__doc__ = getattr(original, "__doc__", None)
@@ -207,7 +214,7 @@ class DialogAgent(SupervisedAgent):
         but is exposed to the LLM (and python_cli) as ``answer``. After
         forwarding the message it terminates the job via ``exit("Success")``.
         """
-        original = self.send_message
+        send_message = self._X__context['_send_message']
 
         def answer(body: str, media=None):
             """Deliver the final message to the user and end the dialog.
@@ -224,7 +231,7 @@ class DialogAgent(SupervisedAgent):
                 args=[],
                 kwargs={"body": body, "media": media},
             ))
-            original(body=body, media=media)
+            send_message(body=body, media=media)
             exit("Success")  # pylint: disable=consider-using-sys-exit
 
         answer.__name__ = "answer"

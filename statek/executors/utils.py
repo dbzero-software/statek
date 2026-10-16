@@ -39,6 +39,8 @@ from statek.executors.job import (
     JobDefError,
     job_def_identity_tag_for_job_def,
     parse_warmup_code,
+    record_response_delivery,
+    response_endpoint,
     _job_def_identity_tag,
 )
 from statek.provider_config import (
@@ -57,7 +59,7 @@ from statek.model_name import ensure_model_name, format_model_for_provider, sele
 from statek.settings import ChatStyle, full_agent_trace, get_statek_settings, statek_log
 from statek.system import inject_context
 from statek.python_sandbox import get_sandbox_policy
-from statek.dbzero_restricted import statek_internal_tool, llm_dbzero_restricted_context
+from statek.dbzero_restricted import as_unrestricted, statek_internal_tool, llm_dbzero_restricted_context
 from statek.utils import (
     CodeBlock,
     CallSpec,
@@ -949,9 +951,10 @@ async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
     if dialog is not None:
         dialog = _normalize_dialog_media_links(dialog)
     if dialog and MARKDOWN_MEDIA_LINK_PATTERN.search(dialog):
-        result = agent.send_message(body=dialog)
-        if inspect.iscoroutinefunction(agent.send_message):
-            await result
+        with as_unrestricted(), record_response_delivery():
+            result = agent.send_message(body=dialog)
+            if inspect.isawaitable(result):
+                await result
         return
 
     for body, media in parse_dialog(llm_resp):
@@ -959,9 +962,10 @@ async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
             kwargs = {"body": body}
             if media is not None:
                 kwargs["media"] = media
-            result = agent.send_message(**kwargs)
-            if inspect.iscoroutinefunction(agent.send_message):
-                await result
+            with as_unrestricted(), record_response_delivery():
+                result = agent.send_message(**kwargs)
+                if inspect.isawaitable(result):
+                    await result
 
 
 def _with_statek_job_context(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -1418,10 +1422,13 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
                            f"cost: ${job.usage.total_cost or 0.0:.4f}", level='info')
             except LLM_HarnessError as e:
+                endpoint = response_endpoint(job, len(job.chat_log))
                 error_msg = f"LLM_HarnessError: {e}"
                 statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"
-                job.console_append(error_msg, error=Error(ErrorKind.HARNESS, error_msg))
+                job.console_append(error_msg, error=Error(
+                    ErrorKind.HARNESS, error_msg, response_endpoint=endpoint,
+                ))
                 job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)
