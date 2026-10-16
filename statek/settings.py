@@ -370,12 +370,19 @@ _ACTIVE_STATEK_SETTINGS: Optional[StatekSettings] = None
 
 
 def set_statek_settings(settings: Optional[StatekSettings]) -> None:
-    """Set the process-active Statek settings instance."""
+    """Set active settings and invalidate derived harness and sandbox caches.
+
+    Previously retrieved harness instances remain unchanged; subsequent steps
+    retrieve a new instance using the active configuration.
+    """
     global _ACTIVE_STATEK_SETTINGS  # pylint: disable=global-statement
     _ACTIVE_STATEK_SETTINGS = settings
     get_statek_settings.cache_clear()
+    # The harness imports settings, so defer this import until configuration changes.
+    from statek.llm_harness import get_llm_harness  # pylint: disable=import-outside-toplevel,cyclic-import
     from statek.python_sandbox import reset_sandbox_policy  # pylint: disable=import-outside-toplevel
 
+    get_llm_harness.cache_clear()
     reset_sandbox_policy()
 
 

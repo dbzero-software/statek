@@ -28,7 +28,9 @@ from statek.future import FutureResult
 from statek.exceptions import FutureError, LLM_HarnessError
 from statek.llm_harness import LLM_Harness
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, CallParams, OpenRouter_API
-from statek.settings import LLM_API_Settings
+from statek.settings import (
+    LLM_API_Settings, StatekSettings, get_statek_settings, set_statek_settings,
+)
 from statek.system import error_handler
 from statek.task import SubTaskHandler
 from statek.task_difficulty import TaskDifficulty
@@ -36,6 +38,26 @@ from statek.utils import CodeBlock, CallSpec
 
 
 _critical_error_calls = []
+
+
+@pytest.mark.asyncio
+async def test_step_uses_updated_turn_limit(job_factory) -> None:
+    """The next real step uses updated limits without erasing job history."""
+    previous = get_statek_settings()
+    job = job_factory(warmup_code='exit("ok")')
+    for _ in range(4):
+        job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="pass"))
+    try:
+        set_statek_settings(StatekSettings(max_turns=3, _env_file=None))
+        with patch("statek.executors.utils.LLM_API.get") as provider:
+            with pytest.raises(LLM_HarnessError, match="turns"):
+                await run_job_step(job)
+            set_statek_settings(StatekSettings(max_turns=None, _env_file=None))
+            assert await run_job_step(job)
+            assert job.num_turns == 4
+            provider.assert_not_called()
+    finally:
+        set_statek_settings(previous)
 
 
 # pylint: disable=protected-access
