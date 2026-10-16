@@ -21,7 +21,10 @@ from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock
 
 ResponseEndpoint = tuple[int, int, datetime]
-"""Recording order, exclusive message-position cutoff, and completion time."""
+"""
+Endpoint for a completed response: its completion order, the exclusive end index of the 
+chat-log entries eligible for that response, and the completion timestamp.
+"""
 
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
