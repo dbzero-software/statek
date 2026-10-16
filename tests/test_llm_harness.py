@@ -5,7 +5,26 @@ from unittest.mock import MagicMock
 import pytest
 
 from statek.exceptions import LLM_HarnessError
-from statek.llm_harness import LLM_Harness
+from statek.llm_harness import LLM_Harness, get_llm_harness
+from statek.settings import StatekSettings
+
+
+def test_environment_unlimited_reaches_harness(monkeypatch):
+    """Configured unlimited turns preserve independent exception safeguards."""
+    monkeypatch.setenv("STATEK_MAX_TURNS", "none")
+    settings = StatekSettings(_env_file=None)
+    monkeypatch.setattr("statek.llm_harness.get_statek_settings", lambda: settings)
+    get_llm_harness.cache_clear()
+    try:
+        harness = get_llm_harness()
+        assert harness.max_turns is None
+        harness.check_before_step(_make_job(num_turns=1_000_000, num_completions=10))
+        with pytest.raises(LLM_HarnessError, match="exceptions"):
+            harness.check_before_step(_make_job(exception_count=settings.max_exceptions + 1))
+        with pytest.raises(LLM_HarnessError, match="token"):
+            harness.check_after_step(_make_job(approx_token_usage=settings.max_token_usage + 1))
+    finally:
+        get_llm_harness.cache_clear()
 
 
 def _make_job(num_turns=0, exception_count=0, max_consecutive_exceptions=0,

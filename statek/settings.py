@@ -21,7 +21,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from functools import lru_cache
 from typing import Any, Optional, Dict
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from statek.chat_style import ChatStyle  # noqa: F401  # re-exported for backward compatibility
 from statek.multi_source_settings import (
@@ -75,8 +75,8 @@ class StatekSettings(MultiSourceBaseSettings):
     logs_path: Optional[str] = None
     examples_dir: Optional[str] = None
     documents_dir: Optional[str] = None
-    """The maximum allowed number of LLM turns per conversation"""
-    max_turns: int = 5
+    """Maximum LLM turns; None (STATEK_MAX_TURNS=none) disables the limit; zero is invalid."""
+    max_turns: Optional[int] = 5
     """The maximum allowed total number of exceptions per conversation"""
     max_exceptions: int = 3
     """Maximum number of consecutive exceptions per conversation"""
@@ -132,6 +132,22 @@ class StatekSettings(MultiSourceBaseSettings):
 
     model_config = SettingsConfigDict(extra='ignore')
 
+    @field_validator('max_turns', mode='before')
+    @classmethod
+    def parse_unlimited_turns(cls, value: Any) -> Any:
+        """Normalize the explicit unlimited marker before integer validation."""
+        if isinstance(value, str) and value.strip().casefold() == 'none':
+            return None
+        return value
+
+    @field_validator('max_turns')
+    @classmethod
+    def reject_zero_turns(cls, value: Optional[int]) -> Optional[int]:
+        """Reject zero during configuration rather than failing a running job."""
+        if value == 0:
+            raise ValueError('max_turns must not be zero; use None for unlimited turns')
+        return value
+
     def __init__(self, **data):  # pylint: disable=too-many-branches,too-many-statements
         """Initialize StatekSettings by parsing environment variables.
 
@@ -139,6 +155,9 @@ class StatekSettings(MultiSourceBaseSettings):
         creates LLM_API_Settings instances for each provider.
         Also parses prompt definition files from the configured directory.
         """
+        env_max_turns = os.environ.get('STATEK_MAX_TURNS')
+        if env_max_turns is not None and 'max_turns' not in data:
+            data['max_turns'] = env_max_turns
         super().__init__(**data)
 
         # Parse environment variables to build llm_api_settings dictionary
@@ -169,7 +188,6 @@ class StatekSettings(MultiSourceBaseSettings):
 
         # Parse STATEK_ prefixed env vars for harness settings
         for attr, env_var, conv in [
-            ('max_turns', 'STATEK_MAX_TURNS', int),
             ('max_exceptions', 'STATEK_MAX_EXCEPTIONS', int),
             ('max_consecutive_exceptions', 'STATEK_MAX_CONSECUTIVE_EXCEPTIONS', int),
             ('max_token_usage', 'STATEK_MAX_TOKEN_USAGE', int),
