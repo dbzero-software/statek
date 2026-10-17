@@ -1,20 +1,19 @@
 FROM python:3.11-slim as builder
+COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /uvx /bin/
 
 WORKDIR /app
 
-# Install build dependencies
-RUN pip install --no-cache-dir build
-
 # Copy package files
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE NOTICE THIRD_PARTY_NOTICES.md MANIFEST.in ./
 COPY statek/ ./statek/
 COPY tests/ ./tests/
 
 # Build the package
-RUN python -m build --sdist
+RUN uv build --sdist
 
 # Final stage
 FROM python:3.11-slim
+COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -22,5 +21,5 @@ WORKDIR /app
 COPY --from=builder /app/dist/*.tar.gz /app/dist/
 
 # Install the package
-RUN pip install --no-cache-dir /app/dist/*.tar.gz
+RUN uv pip install --system --no-cache /app/dist/*.tar.gz
 

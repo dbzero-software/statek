@@ -21,8 +21,8 @@ try:
     import dbzero  # noqa: F401
 except ImportError as exc:
     raise ImportError(
-        "statek requires dbzero. Install it with `pip install statek[dbzero]` "
-        "or install dbzero-pro with `pip install statek[dbzero-pro]`."
+        "statek requires dbzero. Install it with `uv pip install statek[dbzero]` "
+        "or install dbzero-pro with `uv pip install statek[dbzero-pro]`."
     ) from exc
 
 from .settings import (

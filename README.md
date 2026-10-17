@@ -120,10 +120,13 @@ This is the minimal shape of a STATEK worker: install the package, open dbzero
 state, define an agent, start a worker, and submit work. The full walkthrough is
 in the [STATEK Quickstart](https://docs.dbzero.io/statek/quickstart).
 
-Install STATEK with [dbzero](https://docs.dbzero.io) support:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then install
+STATEK with [dbzero](https://docs.dbzero.io) support:
 
 ```bash
-pip install "statek[dbzero]"
+uv venv
+source .venv/bin/activate
+uv pip install "statek[dbzero]"
 ```
 
 For deployments that need advanced
@@ -131,7 +134,7 @@ For deployments that need advanced
 install:
 
 ```bash
-pip install "statek[dbzero-pro]"
+uv pip install "statek[dbzero-pro]"
 ```
 
 Initialize dbzero and open a prefix before constructing persisted STATEK
@@ -322,14 +325,14 @@ dbzero:
 Create and activate a virtual environment:
 
 ```bash
-python -m venv venv
+uv venv venv
 source venv/bin/activate
 ```
 
 Install development dependencies:
 
 ```bash
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 ```
 
 Run lint and tests:
