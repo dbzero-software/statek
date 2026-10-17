@@ -19,6 +19,7 @@ import traceback
 import asyncio
 import builtins
 import functools
+import time
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional, Sequence, Set, Tuple, TYPE_CHECKING, Union
@@ -55,6 +56,7 @@ from statek.llm_harness import get_llm_harness
 from statek.pyenv import Error, ErrorKind
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.settings import ChatStyle, full_agent_trace, get_statek_settings, statek_log
+from statek.latency_log import emit as latency_emit, enabled as latency_enabled
 from statek.system import inject_context
 from statek.python_sandbox import get_sandbox_policy
 from statek.dbzero_restricted import statek_internal_tool, llm_dbzero_restricted_context
@@ -1190,15 +1192,33 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
     _log_pending_console(job)
     job._process_pending_notifications()  # pylint: disable=protected-access
     request_difficulty = job.get_current_difficulty()
+    prompt_started = time.monotonic() if latency_enabled() else None
     request = job.get_next_request(difficulty=request_difficulty)
     request["metadata"] = dict(request["metadata"] or {})
     request["metadata"]["PROVIDER"] = provider_to_use
     # Materialize chat_history generator so it can be consumed by process_request
     if 'chat_history' in request:
         request['chat_history'] = list(request['chat_history'])
+    if prompt_started is not None:
+        latency_emit("statek.prompt_prepared", started=prompt_started,
+                     job_uuid=str(db0.uuid(job)), role=job.job_def.agent.role)
 
     # Step 13: Run the request with LLM API - await response
-    response = await llm_api.process_request(**request)
+    llm_started = time.monotonic() if latency_enabled() else None
+    try:
+        response = await llm_api.process_request(**request)
+    except BaseException:
+        if llm_started is not None:
+            latency_emit("statek.llm_request", started=llm_started,
+                         job_uuid=str(db0.uuid(job)), role=job.job_def.agent.role,
+                         provider=provider_to_use, outcome="error")
+        raise
+    if llm_started is not None:
+        latency_emit("statek.llm_request", started=llm_started,
+                     job_uuid=str(db0.uuid(job)), role=job.job_def.agent.role,
+                     provider=provider_to_use, outcome="ok",
+                     input_tokens=response.stats.input_tokens,
+                     output_tokens=response.stats.output_tokens)
 
     # accumulate usage stats from LLM API response
     job.usage.total_bytes_sent += response.stats.total_bytes_sent
@@ -1310,6 +1330,10 @@ def process_push_notifications(
                     if not isinstance(message, str):
                         job.add_ext_ref(message)
                     job.push_user_message(message)
+                    if latency_enabled() and not isinstance(message, str):
+                        latency_emit("statek.job_notification", job_uuid=str(db0.uuid(job)),
+                                     role=job.job_def.agent.role,
+                                     message_uuid=str(db0.uuid(message)))
                 except Exception:  # pylint: disable=broad-except
                     pass
                 processed += 1
@@ -1371,6 +1395,9 @@ def process_agent_events(
             for event in events:
                 job = create_new_job(agent, shared_vars={local_name: event})
                 job.bind_critical_error_context(event)
+                if latency_enabled():
+                    latency_emit("statek.job_created", job_uuid=str(db0.uuid(job)),
+                                 role=agent.role, message_uuid=str(db0.uuid(event)))
                 processed += 1
 
 
@@ -1409,6 +1436,10 @@ def handle_critical_error(error: Optional[Exception] = None) -> None:
 async def job_worker(semaphore, job: Job, provider: str = None):
     async with semaphore:
         with _statek_ctx_scope(_statek_ctx_for_job(job)):
+            started = time.monotonic() if latency_enabled() else None
+            if started is not None:
+                latency_emit("statek.job_step_started", job_uuid=str(db0.uuid(job)),
+                             role=job.job_def.agent.role)
             try:
                 # Log which agent is running this job
                 agent_name = job.job_def.agent.role if job.job_def.agent else "unknown"
@@ -1425,6 +1456,7 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)
+
             except Exception as e:
                 # If job fails, write full stack trace to console and set status to DONE
                 import traceback
@@ -1434,6 +1466,11 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)
                 handle_critical_error(e)
+            finally:
+                if started is not None:
+                    latency_emit("statek.job_step_finished", started=started,
+                                 job_uuid=str(db0.uuid(job)), role=job.job_def.agent.role,
+                                 status=str(job.status))
 
 async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     *, queue_prefixes: Sequence[Union[str, int]], start_jobs_func: Callable = None,

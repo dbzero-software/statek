@@ -17,6 +17,7 @@ import asyncio
 import functools
 import importlib
 import inspect
+import time
 import types as _types_module
 from copy import copy
 from datetime import date, datetime, time as _time
@@ -28,6 +29,7 @@ from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
 from .executors.chat_log_item import ChatLogItem
 from .utils import find_locals, get_current_agent_name, get_current_job, _statek_ctx_scope
+from .latency_log import emit as latency_emit, enabled as latency_enabled
 
 
 _TOOL_REGISTRY: list[Callable] = []
@@ -335,14 +337,32 @@ def tool(f=None, *, system: bool = False, target=None, error_handler=None,
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            started = time.monotonic() if latency_enabled() else None
             with as_unrestricted():
-                args, kwargs = _prepare_decorated_call(func, args, kwargs)
-                if inspect.iscoroutinefunction(func):
-                    result = _run_coroutine_result(func(*args, **kwargs))
-                else:
-                    result = func(*args, **kwargs)
-                _bind_error_handler_result(result, error_handler)
-                return result
+                job_uuid = None
+                if started is not None:
+                    job = get_current_job()
+                    if job is not None:
+                        try:
+                            job_uuid = str(db0.uuid(job))
+                        except Exception:  # Diagnostics must not affect tool execution.
+                            pass
+                outcome = "ok"
+                try:
+                    args, kwargs = _prepare_decorated_call(func, args, kwargs)
+                    if inspect.iscoroutinefunction(func):
+                        result = _run_coroutine_result(func(*args, **kwargs))
+                    else:
+                        result = func(*args, **kwargs)
+                    _bind_error_handler_result(result, error_handler)
+                    return result
+                except BaseException:
+                    outcome = "error"
+                    raise
+                finally:
+                    if started is not None:
+                        latency_emit("statek.tool", started=started, job_uuid=job_uuid,
+                                     tool_name=func.__name__, outcome=outcome)
 
         return _register_wrapper(wrapper, system, target, hidden)
 

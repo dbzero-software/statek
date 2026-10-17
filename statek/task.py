@@ -34,6 +34,7 @@ from .settings import get_provider_settings as _get_provider_settings
 from .settings import get_statek_settings as _get_statek_settings
 from .provider_config import ProviderConfig, resolve_settings_provider_config
 from .utils import CodeBlock, get_current_job
+from .latency_log import emit as latency_emit, enabled as latency_enabled
 
 
 def _job_params_from_kwargs(agent: Agent, kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -511,6 +512,9 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
     )
     if parent_job is not None:
         job.add_error_handlers_from(parent_job)
+    if latency_enabled():
+        latency_emit("statek.job_created", job_uuid=str(db0.uuid(job)), role=agent.role,
+                     parent_job_uuid=str(db0.uuid(parent_job)) if parent_job is not None else None)
     return job
 
 
