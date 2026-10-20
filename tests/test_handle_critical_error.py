@@ -17,7 +17,7 @@ from statek.llm_harness import LLM_Harness
 from statek.exceptions import LLM_HarnessError
 from statek.pyenv import Error, ErrorKind
 from statek.executors.job import Job, JobDefError, JobStatus
-from statek.executors.job import record_response_delivery
+from statek.agents.dialog_agent import record_response_delivery
 from statek.executors.chat_log_item import LLM_LogItem, UserLogItem
 from statek.executors.utils import handle_critical_error, job_worker
 from statek.system import error_handler
@@ -53,7 +53,7 @@ class TestHandleCriticalError:
         job.job_def.set_chat_style(ChatStyle.DIRECT)
         t0 = datetime(2026, 10, 15, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         harness = (
             LLM_Harness(None, 100, 100, -1) if post_step
             else LLM_Harness(-1, 100, 100, None)
@@ -62,7 +62,8 @@ class TestHandleCriticalError:
             step_context = patch("statek.executors.utils.run_job_step", new_callable=AsyncMock)
         else:
             step_context = patch("statek.executors.utils.get_llm_harness", return_value=harness)
-        with patch("statek.executors.job.datetime", wraps=datetime) as clock, step_context as step:
+        with patch("statek.executors.utils.datetime", wraps=datetime) as clock, \
+             step_context as step:
             clock.now.return_value = t0 + timedelta(seconds=5)
             if post_step:
                 step.side_effect = lambda *args: harness.check_after_step(job)
@@ -83,8 +84,9 @@ class TestHandleCriticalError:
         job.job_def.set_chat_style(style)
         t0 = datetime(2026, 10, 15, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
-        with patch("statek.executors.job.datetime", wraps=datetime) as clock:
+        job.push_user_message("initial")
+        with patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock, \
+             patch("statek.executors.utils.datetime", new=clock):
             if already_answered:
                 clock.now.return_value = t0 + timedelta(seconds=2)
                 with record_response_delivery(job):

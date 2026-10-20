@@ -1149,7 +1149,7 @@ class TestDelegateMuteDialog:
 
         assert isinstance(result.job, Job)
         assert result.job.job_def.agent is agent
-        assert result.job.chat_log[0] == "hello"
+        assert result.job.chat_log[0].message == "hello"
         assert result.job.status == JobStatus.READY
 
     def test_non_string_initial_message_uses_message_adapter(
@@ -1161,7 +1161,7 @@ class TestDelegateMuteDialog:
 
         result = delegate_mute_dialog(agent, message=MessageForAdapter("object"))
 
-        assert result.job.chat_log[0] == "adapted-object"
+        assert result.job.chat_log[0].message == "adapted-object"
 
     def test_result_returns_chat_responses_on_success(self, db0_fixture, mock_settings):
         """On completion, delegate_mute_dialog resolves to user-facing chat responses."""
@@ -1304,7 +1304,7 @@ class TestStartDialog:
 
         job = start_dialog(agent, message=MessageForAdapter("object"))
 
-        assert job.chat_log[0] == "adapted-object"
+        assert job.chat_log[0].message == "adapted-object"
 
     def test_non_string_initial_message_falls_back_to_str(
         self, db0_fixture, mock_settings
@@ -1314,7 +1314,7 @@ class TestStartDialog:
 
         job = start_dialog(agent, message=MessageForAdapter("object"))
 
-        assert job.chat_log[0] == "fallback-object"
+        assert job.chat_log[0].message == "fallback-object"
 
     def test_kwargs_passed_as_job_params(self, db0_fixture, mock_settings):
         """Extra kwargs become job_params on the JobDef."""

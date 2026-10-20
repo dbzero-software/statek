@@ -48,7 +48,6 @@ from statek.executors.chat_log_item import (
     NotificationLogItem,
     PostProcessedItem,
     ReminderLogItem,
-    ResponseEndpoint,
     SubTaskLogItem,
     ToolError,
     WarmupLogItem,
@@ -97,59 +96,6 @@ if TYPE_CHECKING:
     from statek.agents.agent import Agent
     from statek.agents.dialog_agent import Reminder
     from statek.task import SubTaskHandler
-
-
-def iter_response_endpoints(job: "Job") -> Iterable[ResponseEndpoint]:
-    """Read raw successful-delivery and terminal-harness facts from existing logs."""
-    for item in job.chat_log:
-        if isinstance(item, (ChatLogItem, UserLogItem)):
-            yield from (getattr(item, "delivery_events", None) or ())
-    for error in (job.py_env.exceptions or {}).values():
-        endpoint = getattr(error, "response_endpoint", None)
-        if error.kind == ErrorKind.HARNESS and endpoint is not None:
-            yield endpoint
-
-
-def response_endpoint(job: "Job", eligible_before: int) -> ResponseEndpoint:
-    """Capture completion order without a persistent counter or per-message cache.
-
-    Callers must attach the result synchronously before yielding execution.
-    """
-    timestamp = datetime.now()
-    order = max((event[0] for event in iter_response_endpoints(job)), default=0) + 1
-    return order, eligible_before, timestamp
-
-
-@contextmanager
-def record_response_delivery(job: Optional["Job"] = None) -> Iterator[None]:
-    """Log a successful delivery without invoking the sender or managing its awaitable.
-
-    Capture eligibility and the log owner before sending. Only normal exit records
-    success; cancellation and errors propagate. A string-only history is normalized
-    in place after success, preserving positions, message content and its timestamp.
-    """
-    job = get_current_job() if job is None else job
-    if job is None or job.job_def.chat_style not in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
-        yield
-        return
-    cutoff = len(job.chat_log)
-    owner_index = next((index for index in range(cutoff - 1, -1, -1)
-                        if isinstance(job.chat_log[index], (LLM_LogItem, WarmupLogItem))), None)
-    if owner_index is None:
-        owner_index = next((index for index, item in enumerate(job.chat_log)
-                            if (isinstance(item, str) and item)
-                            or (isinstance(item, UserLogItem) and item.message)), None)
-    yield
-    if owner_index is None:
-        return
-    owner = job.chat_log[owner_index]
-    if isinstance(owner, str):
-        owner = UserLogItem(message=owner, timestamp=job.created_at)
-        job.chat_log[owner_index] = owner
-    endpoint = response_endpoint(job, cutoff)
-    if getattr(owner, "delivery_events", None) is None:
-        owner.delivery_events = []
-    owner.delivery_events.append(endpoint)
 
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
@@ -698,6 +644,9 @@ class Job:
         self.error: Optional[JobDefError] = error
         # Timestamp when the job object was created
         self.created_at = created_at or datetime.now()
+        if (self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG)
+                and self.chat_log and isinstance(self.chat_log[0], str)):
+            self.chat_log[0] = UserLogItem(self.chat_log[0], self.created_at)
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
         # The last dynamically-resolved difficulty level in this task.
@@ -1269,7 +1218,7 @@ class Job:
         Lazy generator producing a normalised, provider-agnostic timeline:
 
           1. Optional USER item with the initial user message — sourced from
-             ``chat_log[0]`` (str, set by ``push_user_message`` in
+             ``chat_log[0]`` (UserLogItem, set by ``push_user_message`` in
              MD_DIALOG/DIRECT) and/or ``py_env.push_log[0]``.  When neither
              exists this slot is omitted.
           2. Warmup blocks as alternating ASSISTANT (code or tool-call request)
@@ -2163,28 +2112,19 @@ class Job:
         """Return user-message timestamps paired with time until their wait ended.
 
         Only timestamped user messages stored in ``chat_log`` are included:
-        the initial dialog-style message (stored as a plain ``str`` and
-        measured from ``created_at``) and any subsequent ``UserLogItem``
-        entries. Dialog waits end at first successful send completion or terminal
-        harness failure, without changing the execution-driving chat log. Non-dialog jobs retain
-        their LLM-log timing. Still-pending messages have duration ``None``.
+        the initial dialog-style message and subsequent ``UserLogItem`` entries.
+        Dialog timing reads each message's ``wait_finished_at``; an unset value
+        means its wait is still pending. Non-dialog jobs retain their LLM-log timing.
         """
         response_times: List[tuple[datetime, Optional[float]]] = []
         pending_indices: List[int] = []
         if self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
-            endpoints = sorted(iter_response_endpoints(self), key=lambda event: event[0])
-            for index, item in enumerate(self.chat_log):
-                message_time = None
-                if isinstance(item, str) and item:
-                    message_time = self.created_at
-                elif isinstance(item, UserLogItem) and item.message:
-                    message_time = item.timestamp
-                if message_time is not None:
-                    response_time = next((timestamp for _, cutoff, timestamp in endpoints
-                                          if index < cutoff), None)
+            for item in self.chat_log:
+                if isinstance(item, UserLogItem) and item.message:
                     response_times.append((
-                        message_time,
-                        (response_time - message_time).total_seconds() if response_time is not None else None,
+                        item.timestamp,
+                        (item.wait_finished_at - item.timestamp).total_seconds()
+                        if item.wait_finished_at is not None else None,
                     ))
             return response_times
 
@@ -2565,9 +2505,8 @@ class Job:
         Intended for processing push notifications (e.g. a user writing a
         message into a completed job).
 
-        In MD_DIALOG chat style the message is stored directly in
-        ``chat_log`` — as a plain ``str`` when ``chat_log`` is empty (first
-        message) or as a ``UserLogItem`` for subsequent messages.
+        In MD_DIALOG and DIRECT styles messages are stored as ``UserLogItem``
+        in ``chat_log``. The first message retains the job creation timestamp.
 
         For all other chat styles the message is appended to
         ``py_env.push_log`` keyed by the current console length.
@@ -2589,7 +2528,7 @@ class Job:
 
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             if not self.chat_log:
-                self.chat_log.append(message)
+                self.chat_log.append(UserLogItem(message=message, timestamp=self.created_at))
             else:
                 self.chat_log.append(UserLogItem(message=message))
         else:

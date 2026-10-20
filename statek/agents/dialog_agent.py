@@ -16,18 +16,38 @@
 
 import inspect
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Optional
 import dbzero as db0
 from statek.agents.agent import SupervisedAgent
 from statek.chat_style import ChatStyle
 from statek.extra_resources import ExtraResources
 from statek.dbzero_restricted import as_unrestricted
 from statek.system import _run_coroutine_result
-from statek.executors.job import record_response_delivery
+from statek.executors.chat_log_item import UserLogItem, finish_message_waits
+from statek.utils import get_current_job
 
 if TYPE_CHECKING:
     from statek.executors.job import Job
+
+
+@contextmanager
+def record_response_delivery(job: Optional["Job"] = None) -> Iterator[None]:
+    """Close pre-send message waits only after successful send completion.
+
+    Captured references exclude messages arriving during the send. The caller
+    owns awaiting; cancellation or failure leaves waits open.
+    """
+    job = get_current_job() if job is None else job
+    if job is None or job.job_def.chat_style not in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):  # pylint: disable=no-member
+        yield
+        return
+    messages = [item for item in job.chat_log
+                if isinstance(item, UserLogItem) and item.message and item.wait_finished_at is None]
+    yield
+    finish_message_waits(messages, datetime.now())
 
 
 def _validate_send_message(send_message: Callable) -> None:

@@ -21,6 +21,7 @@ import builtins
 import functools
 import re
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Callable, Optional, Sequence, Set, Tuple, TYPE_CHECKING, Union
 from contextlib import contextmanager
 import dbzero as db0
@@ -39,8 +40,6 @@ from statek.executors.job import (
     JobDefError,
     job_def_identity_tag_for_job_def,
     parse_warmup_code,
-    record_response_delivery,
-    response_endpoint,
     _job_def_identity_tag,
 )
 from statek.provider_config import (
@@ -49,7 +48,9 @@ from statek.provider_config import (
     provider_configs_match,
     resolve_settings_provider_config,
 )
-from statek.executors.chat_log_item import ChatLogItem, ToolError, WarmupLogItem
+from statek.executors.chat_log_item import (
+    ChatLogItem, ToolError, WarmupLogItem, UserLogItem, finish_message_waits,
+)
 from statek.executors.post_processor import post_processing_identity
 from statek.statek_push_queue import StatekPushQueue
 from statek.llm_api import LLM_API, LLM_Response
@@ -938,7 +939,9 @@ async def handle_dialog(llm_resp: str, _local_context: Optional[dict] = None):
     Raises:
         TypeError: If the current agent is not a DialogAgent.
     """
-    from statek.agents.dialog_agent import DialogAgent  # pylint: disable=import-outside-toplevel
+    from statek.agents.dialog_agent import (  # pylint: disable=import-outside-toplevel
+        DialogAgent, record_response_delivery,
+    )
 
     agent = get_current_agent()
     if not isinstance(agent, DialogAgent):
@@ -1422,12 +1425,15 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                 statek_log(f"Agent '{agent_name}' job {db0.uuid(job)} "
                            f"cost: ${job.usage.total_cost or 0.0:.4f}", level='info')
             except LLM_HarnessError as e:
-                endpoint = response_endpoint(job, len(job.chat_log))
+                if job.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
+                    finish_message_waits(
+                        (item for item in job.chat_log if isinstance(item, UserLogItem)), datetime.now(),
+                    )
                 error_msg = f"LLM_HarnessError: {e}"
                 statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"
                 job.console_append(error_msg, error=Error(
-                    ErrorKind.HARNESS, error_msg, response_endpoint=endpoint,
+                    ErrorKind.HARNESS, error_msg,
                 ))
                 job.error = JobDefError(e)
                 job.set_status(JobStatus.DONE)

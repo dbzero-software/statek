@@ -70,6 +70,34 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
     """Successful send completion, rather than an LLM turn, ends latency."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_send_tool_preserves_result_and_closes_wait(self, db0_fixture, asynchronous):
+        """The existing send tool handles both sender kinds without an extra API."""
+        agent = DialogAgent(
+            send_message=_timing_send_async if asynchronous else _timing_send_result,
+            _metadata={"MODEL": "test-model"},
+        )
+        job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
+        agent.init_context()
+        job.push_user_message("initial")
+        sender = (AsyncMock(return_value="accepted") if asynchronous
+                  else MagicMock(return_value="accepted"))
+        with patch(f"{__name__}._timing_sender", new=sender), _statek_ctx_scope({"job": job}):
+            result = agent.context["_send_message"](body="reply")
+        assert result == (None if asynchronous else "accepted")
+        assert job.chat_log[0].wait_finished_at is not None
+        sender.assert_called_once()
+
+    def test_sync_send_tool_does_not_run_coroutine(self, db0_fixture):
+        """Synchronous callbacks keep their synchronous execution path."""
+        agent = DialogAgent(send_message=_timing_send_result, _metadata={"MODEL": "test-model"})
+        agent.init_context()
+        with patch(f"{__name__}._timing_sender", return_value="accepted"), \
+             patch("statek.agents.dialog_agent._run_coroutine_result") as runner:
+            assert agent.context["_send_message"](body="reply") == "accepted"
+        runner.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_multiple_sends_in_one_turn_keep_distinct_eligibility(self, db0_fixture):
         """A second send in the same turn can answer a message arriving during the first."""
         agent = DialogAgent(send_message=_timing_send_async, _metadata={"MODEL": "test-model"})
@@ -77,7 +105,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         t0 = datetime(2026, 10, 15, 12)
         job.created_at = t0
         turn = LLM_LogItem(console_pos=0, llm_resp=CodeBlock(tool_calls=[]))
-        job.chat_log.extend(["initial", turn])
+        job.chat_log.extend([UserLogItem("initial", job.created_at), turn])
         sent = 0
 
         async def sending(**kwargs):
@@ -88,13 +116,13 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
 
         with _statek_ctx_scope({"job": job, "agent": agent}), \
              patch("tests.test_run_job_step._timing_sender", sending), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
             await handle_dialog("first")
             assert list(job.get_response_times()) == [(t0, 5.0), (t0 + timedelta(seconds=3), None)]
             clock.now.return_value = t0 + timedelta(seconds=9)
             await handle_dialog("second")
-        assert len(turn.delivery_events) == 2
+        assert job.chat_log[0].wait_finished_at == t0 + timedelta(seconds=5)
         assert list(job.get_response_times()) == [(t0, 5.0), (t0 + timedelta(seconds=3), 6.0)]
 
     @pytest.mark.asyncio
@@ -113,16 +141,16 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
                 "code": f"_send_message('reply'); {continuation}",
             }),
         ]))
-        job.chat_log.extend(["initial", turn])
+        job.chat_log.extend([UserLogItem("initial", job.created_at), turn])
         with patch("tests.test_run_job_step._timing_sender", MagicMock()), \
              patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()), \
              patch("statek.executors.utils.LLM_API") as api, \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             api.get.return_value.process_request = AsyncMock(return_value=_llm_response("finished"))
             clock.now.return_value = t0 + timedelta(seconds=5)
             await run_job_step(job)
         assert list(job.get_response_times()) == [(t0, 5.0)]
-        assert len(turn.delivery_events) == 1
+        assert job.chat_log[0].wait_finished_at == t0 + timedelta(seconds=5)
         if suspend:
             assert job.status == JobStatus.SUSPENDED
         else:
@@ -142,7 +170,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         """Only the trusted delivery runs unrestricted, including after awaiting."""
         agent = DialogAgent(send_message=_timing_send_async, _metadata={"MODEL": "test-model"})
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
 
         async def sending(**kwargs):
             assert not _DBZERO_RESTRICTED_CONTEXT.get()
@@ -169,7 +197,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         """Cancellation cannot be mistaken for a completed delivery."""
         agent = DialogAgent(send_message=_timing_send_async, _metadata={"MODEL": "test-model"})
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         entered = asyncio.Event()
 
         async def sending(**kwargs):
@@ -211,7 +239,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         t0 = datetime(2026, 10, 15, 12)
         for job in (first, second):
             job.created_at = t0
-            job.chat_log.append("initial")
+            job.push_user_message("initial")
         entered = asyncio.Event()
         release = asyncio.Event()
 
@@ -221,7 +249,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
                 await release.wait()
 
         with patch("tests.test_run_job_step._timing_sender", sending), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             with _statek_ctx_scope({"job": first, "agent": agent}):
                 task = asyncio.create_task(handle_dialog("first"))
             await entered.wait()
@@ -246,7 +274,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         )
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         turn = LLM_LogItem(console_pos=0, llm_resp=CodeBlock(tool_calls=[
             CallSpec(id="answer-call", func_name="python_cli", kwargs={"code": "answer('Done.')"})
         ]))
@@ -256,7 +284,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         sender = AsyncMock()
         with patch("tests.test_run_job_step._timing_sender", sender), \
              patch("statek.executors.utils.get_llm_harness", return_value=MagicMock()), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
             assert await run_job_step(job) is True
         sender.assert_awaited_once_with(body="Done.", media=None)
@@ -281,12 +309,12 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         sender = AsyncMock()
         with _statek_ctx_scope({"job": job}), \
              patch("tests.test_run_job_step._timing_sender", sender), \
              patch("statek.executors.utils.get_current_agent", return_value=agent), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
             await handle_dialog("Reply.")
         sender.assert_awaited_once()
@@ -303,11 +331,11 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         sender = AsyncMock(side_effect=RuntimeError("send failed") if fails else None)
         with _statek_ctx_scope({"job": job}), \
              patch("tests.test_run_job_step._timing_sender", sender), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
             if fails:
                 with pytest.raises(RuntimeError, match="send failed"):
@@ -333,7 +361,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         entered = asyncio.Event()
         release = asyncio.Event()
 
@@ -345,7 +373,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         with _statek_ctx_scope({"job": job}), \
              patch("tests.test_run_job_step._timing_sender", sending), \
              patch("statek.executors.utils.get_current_agent", return_value=agent), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             send = asyncio.create_task(handle_dialog("Reply."))
             await entered.wait()
             job.chat_log.append(UserLogItem(message="late", timestamp=t0 + timedelta(seconds=3)))
@@ -362,12 +390,12 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         output = []
         with _statek_ctx_scope({"job": job}), \
              patch("tests.test_run_job_step._timing_sender", MagicMock()), \
              patch("statek.executors.utils.get_current_agent", return_value=agent), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
             await exec_cli_step("answer('Done.')", job, output.append)
             assert list(job.get_response_times()) == [(t0, 5.0)]
@@ -400,13 +428,13 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle[style]))
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         job.chat_log.append(UserLogItem(message="queued", timestamp=t0 + timedelta(seconds=2)))
 
         with _statek_ctx_scope({"job": job}), \
              patch("tests.test_run_job_step._timing_sender", sender), \
              patch("statek.executors.utils.get_current_agent", return_value=agent), \
-             patch("statek.executors.job.datetime", wraps=datetime) as clock:
+             patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
             clock.now.return_value = t0 + timedelta(seconds=5)
             await handle_dialog(response)
 
@@ -424,7 +452,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
         job = Job(job_def=agent.create_job_def(chat_style=DialogChatStyle.DIRECT))
         t0 = datetime(2026, 10, 14, 12)
         job.created_at = t0
-        job.chat_log.append("initial")
+        job.push_user_message("initial")
         job.chat_log.append(LLM_LogItem(
             console_pos=0, llm_resp="Done.", timestamp=t0 + timedelta(seconds=1)
         ))

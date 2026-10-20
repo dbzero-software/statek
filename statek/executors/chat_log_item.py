@@ -14,17 +14,12 @@
 
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 import dbzero as db0
 
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock
 
-ResponseEndpoint = tuple[int, int, datetime]
-"""
-Endpoint for a completed response: its completion order, the exclusive end index of the 
-chat-log entries eligible for that response, and the completion timestamp.
-"""
 
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
@@ -48,8 +43,6 @@ class ChatLogItem:
     tool_log: Optional[Union[str, ToolError, List[Union[str, ToolError]]]] = None
     # Date and time of generating this log item
     timestamp: datetime = field(default_factory=datetime.now)
-    # Successful sends completed during this execution, independent of tool outcomes.
-    delivery_events: Optional[List[ResponseEndpoint]] = field(default=None, kw_only=True)
 
     def push_tool_result(self, tool_result: Union[str, ToolError]) -> int:
         """Append a tool result or error to tool_log and return its index.
@@ -163,5 +156,12 @@ class UserLogItem:
 
     message: str
     timestamp: datetime = field(default_factory=datetime.now)
-    # Delivery facts recorded here when no execution log item exists.
-    delivery_events: Optional[List[ResponseEndpoint]] = field(default=None, kw_only=True)
+    # First successful response or terminal harness failure ends this message's wait.
+    wait_finished_at: Optional[datetime] = field(default=None, kw_only=True)
+
+
+def finish_message_waits(messages: Iterable[UserLogItem], timestamp: datetime) -> None:
+    """Close outstanding message waits without replacing an earlier completion."""
+    for message in messages:
+        if message.message and message.wait_finished_at is None:
+            message.wait_finished_at = timestamp
