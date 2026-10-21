@@ -1,4 +1,4 @@
-FROM python:3.11-slim as builder
+FROM python:3.14-slim as builder
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /uvx /bin/
 
 WORKDIR /app
@@ -12,7 +12,7 @@ COPY tests/ ./tests/
 RUN uv build --sdist
 
 # Final stage
-FROM python:3.11-slim
+FROM python:3.14-slim
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /uvx /bin/
 
 WORKDIR /app

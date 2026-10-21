@@ -322,7 +322,7 @@ dbzero:
 
 ## Development
 
-Create and activate a virtual environment:
+Create and activate a Python 3.14 virtual environment:
 
 ```bash
 uv venv venv
