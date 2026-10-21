@@ -13,21 +13,20 @@
 # limitations under the License.
 
 from typing import Any, Callable, Iterable, Optional, Tuple, Dict, Union
-import asyncio
 import functools
 import importlib
 import inspect
 import types as _types_module
 from copy import copy
 from datetime import date, datetime, time as _time
-import nest_asyncio
 import dbzero as db0
 from .chat_style import ChatStyle
 from .dbzero_restricted import as_unrestricted
 from .future import get_any_future, get_all_future, FutureResult
 from .docstring import parse_tool_docstring, format_docstring
 from .executors.chat_log_item import ChatLogItem
-from .utils import find_locals, get_current_agent_name, get_current_job, _statek_ctx_scope
+from .utils import find_locals, get_current_agent_name, get_current_job, _statek_ctx_scope, \
+    run_coroutine_sync
 
 
 _TOOL_REGISTRY: list[Callable] = []
@@ -271,8 +270,7 @@ def _prepare_decorated_call(func: Callable, args: tuple, kwargs: dict) -> tuple[
 
 def _run_coroutine_result(result: Any) -> Any:
     """Run a coroutine result through the current event loop."""
-    nest_asyncio.apply()
-    return asyncio.get_running_loop().run_until_complete(result)
+    return run_coroutine_sync(result)
 
 
 def _register_wrapper(wrapper: Callable, system: bool, target, hidden: bool = False) -> Callable:

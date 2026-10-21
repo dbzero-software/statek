@@ -15,6 +15,7 @@
 """Utility functions for statek package."""  # pylint: disable=too-many-lines
 
 import ast
+import asyncio
 import re
 import inspect
 import sys
@@ -44,8 +45,16 @@ from typing import (
     get_type_hints,
 )
 import dbzero as db0
+import nest_asyncio2
 
 from statek.dbzero_restricted import statek_internal_tool
+
+
+def run_coroutine_sync(coroutine):
+    """Complete a coroutine while preserving the surrounding asyncio task."""
+    loop = asyncio.get_running_loop()
+    nest_asyncio2.apply()
+    return loop.run_until_complete(coroutine)
 
 _STATEK_CTX_VAR: _PyContextVar[Optional[Dict[str, Any]]] = _PyContextVar(
     "statek_ctx",
