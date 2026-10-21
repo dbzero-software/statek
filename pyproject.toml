@@ -35,11 +35,11 @@ dependencies = [
 [project.optional-dependencies]
 dbzero = [
     "dbzero-modelkit[dbzero]>=1.2.0",
-    "dbzero>=0.6.1",
+    "dbzero>=0.7.0",
 ]
 dbzero-pro = [
     "dbzero-modelkit[dbzero-pro]>=1.2.0",
-    "dbzero-pro>=0.6.2",
+    "dbzero-pro>=0.7.0",
 ]
 dev = [
     "dbzero>=0.6.1",
