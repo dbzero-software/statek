@@ -14,11 +14,12 @@
 
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 import dbzero as db0
 
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock
+
 
 if TYPE_CHECKING:
     from statek.agents.dialog_agent import Reminder
@@ -152,5 +153,15 @@ class NotificationLogItem(ChatLogItem):
 @dataclass
 class UserLogItem:
     """User message submitted for job initiation or as a push notification."""
+
     message: str
     timestamp: datetime = field(default_factory=datetime.now)
+    # First successful response or terminal harness failure ends this message's wait.
+    wait_finished_at: Optional[datetime] = field(default=None, kw_only=True)
+
+
+def finish_message_waits(messages: Iterable[UserLogItem], timestamp: datetime) -> None:
+    """Close outstanding message waits without replacing an earlier completion."""
+    for message in messages:
+        if message.message and message.wait_finished_at is None:
+            message.wait_finished_at = timestamp

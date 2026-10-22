@@ -270,9 +270,9 @@ def _prepare_decorated_call(func: Callable, args: tuple, kwargs: dict) -> tuple[
 
 
 def _run_coroutine_result(result: Any) -> Any:
-    """Run a coroutine result through the current event loop."""
+    """Complete a coroutine in the reentrant loop, including synchronous callers."""
     nest_asyncio.apply()
-    return asyncio.get_running_loop().run_until_complete(result)
+    return asyncio.get_event_loop().run_until_complete(result)
 
 
 def _register_wrapper(wrapper: Callable, system: bool, target, hidden: bool = False) -> Callable:

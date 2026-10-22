@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from datetime import datetime
 from collections import namedtuple
 import hashlib
@@ -25,6 +26,7 @@ from typing import (
     List,
     Optional,
     Iterable,
+    Iterator,
     Dict,
     Any,
     Sequence,
@@ -94,6 +96,7 @@ if TYPE_CHECKING:
     from statek.agents.agent import Agent
     from statek.agents.dialog_agent import Reminder
     from statek.task import SubTaskHandler
+
 
 DialogItem = namedtuple("DialogItem", ["role", "message"])
 WarmupBlockInput = Union[str, "CodeBlock"]
@@ -641,6 +644,9 @@ class Job:
         self.error: Optional[JobDefError] = error
         # Timestamp when the job object was created
         self.created_at = created_at or datetime.now()
+        if (self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG)
+                and self.chat_log and isinstance(self.chat_log[0], str)):
+            self.chat_log[0] = UserLogItem(self.chat_log[0], self.created_at)
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
         # The last dynamically-resolved difficulty level in this task.
@@ -1212,7 +1218,7 @@ class Job:
         Lazy generator producing a normalised, provider-agnostic timeline:
 
           1. Optional USER item with the initial user message — sourced from
-             ``chat_log[0]`` (str, set by ``push_user_message`` in
+             ``chat_log[0]`` (UserLogItem, set by ``push_user_message`` in
              MD_DIALOG/DIRECT) and/or ``py_env.push_log[0]``.  When neither
              exists this slot is omitted.
           2. Warmup blocks as alternating ASSISTANT (code or tool-call request)
@@ -1243,14 +1249,12 @@ class Job:
             [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
         ) if warmup else []
 
-        # 1) Initial user message — chat_log[0] (str) and/or push_log[0].
+        # 1) Initial user message and/or push_log[0].
         initial_parts: List[str] = []
-        if (
-            chat_log
-            and isinstance(chat_log[0], str)
-            and chat_log[0]
-        ):
-            initial_parts.append(self._with_language_hint(chat_log[0]))
+        initial = chat_log[0] if chat_log else None
+        initial_message = initial.message if isinstance(initial, UserLogItem) else initial
+        if isinstance(initial_message, str) and initial_message:
+            initial_parts.append(self._with_language_hint(initial_message))
         if 0 in push_log:
             v = push_log[0]
             if isinstance(v, list):
@@ -1267,7 +1271,8 @@ class Job:
             )
 
         # 2) Walk chat_log items in chronological order.
-        items = [it for it in chat_log if not isinstance(it, str)]
+        items = [it for index, it in enumerate(chat_log)
+                 if not isinstance(it, str) and not (index == 0 and isinstance(it, UserLogItem))]
 
         # Pre-compute the console end position for each ChatLogItem (the
         # console_pos of the next ChatLogItem, or console_len for the last).
@@ -2104,18 +2109,24 @@ class Job:
                 yield DialogItem("assistant", body)
 
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
-        """Return user-message timestamps paired with time-to-first user reply.
+        """Return user-message timestamps paired with time until their wait ended.
 
         Only timestamped user messages stored in ``chat_log`` are included:
-        the initial dialog-style message (stored as a plain ``str`` and
-        measured from ``created_at``) and any subsequent ``UserLogItem``
-        entries. Warmup items are ignored. Internal dialog-mode execution
-        turns such as tool-call requests or script-only responses are skipped.
-        If no later user-facing ``LLM_LogItem`` responds to a message, its
-        duration is ``None``.
+        the initial dialog-style message and subsequent ``UserLogItem`` entries.
+        Dialog timing reads each message's ``wait_finished_at``; an unset value
+        means its wait is still pending. Non-dialog jobs retain their LLM-log timing.
         """
         response_times: List[tuple[datetime, Optional[float]]] = []
         pending_indices: List[int] = []
+        if self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
+            for item in self.chat_log:
+                if isinstance(item, UserLogItem) and item.message:
+                    response_times.append((
+                        item.timestamp,
+                        (item.wait_finished_at - item.timestamp).total_seconds()
+                        if item.wait_finished_at is not None else None,
+                    ))
+            return response_times
 
         for item in self.chat_log:
             if isinstance(item, str):
@@ -2494,9 +2505,8 @@ class Job:
         Intended for processing push notifications (e.g. a user writing a
         message into a completed job).
 
-        In MD_DIALOG chat style the message is stored directly in
-        ``chat_log`` — as a plain ``str`` when ``chat_log`` is empty (first
-        message) or as a ``UserLogItem`` for subsequent messages.
+        In MD_DIALOG and DIRECT styles messages are stored as ``UserLogItem``
+        in ``chat_log``. The first message retains the job creation timestamp.
 
         For all other chat styles the message is appended to
         ``py_env.push_log`` keyed by the current console length.
@@ -2518,7 +2528,7 @@ class Job:
 
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             if not self.chat_log:
-                self.chat_log.append(message)
+                self.chat_log.append(UserLogItem(message=message, timestamp=self.created_at))
             else:
                 self.chat_log.append(UserLogItem(message=message))
         else:

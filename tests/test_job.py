@@ -20,6 +20,8 @@ from statek.executors.job import (
     parse_model_metadata,
 )
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, OpenRouter_API
+from statek.agents.dialog_agent import record_response_delivery
+from statek.executors.chat_log_item import finish_message_waits
 from statek.model_pricing import set_model_pricing
 from statek.pyenv import Error, ErrorKind, PyEnv
 from statek.model_name import (
@@ -2516,13 +2518,16 @@ class TestAppendChatLogDirect:
 class TestPushUserMessageDirect:
     """Tests for push_user_message with ChatStyle.DIRECT."""
 
-    def test_direct_first_message_stored_as_str(self, job_factory):
-        """DIRECT style: first message stored as plain str in chat_log."""
+    def test_direct_first_message_stored_as_user_log_item(self, job_factory):
+        """DIRECT messages carry their own pending wait and timestamp."""
         job = job_factory()
         job.job_def.set_chat_style(
             ChatStyle.DIRECT)  # pylint: disable=no-member
         job.push_user_message("hello")
-        assert job.chat_log[0] == "hello"
+        assert isinstance(job.chat_log[0], UserLogItem)
+        assert job.chat_log[0].message == "hello"
+        assert job.chat_log[0].timestamp == job.created_at
+        assert job.chat_log[0].wait_finished_at is None
 
     def test_direct_subsequent_message_stored_as_user_log_item(
         self, job_factory
@@ -2549,7 +2554,7 @@ class TestPushUserMessageDirect:
 
         job.push_user_message(MessageForAdapter("object"))
 
-        assert job.chat_log[0] == "adapted-object"
+        assert job.chat_log[0].message == "adapted-object"
 
     def test_falls_back_to_str_when_message_adapter_missing(self, job_factory):
         """Non-string messages fall back to str(message)."""
@@ -2559,7 +2564,7 @@ class TestPushUserMessageDirect:
 
         job.push_user_message(MessageForAdapter("object"))
 
-        assert job.chat_log[0] == "fallback-object"
+        assert job.chat_log[0].message == "fallback-object"
 
 
 class TestPushUserMessageNumCompletions:
@@ -3686,6 +3691,124 @@ class TestGetNextRequestUserMessages:
 class TestGetResponseTimes:
     """Tests for Job.get_response_times."""
 
+    def test_finishing_wait_preserves_history_and_has_no_job_cache(self, job_factory):
+        """Finishing a wait must not split or duplicate the initial prompt."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.push_user_message("initial")
+        job.py_env.push_log = {0: ["context", "more context"]}
+        before = [(item.role, item.content) for item in job.get_chat_history()]
+        with record_response_delivery(job):
+            pass
+        assert isinstance(job.chat_log[0], UserLogItem)
+        assert job.chat_log[0].timestamp == job.created_at
+        assert [(item.role, item.content) for item in job.get_chat_history()] == before
+        assert len(job.chat_log) == 1
+        assert not hasattr(job, "_Job__first_responses")
+
+    def test_first_completion_wins_over_clock(self, job_factory):
+        """The first write wins regardless of later wall-clock values."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.push_user_message("initial")
+        with patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
+            clock.now.return_value = t0 + timedelta(seconds=5)
+            finish_message_waits([job.chat_log[0]], t0 + timedelta(seconds=5))
+            clock.now.return_value = t0 + timedelta(seconds=3)
+            with record_response_delivery(job):
+                pass
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    def test_message_wait_times_are_independent_of_execution_items(self, job_factory):
+        """Each message holds its own completion time, independently of LLM turns."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        first = LLM_LogItem(console_pos=0)
+        second = LLM_LogItem(console_pos=0)
+        job.chat_log.extend([
+            UserLogItem("initial", t0, wait_finished_at=t0 + timedelta(seconds=5)),
+            first, UserLogItem("late", t0 + timedelta(seconds=3)), second,
+        ])
+        job.chat_log[2].wait_finished_at = t0 + timedelta(seconds=9)
+        assert list(job.get_response_times()) == [(t0, 5.0), (t0 + timedelta(seconds=3), 6.0)]
+
+    def test_finished_wait_without_execution_item(self, job_factory):
+        """A completed message wait needs no synthetic LLM turn."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.push_user_message("initial")
+        finish_message_waits([job.chat_log[0]], t0 + timedelta(seconds=5))
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    def test_repeated_closures_preserve_first_completion(self, job_factory):
+        """A repeated closure cannot replace an existing wait result."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.push_user_message("initial")
+        finish_message_waits([job.chat_log[0]], t0 + timedelta(seconds=5))
+        finish_message_waits([job.chat_log[0]], t0 + timedelta(seconds=20))
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    def test_failed_delivery_keeps_message_pending(self, job_factory):
+        """A failed delivery must not record a response on context exit."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        job.push_user_message("initial")
+        with pytest.raises(RuntimeError, match="delivery failed"):
+            with record_response_delivery(job):
+                raise RuntimeError("delivery failed")
+        assert list(job.get_response_times()) == [(job.created_at, None)]
+
+    def test_overlapping_deliveries_preserve_first_completion(self, job_factory):
+        """An earlier-started send cannot overwrite an already completed reply."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.push_user_message("initial")
+        with patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
+            with record_response_delivery(job):
+                with record_response_delivery(job):
+                    clock.now.return_value = t0 + timedelta(seconds=5)
+                clock.now.return_value = t0 + timedelta(seconds=20)
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+
+    @pytest.mark.parametrize("with_turn", [False, True])
+    def test_recorded_first_response_survives_reopen(self, job_factory, with_turn):
+        """First wait completion is persisted independently of chat turns."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 14, 12)
+        job.created_at = t0
+        job.push_user_message("initial")
+        if with_turn:
+            job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="reply"))
+        with patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock:
+            clock.now.return_value = t0 + timedelta(seconds=5)
+            with record_response_delivery(job):
+                pass
+            clock.now.return_value = t0 + timedelta(seconds=20)
+            with record_response_delivery(job):
+                pass
+        job.chat_log.append(UserLogItem(message="waiting", timestamp=t0 + timedelta(seconds=800)))
+        job_uuid = db0.uuid(job)
+        db0.close()
+        db0.init(DB0_DIR, read_write=True)
+        db0.open("test_prefix", "rw")
+        restored = db0.fetch(job_uuid)
+        assert list(restored.get_response_times()) == [
+            (t0, 5.0), (t0 + timedelta(seconds=800), None)
+        ]
+        assert len(restored.chat_log) == (3 if with_turn else 2)
+
     def test_initial_and_follow_up_messages_measure_to_first_llm_response(
         self, job_factory
     ):
@@ -3749,8 +3872,8 @@ class TestGetResponseTimes:
 
         assert list(job.get_response_times()) == [(t0, 10.0)]
 
-    def test_direct_tool_call_turn_does_not_count_as_first_response(self, job_factory):
-        """DIRECT latency should wait for the first plain dialog reply."""
+    def test_direct_llm_turns_without_send_do_not_count_as_first_response(self, job_factory):
+        """DIRECT latency remains pending until a reply is successfully sent."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
         t0 = datetime(2026, 1, 1, 12, 0, 0)
@@ -3766,10 +3889,10 @@ class TestGetResponseTimes:
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="done"))
         job.chat_log[-1].timestamp = t2
 
-        assert list(job.get_response_times()) == [(t0, 10.0)]
+        assert list(job.get_response_times()) == [(t0, None)]
 
-    def test_md_dialog_script_turn_does_not_count_as_first_response(self, job_factory):
-        """MD_DIALOG latency should skip a pure script turn before dialog text."""
+    def test_md_dialog_llm_turns_without_send_do_not_count_as_first_response(self, job_factory):
+        """MD_DIALOG script and text logs alone are not completed sends."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.MD_DIALOG)  # pylint: disable=no-member
         t0 = datetime(2026, 1, 1, 12, 0, 0)
@@ -3782,7 +3905,7 @@ class TestGetResponseTimes:
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="# Done."))
         job.chat_log[-1].timestamp = t2
 
-        assert list(job.get_response_times()) == [(t0, 10.0)]
+        assert list(job.get_response_times()) == [(t0, None)]
 
 
 class TestGetChatResponses:
