@@ -7,11 +7,11 @@ echo "Building distribution packages..."
 rm -rf dist/ build/ *.egg-info
 
 # Build source and wheel distributions
-python -m build --sdist --wheel
+uv build --sdist --wheel
 
 echo "Build completed successfully!"
 echo "Statek distribution packages are in dist/"
 
 echo "Installing packages..."
-pip install dist/*.whl
+uv pip install dist/*.whl
 echo "Packages installed successfully!"

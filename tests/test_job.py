@@ -2396,7 +2396,7 @@ class TestAppendChatLogDirect:
         """Job chat_style override must control append_chat_log formatting."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)  # pylint: disable=no-member
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(logs_path=None)
         mock_settings.chat_style = ChatStyle.MARKDOWN  # pylint: disable=no-member
 
         request = job.get_next_request()
@@ -2418,7 +2418,7 @@ class TestAppendChatLogDirect:
     def test_direct_discards_code_from_response(self, job_factory):
         """DIRECT style: keep only dialog text, ignoring fenced code blocks."""
         job = job_factory()
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(logs_path=None)
         mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
 
         request = job.get_next_request()
@@ -2441,7 +2441,7 @@ class TestAppendChatLogDirect:
         """DIRECT style: tool calls are preserved; code holds dialog text only."""
         from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
         job = job_factory()
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(logs_path=None)
         mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
 
         request = job.get_next_request()
@@ -2471,7 +2471,7 @@ class TestAppendChatLogDirect:
         """
         from statek.llm_api import CallParams  # pylint: disable=import-outside-toplevel
         job = job_factory()
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(logs_path=None)
         mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
 
         request = job.get_next_request()
@@ -2498,7 +2498,7 @@ class TestAppendChatLogDirect:
     def test_direct_plain_text_response_stored_as_none(self, job_factory):
         """DIRECT style: plain text response is preserved in chat_log."""
         job = job_factory()
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(logs_path=None)
         mock_settings.chat_style = ChatStyle.DIRECT  # pylint: disable=no-member
 
         request = job.get_next_request()

@@ -2,9 +2,12 @@
 
 # pylint: disable=too-few-public-methods,duplicate-code
 
+import asyncio
 from typing import Tuple
-import pytest
+
 import dbzero as db0
+import httpx
+import pytest
 from statek.system import (docstr, brief, panic, tool, subtask, create_tool, inject_context,
                            find_tools, select_tools, error_handler)
 from statek.chat_style import ChatStyle
@@ -12,6 +15,21 @@ from statek.future import get_unpack_size, temporal, FutureResult
 from statek.executors.job import Job
 from statek.task import SubTaskHandler
 from statek.utils import format_callable_decl, _statek_ctx_scope
+
+
+@pytest.mark.asyncio
+async def test_nested_async_tool_keeps_current_task_visible():
+    """Nested tool execution leaves asyncio task tracking intact on Python 3.14."""
+    @tool
+    async def nested_tool(**kwargs):  # pylint: disable=unused-argument
+        return 42
+
+    assert nested_tool() == 42
+    assert asyncio.current_task() is not None
+    await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+    async with httpx.AsyncClient():
+        pass
+
 
 class TestDocs:
     """Test cases for docstr function."""

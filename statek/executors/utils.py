@@ -75,6 +75,7 @@ from statek.utils import (
     statek_ctx_get,
     _statek_ctx_for_job,
     _statek_ctx_scope,
+    run_coroutine_sync,
 )
 
 _MATCH_UNSET = object()
@@ -452,9 +453,7 @@ def _exec_code_body(code_str: str, job: Job, global_context: dict,
     def _resolve_output_future(result):
         value = result.value
         if asyncio.iscoroutine(value):
-            import nest_asyncio
-            nest_asyncio.apply()
-            value = asyncio.get_running_loop().run_until_complete(value)
+            value = run_coroutine_sync(value)
         return value
 
     tracks_resource_expansion = bool(getattr(job.job_def, "extra_resources", None))
