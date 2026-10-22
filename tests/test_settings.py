@@ -7,12 +7,49 @@ import tempfile
 import json
 from pathlib import Path
 import pytest
+from pydantic import ValidationError
 from statek.provider_config import load_provider_config
 from statek.multi_source_settings import SettingValuesSource
 from statek.settings import StatekSettings, get_provider_settings
 from statek.docstring import ACL_Item, Statek_ACL
 from statek.prompt_config import format_system_prompt
 from statek.task_difficulty import TaskDifficulty
+
+
+@pytest.mark.parametrize("value", [None, 12])
+def test_max_turns_explicit_value_overrides_environment(monkeypatch, value):
+    """Explicit limits, including unlimited, override the environment."""
+    monkeypatch.setenv("STATEK_MAX_TURNS", "0")
+    assert StatekSettings(max_turns=value, _env_file=None).max_turns == value
+
+
+@pytest.mark.parametrize("value", ["none", "None", " NONE "])
+def test_max_turns_environment_can_disable_limit(monkeypatch, value):
+    """The explicit unlimited marker reaches the harness unchanged."""
+    monkeypatch.setenv("STATEK_MAX_TURNS", value)
+    assert StatekSettings(_env_file=None).max_turns is None
+
+
+def test_max_turns_defaults_to_five(monkeypatch):
+    """Missing configuration retains the safe default."""
+    monkeypatch.delenv("STATEK_MAX_TURNS", raising=False)
+    monkeypatch.delenv("MAX_TURNS", raising=False)
+    assert StatekSettings(_env_file=None).max_turns == 5
+
+
+@pytest.mark.parametrize("value", ["0", "", "unlimited"])
+def test_max_turns_rejects_invalid_environment(monkeypatch, value):
+    """Invalid limits fail during settings construction, before execution."""
+    monkeypatch.setenv("STATEK_MAX_TURNS", value)
+    with pytest.raises(ValidationError):
+        StatekSettings(_env_file=None)
+
+
+def test_max_turns_rejects_explicit_zero(monkeypatch):
+    """Zero is not an unlimited marker in the Python API either."""
+    monkeypatch.delenv("STATEK_MAX_TURNS", raising=False)
+    with pytest.raises(ValidationError):
+        StatekSettings(max_turns=0, _env_file=None)
 
 
 def test_statek_settings_parses_environment_variables():

@@ -57,12 +57,12 @@ jobs:
     
     - name: Install test dependencies
       run: |
-        uv pip install --system pytest pytest-asyncio pylint twine
-        uv pip install --system -e ".[${{ matrix.dbzero-runtime }}]"
+        uv sync --no-dev --extra "${{ matrix.dbzero-runtime }}"
+        uv pip install --python .venv/bin/python pytest pytest-asyncio pylint twine
 
     - name: Check dbzero runtime
       run: |
-        python - <<'PY'
+        .venv/bin/python - <<'PY'
         import importlib.metadata
         import dbzero
 
@@ -85,7 +85,7 @@ jobs:
     
     - name: Install packages
       run: |
-        uv pip install --system dist/*.whl
+        uv pip install --python .venv/bin/python dist/*.whl
     
     - name: Run tests
       run: |

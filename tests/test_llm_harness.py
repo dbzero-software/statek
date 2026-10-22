@@ -5,7 +5,70 @@ from unittest.mock import MagicMock
 import pytest
 
 from statek.exceptions import LLM_HarnessError
-from statek.llm_harness import LLM_Harness
+from statek.llm_harness import LLM_Harness, get_llm_harness
+from statek.settings import StatekSettings, get_statek_settings, set_statek_settings
+
+
+@pytest.fixture
+def active_settings():
+    """Restore process settings and isolate cached harness instances."""
+    previous = get_statek_settings()
+    get_llm_harness.cache_clear()
+    yield
+    set_statek_settings(previous)
+    get_llm_harness.cache_clear()
+
+
+@pytest.mark.usefixtures("active_settings")
+@pytest.mark.parametrize("initial, updated", [(3, 20), (3, None), (None, 3)])
+def test_settings_change_refreshes_harness(initial: int | None, updated: int | None) -> None:
+    """The next step uses updated limits without resetting the job's counters."""
+    set_statek_settings(StatekSettings(max_turns=initial, _env_file=None))
+    previous = get_llm_harness()
+    assert get_llm_harness() is previous
+    set_statek_settings(StatekSettings(max_turns=updated, _env_file=None))
+    harness = get_llm_harness()
+    assert harness is not previous
+    assert harness.max_turns == updated
+    assert get_llm_harness() is harness
+    job = _make_job(num_turns=10)
+    if updated is None or updated >= job.num_turns:
+        harness.check_before_step(job)
+    else:
+        with pytest.raises(LLM_HarnessError, match="turns"):
+            harness.check_before_step(job)
+    assert job.num_turns == 10
+
+
+@pytest.mark.usefixtures("active_settings")
+def test_settings_reset_reloads_environment_harness(monkeypatch) -> None:
+    """Resetting active settings rebuilds limits from the current environment."""
+    set_statek_settings(StatekSettings(max_turns=3, _env_file=None))
+    previous = get_llm_harness()
+    monkeypatch.setenv("STATEK_MAX_TURNS", "none")
+    set_statek_settings(None)
+    harness = get_llm_harness()
+    assert harness is not previous
+    assert harness.max_turns is None
+    harness.check_before_step(_make_job(num_turns=1_000_000))
+
+
+def test_environment_unlimited_reaches_harness(monkeypatch):
+    """Configured unlimited turns preserve independent exception safeguards."""
+    monkeypatch.setenv("STATEK_MAX_TURNS", "none")
+    settings = StatekSettings(_env_file=None)
+    monkeypatch.setattr("statek.llm_harness.get_statek_settings", lambda: settings)
+    get_llm_harness.cache_clear()
+    try:
+        harness = get_llm_harness()
+        assert harness.max_turns is None
+        harness.check_before_step(_make_job(num_turns=1_000_000, num_completions=10))
+        with pytest.raises(LLM_HarnessError, match="exceptions"):
+            harness.check_before_step(_make_job(exception_count=settings.max_exceptions + 1))
+        with pytest.raises(LLM_HarnessError, match="token"):
+            harness.check_after_step(_make_job(approx_token_usage=settings.max_token_usage + 1))
+    finally:
+        get_llm_harness.cache_clear()
 
 
 def _make_job(num_turns=0, exception_count=0, max_consecutive_exceptions=0,

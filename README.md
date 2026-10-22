@@ -322,17 +322,31 @@ dbzero:
 
 ## Development
 
-Create and activate a Python 3.14 virtual environment:
+Install uv and authenticate the AWS CLI, then configure the Selltime CodeArtifact
+repository used by Statek CI:
 
 ```bash
-uv venv venv
-source venv/bin/activate
+scripts/login_aws_codeartifacts.sh
 ```
 
-Install development dependencies:
+Sync the project environment. uv uses the Python version in `.python-version`
+and installs the default `dev` dependency group, including pytest and pylint:
 
 ```bash
-uv pip install -e ".[dev]"
+scripts/uv_with_codeartifact.sh sync
+```
+
+The login script writes a temporary CodeArtifact token to your local pip config.
+The uv wrapper reads its index URL because uv does not read pip config. You can
+override the AWS region, domain, account, or repository with `AWS_REGION`,
+`CODEARTIFACT_DOMAIN`, `CODEARTIFACT_DOMAIN_OWNER`, and
+`CODEARTIFACT_REPOSITORY`. To use dbzero-pro instead of the standard dbzero
+runtime, sync its extra without the default `dev` group, then install the test
+tools in the same environment:
+
+```bash
+scripts/uv_with_codeartifact.sh sync --no-dev --extra dbzero-pro
+scripts/uv_with_codeartifact.sh pip install pytest pytest-asyncio pylint twine
 ```
 
 Run lint and tests:

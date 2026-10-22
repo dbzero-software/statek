@@ -51,8 +51,11 @@ from statek.dbzero_restricted import statek_internal_tool
 
 
 def run_coroutine_sync(coroutine):
-    """Complete a coroutine while preserving the surrounding asyncio task."""
-    loop = asyncio.get_running_loop()
+    """Complete a coroutine with or without a surrounding asyncio task."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
     nest_asyncio2.apply()
     return loop.run_until_complete(coroutine)
 

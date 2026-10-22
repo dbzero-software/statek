@@ -3,16 +3,22 @@
 # pylint: disable=too-few-public-methods,no-member
 
 import asyncio
+from datetime import datetime, timedelta
 from typing import Callable
 from unittest.mock import AsyncMock, patch
 
 import dbzero as db0
 import pytest
+import statek
 
+from statek.chat_style import ChatStyle
+from statek.settings import StatekSettings
+from statek.llm_harness import LLM_Harness
 from statek.exceptions import LLM_HarnessError
 from statek.pyenv import Error, ErrorKind
 from statek.executors.job import Job, JobDefError, JobStatus
-from statek.executors.chat_log_item import LLM_LogItem
+from statek.agents.dialog_agent import record_response_delivery
+from statek.executors.chat_log_item import LLM_LogItem, UserLogItem
 from statek.executors.utils import handle_critical_error, job_worker
 from statek.system import error_handler
 from statek.utils import _statek_ctx_scope
@@ -38,6 +44,82 @@ def _capture_application_error(context, error=None):
 
 class TestHandleCriticalError:
     """Unit tests for handle_critical_error."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("post_step", [False, True])
+    async def test_real_harness_limits_end_pending_wait(self, job_factory, post_step):
+        """Both actual pre-step and post-step limit failures use terminal timing."""
+        job = job_factory()
+        job.job_def.set_chat_style(ChatStyle.DIRECT)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.push_user_message("initial")
+        harness = (
+            LLM_Harness(None, 100, 100, -1) if post_step
+            else LLM_Harness(-1, 100, 100, None)
+        )
+        if post_step:
+            step_context = patch("statek.executors.utils.run_job_step", new_callable=AsyncMock)
+        else:
+            step_context = patch("statek.executors.utils.get_llm_harness", return_value=harness)
+        with patch("statek.executors.utils.datetime", wraps=datetime) as clock, \
+             step_context as step:
+            clock.now.return_value = t0 + timedelta(seconds=5)
+            if post_step:
+                step.side_effect = lambda *args: harness.check_after_step(job)
+            await job_worker(asyncio.Semaphore(1), job)
+        assert job.status == JobStatus.DONE
+        assert list(job.get_response_times()) == [(t0, 5.0)]
+        assert job.py_env.exceptions[len(job.py_env.console) - 1].kind == ErrorKind.HARNESS
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("style", [ChatStyle.DIRECT, ChatStyle.MD_DIALOG])
+    @pytest.mark.parametrize("already_answered", [False, True])
+    async def test_harness_failure_closes_wait_before_handlers_and_survives_resume(
+        self, job_factory, style, already_answered,
+    ):
+        """Terminal failure resolves pending waits, never replacing a first response."""
+        statek.init(StatekSettings(prompt_defs={}))
+        job = job_factory()
+        job.job_def.set_chat_style(style)
+        t0 = datetime(2026, 10, 15, 12)
+        job.created_at = t0
+        job.push_user_message("initial")
+        with patch("statek.agents.dialog_agent.datetime", wraps=datetime) as clock, \
+             patch("statek.executors.utils.datetime", new=clock):
+            if already_answered:
+                clock.now.return_value = t0 + timedelta(seconds=2)
+                with record_response_delivery(job):
+                    pass
+            job.chat_log.append(UserLogItem(message="queued", timestamp=t0 + timedelta(seconds=3)))
+            expected = [(t0, 2.0 if already_answered else 5.0),
+                        (t0 + timedelta(seconds=3), 2.0)]
+
+            def check_handlers(error):
+                assert isinstance(error, LLM_HarnessError)
+                assert list(job.get_response_times()) == expected
+                clock.now.return_value = t0 + timedelta(seconds=100)
+
+            clock.now.return_value = t0 + timedelta(seconds=5)
+            with patch("statek.executors.utils.run_job_step", new_callable=AsyncMock) as step, \
+                 patch("statek.executors.utils.handle_critical_error", side_effect=check_handlers):
+                step.side_effect = LLM_HarnessError("budget exhausted")
+                await job_worker(asyncio.Semaphore(1), job)
+            assert job.status == JobStatus.DONE
+            assert list(job.get_response_times()) == expected
+            identifier = db0.uuid(job)
+            db0.close()
+            db0.init(DB0_DIR, read_write=True)
+            db0.open("test_prefix", "rw")
+            job = db0.fetch(identifier)
+            assert list(job.get_response_times()) == expected
+            assert job.push_user_message("continue") is True
+            t2 = t0 + timedelta(seconds=800)
+            job.chat_log[-2].timestamp = t2
+            clock.now.return_value = t2 + timedelta(seconds=2)
+            with record_response_delivery(job):
+                pass
+        assert list(job.get_response_times()) == expected + [(t2, 2.0)]
 
     def test_notifies_job_handlers_with_error(self, job_factory):
         """When Statek context is active, the registered handler is invoked with error."""
