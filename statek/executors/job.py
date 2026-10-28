@@ -30,6 +30,7 @@ from typing import (
     Dict,
     Any,
     Sequence,
+    Set,
     Tuple,
     Type,
     Union,
@@ -102,6 +103,89 @@ DialogItem = namedtuple("DialogItem", ["role", "message"])
 WarmupBlockInput = Union[str, "CodeBlock"]
 WarmupCodeInput = Optional[Union[WarmupBlockInput, Sequence[WarmupBlockInput]]]
 ParsedWarmupCode = Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]]]]
+
+
+@db0.memo
+@dataclass
+class PyHandleDesc:
+    """Description of a Python handle referenced by a job summary."""
+
+    var_name: str
+    desc: Optional[str] = None
+
+
+@db0.memo
+@dataclass
+class StateSummary:
+    """Handles described in a compacted slice of a job."""
+
+    locals: Set[PyHandleDesc]
+
+
+@db0.memo
+@dataclass
+class JobSummary:
+    """Compact representation of prior job interactions and state."""
+
+    input_summary: str
+    output_summary: str
+    system_summary: Optional[str] = None
+    state: Optional[StateSummary] = None
+
+
+@db0.memo
+@dataclass
+class JobCompactionResult:
+    """A summary and the raw chat-log range it replaces."""
+
+    chat_log_pos: int
+    chat_log_len: int
+    job_summary: JobSummary
+
+
+def format_job_summary(job_summary: JobSummary, py_env: PyEnv,
+                       chat_style: ChatStyle) -> str:
+    """Format a compact job summary, showing only handles still in py_env."""
+    # pylint: disable=no-member
+    preamble = (
+        "Below is a summary of past communication and actions in this session. "
+        "It includes Input Summary, Output Summary, System Summary, and State "
+        "(available Python CLI handles)."
+    )
+    if chat_style in (ChatStyle.MARKDOWN, ChatStyle.DIRECT):
+        heading_prefix = "# "
+    elif chat_style in (ChatStyle.CONSOLE, ChatStyle.MD_DIALOG):
+        heading_prefix = ""
+    else:
+        raise ValueError(f"Unsupported chat style: {chat_style!r}")
+
+    descriptions = sorted(
+        job_summary.state.locals if job_summary.state else (),
+        key=lambda handle: (handle.var_name, handle.desc or ""),
+    )
+    types_by_name = py_env.resolve_locals(handle.var_name for handle in descriptions)
+    variable_lines = []
+    for handle in descriptions:
+        resolved_type = types_by_name.get(handle.var_name)
+        if resolved_type is None:
+            continue
+        line = f"    {handle.var_name} ({resolved_type.__name__})"
+        if handle.desc:
+            line += f": {handle.desc}"
+        variable_lines.append(line)
+
+    sections = [
+        f"{heading_prefix}Input Summary\n{job_summary.input_summary}",
+        f"{heading_prefix}Output Summary\n{job_summary.output_summary}",
+        f"{heading_prefix}System Summary"
+        + (f"\n{job_summary.system_summary}" if job_summary.system_summary else ""),
+        f"{heading_prefix}State\nVariables:"
+        + ("\n" + "\n".join(variable_lines) if variable_lines else ""),
+    ]
+    result = "\n\n".join([preamble, *sections])
+    if chat_style == ChatStyle.MD_DIALOG:
+        return f"<job_summary>\n{result}\n</job_summary>"
+    return result
 
 """
 READY: a fresh job instance ready for execution
@@ -658,6 +742,10 @@ class Job:
         self.__ext_ref = None
         # Subtask notifications received while the current chat item is active.
         self.__pending_chat_log: List[SubTaskLogItem] = []
+        # Summaries replace committed chat-log slices when history is read.
+        self.__job_summaries: Optional[
+            Union[JobCompactionResult, List[JobCompactionResult]]
+        ] = None
         # Shared context is bound explicitly by the init_shared_context tool.
         self.__shared_context = None
 
@@ -701,6 +789,34 @@ class Job:
     def add_locals(self, **kwargs) -> None:
         """Inject additional values into this job's Python local state."""
         self.py_env.update_locals(**kwargs)
+
+    def get_compacted_chat_log(
+        self,
+    ) -> Iterable[Union[str, ChatLogItem, UserLogItem, JobSummary]]:
+        """Yield committed chat history with summarized slices replaced."""
+        summaries = getattr(self, "_Job__job_summaries", None)
+        if summaries is None:
+            yield from self.chat_log
+            return
+        if isinstance(summaries, JobCompactionResult):
+            summaries = [summaries]
+        summaries = sorted(summaries, key=lambda result: result.chat_log_pos)
+
+        previous_end = 0
+        for result in summaries:
+            start = result.chat_log_pos
+            end = start + result.chat_log_len
+            if (start < previous_end or start < 0 or result.chat_log_len <= 0
+                    or end > len(self.chat_log)):
+                raise ValueError("Invalid or overlapping job summary chat-log range")
+            previous_end = end
+
+        position = 0
+        for result in summaries:
+            yield from self.chat_log[position:result.chat_log_pos]
+            yield result.job_summary
+            position = result.chat_log_pos + result.chat_log_len
+        yield from self.chat_log[position:]
 
     def _pending_notifications(self) -> List[Union[SubTaskLogItem, NotificationLogItem]]:
         """Return pending chat-log notifications, initializing old jobs lazily."""
@@ -1195,8 +1311,13 @@ class Job:
         chat_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem]]] = None,
         console: Optional[Sequence[str]] = None,
         push_log: Optional[Dict[int, Union[str, List[str]]]] = None,
+        compacted: bool = False,
     ) -> Iterable[ChatHistoryItem]:
         """Yield LLM-facing chat history for the provided append-only state."""
+        compacted_log = (
+            list(self.get_compacted_chat_log())
+            if compacted and chat_log is None else None
+        )
         chat_log = self.chat_log if chat_log is None else chat_log
         push_log = self.py_env.push_log if push_log is None else push_log
         console = self.py_env.console if console is None else console
@@ -1205,6 +1326,7 @@ class Job:
             chat_log=chat_log,
             console=console,
             push_log=push_log,
+            compacted_log=compacted_log,
         )
 
     def _build_chat_history(
@@ -1212,6 +1334,7 @@ class Job:
         chat_log: Sequence[Union[str, ChatLogItem, UserLogItem]],
         console: Optional[Sequence[str]],
         push_log: Optional[Dict[int, Union[str, List[str]]]],
+        compacted_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem, JobSummary]]] = None,
     ) -> Iterable[ChatHistoryItem]:
         """Yield the full LLM-facing chat history as ``ChatHistoryItem`` objects.
 
@@ -1249,6 +1372,42 @@ class Job:
             [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
         ) if warmup else []
 
+        summary_by_index = {}
+        covered_indices = set()
+        if compacted_log is not None:
+            results = getattr(self, "_Job__job_summaries", None)
+            if isinstance(results, JobCompactionResult):
+                results = [results]
+            results = sorted(results or [], key=lambda result: result.chat_log_pos)
+            summaries = (item for item in compacted_log if isinstance(item, JobSummary))
+            for result, summary in zip(results, summaries):
+                summary_by_index[result.chat_log_pos] = summary
+                covered_indices.update(range(
+                    result.chat_log_pos, result.chat_log_pos + result.chat_log_len
+                ))
+            last_warmup_index = max(
+                (idx for idx, item in enumerate(chat_log) if isinstance(item, WarmupLogItem)),
+                default=-1,
+            )
+            if any(isinstance(chat_log[idx], WarmupLogItem) for idx in covered_indices):
+                raise ValueError("Job summary range cannot cover warmup chat-log items")
+        else:
+            last_warmup_index = -1
+        deferred_summaries = [
+            summary for start, summary in sorted(summary_by_index.items())
+            if start <= last_warmup_index
+        ]
+
+        def _summary_item(summary: JobSummary) -> ChatHistoryItem:
+            return ChatHistoryItem(
+                role=ChatRole.USER,
+                content=format_job_summary(
+                    summary, self.py_env,
+                    self.job_def.chat_style or ChatStyle.CONSOLE,  # pylint: disable=no-member
+                ),
+                content_src=ContentSource.SYSTEM,
+            )
+
         # 1) Initial user message and/or push_log[0].
         initial_parts: List[str] = []
         initial = chat_log[0] if chat_log else None
@@ -1269,20 +1428,27 @@ class Job:
                 content="\n".join(initial_parts),
                 content_src=ContentSource.USER,
             )
+        if (0 in summary_by_index and last_warmup_index < 0
+                and isinstance(initial, (str, UserLogItem))):
+            yield _summary_item(summary_by_index[0])
 
         # 2) Walk chat_log items in chronological order.
-        items = [it for index, it in enumerate(chat_log)
-                 if not isinstance(it, str) and not (index == 0 and isinstance(it, UserLogItem))]
+        items = [
+            (index, item) for index, item in enumerate(chat_log)
+            if (not isinstance(item, str)
+                and not (index == 0 and isinstance(item, UserLogItem)))
+            or (index != 0 and index in summary_by_index)
+        ]
 
         # Pre-compute the console end position for each ChatLogItem (the
         # console_pos of the next ChatLogItem, or console_len for the last).
         end_positions: Dict[int, int] = {}
-        for i, item in enumerate(items):
+        for i, (_raw_index, item) in enumerate(items):
             if isinstance(item, UserLogItem):
                 continue
             next_pos = console_len
             for j in range(i + 1, len(items)):
-                if isinstance(items[j], (
+                if isinstance(items[j][1], (
                     WarmupLogItem,
                     LLM_LogItem,
                     PostProcessedItem,
@@ -1290,7 +1456,7 @@ class Job:
                     SubTaskLogItem,
                     NotificationLogItem,
                 )):
-                    next_pos = items[j].console_pos
+                    next_pos = items[j][1].console_pos
                     break
             end_positions[i] = next_pos
 
@@ -1310,7 +1476,16 @@ class Job:
                             content_src=ContentSource.USER,
                         )
 
-        for idx, item in enumerate(items):
+        deferred_emitted = False
+        for idx, (raw_index, item) in enumerate(items):
+            if raw_index > last_warmup_index and not deferred_emitted:
+                for summary in deferred_summaries:
+                    yield _summary_item(summary)
+                deferred_emitted = True
+            if raw_index in summary_by_index and raw_index > last_warmup_index:
+                yield _summary_item(summary_by_index[raw_index])
+            if raw_index in covered_indices:
+                continue
             if isinstance(item, UserLogItem):
                 if item.message:
                     yield ChatHistoryItem(
@@ -1506,9 +1681,13 @@ class Job:
             # Any push_log messages emitted while this block was running.
             yield from _yield_pushes(from_pos, to_pos)
 
-    def get_chat_history(self) -> Iterable[ChatHistoryItem]:
-        """Yield the full LLM-facing chat history as ``ChatHistoryItem`` objects."""
-        yield from self._iter_chat_history()
+        if not deferred_emitted:
+            for summary in deferred_summaries:
+                yield _summary_item(summary)
+
+    def get_chat_history(self, compacted: bool = True) -> Iterable[ChatHistoryItem]:
+        """Yield LLM-facing chat history, using available summaries by default."""
+        yield from self._iter_chat_history(compacted=compacted)
 
     def _build_request_data(
         self,
@@ -1534,12 +1713,13 @@ class Job:
             if lang_rule:
                 system_prompt = f"{system_prompt}\n\n{lang_rule}"
 
+        chat_history = (
+            self.get_chat_history()
+            if chat_log is None and console is None and push_log is None
+            else self._iter_chat_history(chat_log=chat_log, console=console, push_log=push_log)
+        )
         request_params: Dict[str, Any] = {
-            "chat_history": self._iter_chat_history(
-                chat_log=chat_log,
-                console=console,
-                push_log=push_log,
-            ),
+            "chat_history": chat_history,
             "system_prompt": system_prompt,
             "model": model,
             "metadata": metadata,

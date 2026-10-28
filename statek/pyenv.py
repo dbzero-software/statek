@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Iterable, Optional, Type, Union
 import dbzero as db0
 
 from statek.future import FutureResult
@@ -83,3 +83,18 @@ class PyEnv:
         if self.local_state is None:
             self.local_state = {}
         self.local_state.update(kwargs)
+
+    def resolve_locals(self, handles: Iterable[str],
+                       raise_for_missing: bool = False) -> Dict[str, Type]:
+        """Return runtime types for names in local_state or global_state."""
+        local_state = self.local_state or {}
+        global_state = self.global_state or {}
+        resolved = {}
+        for handle in handles:
+            if handle in local_state:
+                resolved[handle] = type(local_state[handle])
+            elif handle in global_state:
+                resolved[handle] = type(global_state[handle])
+            elif raise_for_missing:
+                raise KeyError(handle)
+        return resolved
