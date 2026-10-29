@@ -6,10 +6,13 @@ from decimal import Decimal
 
 import dbzero as db0
 import pytest
+import statek
 
 from statek.model_pricing import (
     ModelPricing, get_model_pricing, set_model_pricing, init_model_pricing
 )
+from statek.model_card import ModelCard, get_model_card, init_model_cards
+from statek.settings import StatekSettings
 
 
 def test_is_valid(db0_fixture):
@@ -137,3 +140,128 @@ def test_init_loads_multiple_rows(db0_fixture, pricing_dir):
     init_model_pricing(str(pricing_dir))
     assert get_model_pricing("openai", "gpt-4", no_create=True) is not None
     assert get_model_pricing("openai", "gpt-3.5-turbo", no_create=True) is not None
+
+
+def test_init_loads_standalone_card_and_pricing_files(db0_fixture, pricing_dir):
+    (pricing_dir / "prices.csv").write_text(
+        "PROVIDER,MODEL_FAMILY,MODEL,INPUT_PRICE_PER_M,OUTPUT_PRICE_PER_M\n"
+        "openrouter,openai,gpt-mini,0.75,4.50\n"
+    )
+    (pricing_dir / "cards.csv").write_text(
+        "PROVIDER,MODEL_FAMILY,MODEL,MAX_CONTEXT_LENGTH,TOKEN_TO_BYTES,"
+        "TOTAL_PARAMETER_COUNT,ACTIVE_PARAMETER_COUNT\n"
+        "openrouter,openai,gpt-mini,400000,4.0,,\n"
+    )
+
+    init_model_pricing(str(pricing_dir))
+    assert get_model_card("openrouter", "gpt-mini", "openai", no_create=True) is None
+    init_model_cards(str(pricing_dir))
+
+    pricing = get_model_pricing("openrouter", "gpt-mini", "openai", no_create=True)
+    card = get_model_card("openrouter", "gpt-mini", "openai", no_create=True)
+    assert pricing.input_price_per_M == Decimal("0.75")
+    assert pricing.input_price_per_cached_M is None
+    assert card.max_context_length == 400000
+    assert card.token_to_bytes == 4.0
+    assert card.total_parameter_count is None
+
+
+def test_init_loads_combined_file_with_optional_counts(db0_fixture, pricing_dir):
+    (pricing_dir / "combined.csv").write_text(
+        "PROVIDER, MODEL_FAMILY, MODEL, INPUT_PRICE_PER_M, "
+        "INPUT_PRICE_PER_CACHED_M, OUTPUT_PRICE_PER_M, MAX_CONTEXT_LENGTH, "
+        "TOKEN_TO_BYTES, TOTAL_PARAMETER_COUNT, ACTIVE_PARAMETER_COUNT\n"
+        "openrouter, deepseek, deepseek-v3.2, 0.252, , 0.378, "
+        "163840, 4.0, 685000000000, 37000000000\n"
+    )
+
+    init_model_cards(str(pricing_dir))
+    assert get_model_pricing("openrouter", "deepseek-v3.2", "deepseek", no_create=True) is None
+    init_model_pricing(str(pricing_dir))
+
+    pricing = get_model_pricing("openrouter", "deepseek-v3.2", "deepseek", no_create=True)
+    card = get_model_card("openrouter", "deepseek-v3.2", "deepseek", no_create=True)
+    assert pricing.output_price_per_M == Decimal("0.378")
+    assert card.max_context_length == 163840
+    assert card.total_parameter_count == 685000000000
+    assert card.active_parameter_count == 37000000000
+
+
+def test_init_skips_incomplete_card_without_blocking_pricing(db0_fixture, pricing_dir):
+    (pricing_dir / "combined.csv").write_text(
+        "PROVIDER,MODEL,INPUT_PRICE_PER_M,OUTPUT_PRICE_PER_M,"
+        "MAX_CONTEXT_LENGTH,TOKEN_TO_BYTES\n"
+        "openai,gpt-4o,2.50,10.00,128000,\n"
+        "openai,gpt-4o-mini,0.15,0.60,128000,4.0\n"
+    )
+
+    init_model_pricing(str(pricing_dir))
+    init_model_cards(str(pricing_dir))
+
+    assert get_model_pricing("openai", "gpt-4o", no_create=True) is not None
+    assert get_model_card("openai", "gpt-4o", no_create=True) is None
+    assert get_model_card("openai", "gpt-4o-mini", no_create=True).token_to_bytes == 4.0
+
+
+def test_init_skips_invalid_pricing_without_blocking_card(db0_fixture, pricing_dir):
+    (pricing_dir / "combined.csv").write_text(
+        "PROVIDER,MODEL,INPUT_PRICE_PER_M,OUTPUT_PRICE_PER_M,"
+        "MAX_CONTEXT_LENGTH,TOKEN_TO_BYTES\n"
+        "openai,gpt-4o,invalid,10.00,128000,4.0\n"
+    )
+
+    init_model_pricing(str(pricing_dir))
+    init_model_cards(str(pricing_dir))
+
+    assert get_model_pricing("openai", "gpt-4o", no_create=True) is None
+    assert get_model_card("openai", "gpt-4o", no_create=True).max_context_length == 128000
+
+
+def test_init_blank_optional_counts_preserve_initialized_values(db0_fixture, pricing_dir):
+    (pricing_dir / "cards.csv").write_text(
+        "PROVIDER,MODEL,MAX_CONTEXT_LENGTH,TOKEN_TO_BYTES,"
+        "TOTAL_PARAMETER_COUNT,ACTIVE_PARAMETER_COUNT\n"
+        "openai,gpt-4o,128000,4.0,,\n"
+    )
+    from statek.model_card import set_model_card  # pylint: disable=import-outside-toplevel
+    card = set_model_card("openai", "gpt-4o", total_parameter_count=100)
+
+    init_model_cards(str(pricing_dir))
+    init_model_cards(str(pricing_dir))
+
+    assert card.total_parameter_count == 100
+    assert card.max_context_length == 128000
+
+
+def test_init_model_cards_scans_subdirectories_and_txt(db0_fixture, pricing_dir):
+    nested = pricing_dir / "nested"
+    nested.mkdir()
+    (nested / "cards.txt").write_text(
+        "PROVIDER,MODEL,MAX_CONTEXT_LENGTH,TOKEN_TO_BYTES\n"
+        "openai,gpt-4o,128000,4.0\n"
+    )
+    (nested / "ignored.json").write_text(
+        '{"PROVIDER":"openai","MODEL":"other"}'
+    )
+
+    init_model_cards(str(pricing_dir))
+
+    assert get_model_card("openai", "gpt-4o", no_create=True).max_context_length == 128000
+    assert get_model_card("openai", "other", no_create=True) is None
+    assert not list(db0.find(ModelPricing))
+
+
+def test_statek_init_loads_pricing_and_cards(db0_fixture, pricing_dir):
+    (pricing_dir / "combined.csv").write_text(
+        "PROVIDER,MODEL,INPUT_PRICE_PER_M,OUTPUT_PRICE_PER_M,"
+        "MAX_CONTEXT_LENGTH,TOKEN_TO_BYTES\n"
+        "openai,gpt-4o,2.50,10.00,128000,4.0\n"
+    )
+
+    statek.init(StatekSettings(prompt_defs={}, statek_model_info_dir=str(pricing_dir)))
+
+    pricing = get_model_pricing("openai", "gpt-4o", no_create=True)
+    assert pricing.input_price_per_M == Decimal("2.50")
+    assert get_model_card("openai", "gpt-4o", no_create=True).max_context_length == 128000
+    assert len(list(db0.find(ModelPricing))) == 1
+    assert len(list(db0.find(ModelCard))) == 1

@@ -37,6 +37,7 @@ from .multi_source_settings import (
 )
 from .prompt_config import PromptDef, update_prompt_config
 from .provider_config import ProviderConfig, resolve_provider_config
+from .decisions_api import BinaryCriteria, Decision, DecisionType, Decisions_API, Question
 from .llm_api import (
     LLM_API, OpenRouter_API, OpenAI_API, Groq_API, MistralAI_API,
     DeepSeek_API, XAI_API, TogetherAI_API, FireworksAI_API, Cerebras_API,
@@ -94,7 +95,7 @@ except PackageNotFoundError:
 def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> None:
     """Initialize statek before first use.
 
-    Loads model pricing from statek_model_info_dir when configured.
+    Loads model pricing and cards from statek_model_info_dir when configured.
     """
     if settings is None:
         settings = get_statek_settings()
@@ -116,7 +117,9 @@ def init(settings: Optional[StatekSettings] = None, restricted: bool = True) -> 
     )
     if settings.statek_model_info_dir:
         from .model_pricing import init_model_pricing  # pylint: disable=import-outside-toplevel
+        from .model_card import init_model_cards  # pylint: disable=import-outside-toplevel
         init_model_pricing(settings.statek_model_info_dir)
+        init_model_cards(settings.statek_model_info_dir)
 
 
 __all__ = [
@@ -139,6 +142,11 @@ __all__ = [
     "update_prompt_config",
     "ProviderConfig",
     "resolve_provider_config",
+    "BinaryCriteria",
+    "Decision",
+    "DecisionType",
+    "Decisions_API",
+    "Question",
     "LLM_API",
     "OpenRouter_API",
     "OpenAI_API",
