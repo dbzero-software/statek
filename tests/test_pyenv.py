@@ -1,5 +1,7 @@
 """Tests for PyEnv class."""
 
+import pytest
+
 from statek.pyenv import PyEnv
 
 
@@ -45,3 +47,35 @@ class TestPyEnv:  # pylint: disable=too-few-public-methods
 
         assert env.perm_ctx is None
         assert "_PERM_CTX" not in env.local_state
+
+    def test_resolve_locals_prefers_locals_and_returns_runtime_types(self, db0_fixture):  # pylint: disable=unused-argument
+        """Local names take precedence over globals, including values of None."""
+        env = PyEnv(
+            local_state={"shared": None, "local": "hello"},
+            global_state={"shared": "global", "global": 42},
+        )
+
+        assert env.resolve_locals(iter(["shared", "local", "global", "missing"])) == {
+            "shared": type(None),
+            "local": str,
+            "global": int,
+        }
+
+    def test_resolve_locals_handles_absent_state_and_duplicate_names(self, db0_fixture):  # pylint: disable=unused-argument
+        """Absent dictionaries are empty and duplicate handles share one result."""
+        env = PyEnv(local_state=None, global_state=None)
+
+        assert not env.resolve_locals(["missing", "missing"])
+        assert not env.resolve_locals([])
+
+        env.global_state = {"found": 1}
+        assert env.resolve_locals(["found", "found"]) == {"found": int}
+
+    def test_resolve_locals_raises_for_first_missing_handle(self, db0_fixture):  # pylint: disable=unused-argument
+        """Strict lookup reports the first absent name in input order."""
+        env = PyEnv(local_state={"local": 1}, global_state={"global": 2})
+
+        with pytest.raises(KeyError) as exc_info:
+            env.resolve_locals(["local", "first", "global", "second"], raise_for_missing=True)
+
+        assert exc_info.value.args == ("first",)
