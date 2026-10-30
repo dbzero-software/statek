@@ -320,6 +320,22 @@ dbzero:
 - [dbzero documentation](https://docs.dbzero.io)
 - [dbzero-pro documentation](https://docs.dbzero.io/dbzero-pro)
 
+## Model info files
+
+Set `STATEK_MODEL_INFO_DIR` (or `StatekSettings.statek_model_info_dir`) to a
+directory of CSV or TXT files. `statek.init()` scans it recursively. Pricing and
+model cards may be in separate files or combined in one file. Each row needs
+`PROVIDER` and `MODEL`; `MODEL_FAMILY` is optional.
+
+`statek.init()` calls `init_model_pricing()` and `init_model_cards()` for that
+directory. Each function can also be called directly to load only its own data.
+
+Pricing rows use `INPUT_PRICE_PER_M`, `OUTPUT_PRICE_PER_M`, and optionally
+`INPUT_PRICE_PER_CACHED_M`. Prices should include provider service charges.
+Model card rows require `MAX_CONTEXT_LENGTH` and `TOKEN_TO_BYTES`; optional
+columns are `TOTAL_PARAMETER_COUNT` and `ACTIVE_PARAMETER_COUNT`. Empty optional
+counts mean unknown.
+
 ## Development
 
 Install uv and authenticate the AWS CLI, then configure the Selltime CodeArtifact

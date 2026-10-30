@@ -16,26 +16,20 @@
 
 # pylint: disable=no-member
 
-import csv
-import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import dbzero as db0
 
-
-def _normalize_tag(tag: str) -> str:
-    return "".join(tag.split()).upper()
+from ._model_tags import model_tags
+from ._model_info import iter_model_info_rows
 
 
 def _pricing_tags(
     provider: str, model: str, model_family: Optional[str] = None
 ) -> list:
-    tags = [_normalize_tag(provider), _normalize_tag(model)]
-    if model_family is not None:
-        tags.append(_normalize_tag(model_family))
-    return tags
+    return model_tags(provider, model, model_family)
 
 
 def _create_pricing(
@@ -117,39 +111,34 @@ def set_model_pricing(
     )
 
 
-def _parse_optional_decimal(value: str) -> Optional[Decimal]:
-    stripped = value.strip()
+def _parse_optional_decimal(value: Optional[str]) -> Optional[Decimal]:
+    stripped = (value or "").strip()
     if not stripped:
         return None
     return Decimal(stripped)
 
 
-def _load_pricing_csv(file_path: str) -> None:
-    with open(file_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                provider = row["PROVIDER"].strip()
-                model = row["MODEL"].strip()
-                model_family = row["MODEL_FAMILY"].strip() or None
-                input_price = _parse_optional_decimal(row["INPUT_PRICE_PER_M"])
-                cached_price = _parse_optional_decimal(row["INPUT_PRICE_PER_CACHED_M"])
-                output_price = _parse_optional_decimal(row["OUTPUT_PRICE_PER_M"])
-                if input_price is None or output_price is None:
-                    continue
-                set_model_pricing(
-                    provider, model,
-                    input_price_per_M=input_price,
-                    output_price_per_M=output_price,
-                    input_price_per_cached_M=cached_price,
-                    model_family=model_family,
-                )
-            except (KeyError, InvalidOperation):
-                continue
+def _load_pricing_row(row: dict, provider: str, model: str,
+                      model_family: Optional[str]) -> None:
+    if "INPUT_PRICE_PER_M" not in row or "OUTPUT_PRICE_PER_M" not in row:
+        return
+    try:
+        input_price = _parse_optional_decimal(row["INPUT_PRICE_PER_M"])
+        output_price = _parse_optional_decimal(row["OUTPUT_PRICE_PER_M"])
+        cached_price = _parse_optional_decimal(row.get("INPUT_PRICE_PER_CACHED_M"))
+    except InvalidOperation:
+        return
+    if input_price is not None and output_price is not None:
+        set_model_pricing(
+            provider, model,
+            input_price_per_M=input_price,
+            output_price_per_M=output_price,
+            input_price_per_cached_M=cached_price,
+            model_family=model_family,
+        )
 
 
 def init_model_pricing(model_info_dir: str) -> None:
-    for root, _dirs, files in os.walk(model_info_dir):
-        for name in files:
-            if name.endswith(".csv") or name.endswith(".txt"):
-                _load_pricing_csv(os.path.join(root, name))
+    """Load pricing from CSV or TXT files in a directory tree."""
+    for provider, model, model_family, row in iter_model_info_rows(model_info_dir):
+        _load_pricing_row(row, provider, model, model_family)
