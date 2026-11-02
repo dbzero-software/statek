@@ -40,6 +40,8 @@ class ForkedJob(Job):
 
     Variable maps are private, but objects referenced by their values remain
     shared. Historical forks do not rewind application state.
+    ``forked_at`` is the first excluded raw chat-log index, including user
+    messages and warmup entries. The inherited range is [0, forked_at).
     """
     __src_job: Job
     __forked_at: int
@@ -49,11 +51,13 @@ class ForkedJob(Job):
             raise TypeError('src_job must be a Job')
         if not isinstance(forked_at, int) or isinstance(forked_at, bool):
             raise TypeError('forked_at must be an integer')
-        llm_items = [(idx, src_job.chat_log[idx])
-                     for idx in self._llm_turn_indices(src_job.chat_log)]
-        if not 0 <= forked_at <= len(llm_items):
+        if not 0 <= forked_at <= len(src_job.chat_log):
             raise ValueError('forked_at is outside the source history')
-        for _, item in llm_items[:forked_at]:
+        end = forked_at
+        inherited_log = src_job.chat_log[:end]
+        for item in inherited_log:
+            if not isinstance(item, LLM_LogItem):
+                continue
             if item.llm_resp is None:
                 raise ValueError('Cannot inherit a pending LLM response')
             calls = item.llm_resp.tool_calls if isinstance(item.llm_resp, CodeBlock) else None
@@ -64,18 +68,21 @@ class ForkedJob(Job):
                     except (KeyError, IndexError) as error:
                         raise ValueError('Cannot inherit incomplete tool results') from error
 
-        if forked_at:
-            end = llm_items[forked_at - 1][0] + 1
-            push_end = llm_items[forked_at - 1][1].console_pos
-        else:
-            end = llm_items[0][0] if llm_items else len(src_job.chat_log)
-            push_end = None
         source_console = src_job.py_env.console or []
         console_end = next((item.console_pos for item in src_job.chat_log[end:]
                             if isinstance(item, ChatLogItem)
                             and not isinstance(item, DifficultyChangeLogItem)), len(source_console))
-        if push_end is None:
-            push_end = console_end
+        if end == 0:
+            console_end = 0
+        # A push at the cutoff console position belongs to the retained tail.
+        # A full-history fork also inherits pushes awaiting the next LLM turn.
+        full_history = end == len(src_job.chat_log)
+        push_log = {
+            key: _copy_history(value)
+            for key, value in (src_job.py_env.push_log or {}).items()
+            if (full_history or end > 0)
+            and (key == 0 or key < console_end or (full_history and key <= console_end))
+        }
         summaries = getattr(src_job, '_Job__job_summaries', None) or []
         if isinstance(summaries, JobCompactionResult):
             summaries = [summaries]
@@ -96,17 +103,19 @@ class ForkedJob(Job):
             exceptions={key: _copy_history(value)
                         for key, value in (src_job.py_env.exceptions or {}).items()
                         if key < console_end},
-            push_log={key: _copy_history(value)
-                      for key, value in (src_job.py_env.push_log or {}).items()
-                      if key == 0 or key <= push_end},
+            push_log=push_log,
         )
         super().__init__(job_def=src_job.job_def, job_status=JobStatus.STARTED,
                          py_env=environment,
-                         chat_log=[_copy_history(item) for item in src_job.chat_log[:end]])
+                         chat_log=[_copy_history(item) for item in inherited_log])
         self._Job__last_difficulty = self.__initial_difficulty
         self.__initializing = False
         self._sync_usage_pricing()
         self._Job__job_summaries = [_copy_history(result) for result in selected_summaries]
+        if not any(isinstance(item, WarmupLogItem) for item in src_job.chat_log[end:]):
+            self._Job__warmup_summary = _copy_history(
+                getattr(src_job, '_Job__warmup_summary', None)
+            )
 
     def get_current_difficulty(self):
         """Keep initialization on the source model without replaying escalation."""
@@ -116,8 +125,10 @@ class ForkedJob(Job):
 
     @property
     def forked_at(self) -> int:
-        """First source turn excluded from the inherited history."""
-        return self.__forked_at
+        """First raw source chat-log index excluded from the inherited history."""
+        # Older persisted forks stored an LLM count in __forked_at; their
+        # inherited-log boundary already records the corresponding raw index.
+        return getattr(self, '_ForkedJob__inherited_log_len', self.__forked_at)
 
     def _execution_chat_log(self):
         return self.chat_log[self.__inherited_log_len:]
@@ -142,7 +153,8 @@ class ForkedJob(Job):
         super()._log_console_batch(max(from_pos, self.__inherited_console_len), to_pos)
 
     def _exception_messages_by_turn(self):
-        remaining = self.forked_at
+        remaining = sum(isinstance(item, LLM_LogItem)
+                        for item in self.chat_log[:self.__inherited_log_len])
         for item, messages in super()._exception_messages_by_turn():
             if isinstance(item, WarmupLogItem):
                 continue

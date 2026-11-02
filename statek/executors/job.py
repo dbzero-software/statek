@@ -1474,7 +1474,7 @@ class Job:
             initial_parts.append(self._with_language_hint(initial_message))
         if 0 in push_log:
             v = push_log[0]
-            if isinstance(v, list):
+            if isinstance(v, (list, db0.types.List)):  # pylint: disable=no-member
                 initial_parts.extend(
                     self._with_language_hint(s) for s in v if s
                 )
@@ -1528,7 +1528,8 @@ class Job:
             for k in sorted_push_keys:
                 if lo < k <= hi:
                     v = push_log[k]
-                    msgs = v if isinstance(v, list) else [v]
+                    # pylint: disable=no-member
+                    msgs = v if isinstance(v, (list, db0.types.List)) else [v]
                     for msg in msgs:
                         yield ChatHistoryItem(
                             role=ChatRole.USER,
