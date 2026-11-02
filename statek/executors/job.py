@@ -746,12 +746,26 @@ class Job:
         self.__job_summaries: Optional[
             Union[JobCompactionResult, List[JobCompactionResult]]
         ] = None
+        # Local names present after warmup, used as the summarization baseline.
+        self.__warmup_summary: Optional[JobSummary] = None
         # Shared context is bound explicitly by the init_shared_context tool.
         self.__shared_context = None
 
         # Log system prompt on job creation if logging is enabled
         if self.logs_path and self.job_def.agent is not None:
             self._log(self.system_prompt())
+
+    def __init_warmup_summary(self) -> None:
+        """Capture local names once after the entire warmup has completed."""
+        if getattr(self, "_Job__warmup_summary", None) is not None:
+            return
+        self.__warmup_summary = JobSummary(
+            input_summary="",
+            output_summary="",
+            state=StateSummary(locals={
+                PyHandleDesc(var_name=name) for name in self.py_env.local_state or {}
+            }),
+        )
 
     @property
     def model_family(self) -> Optional[str]:
@@ -1306,12 +1320,19 @@ class Job:
             parts = [p for p in [console_part, push_part] if p]
             return "\n".join(parts)
 
+    @staticmethod
+    def _llm_turn_indices(chat_log):
+        """Locate LLM turns independently of warmup and injected messages."""
+        return [idx for idx, item in enumerate(chat_log) if isinstance(item, LLM_LogItem)]
+
     def _iter_chat_history(
         self,
         chat_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem]]] = None,
         console: Optional[Sequence[str]] = None,
         push_log: Optional[Dict[int, Union[str, List[str]]]] = None,
         compacted: bool = False,
+        start_at: Optional[int] = None,
+        num_turns: Optional[int] = None,
     ) -> Iterable[ChatHistoryItem]:
         """Yield LLM-facing chat history for the provided append-only state."""
         compacted_log = (
@@ -1327,6 +1348,8 @@ class Job:
             console=console,
             push_log=push_log,
             compacted_log=compacted_log,
+            start_at=start_at,
+            num_turns=num_turns,
         )
 
     def _build_chat_history(
@@ -1335,6 +1358,8 @@ class Job:
         console: Optional[Sequence[str]],
         push_log: Optional[Dict[int, Union[str, List[str]]]],
         compacted_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem, JobSummary]]] = None,
+        start_at: Optional[int] = None,
+        num_turns: Optional[int] = None,
     ) -> Iterable[ChatHistoryItem]:
         """Yield the full LLM-facing chat history as ``ChatHistoryItem`` objects.
 
@@ -1372,6 +1397,33 @@ class Job:
             [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
         ) if warmup else []
 
+        slicing = start_at is not None
+        if slicing:
+            llm_indices = self._llm_turn_indices(chat_log)
+            llm_turns = {idx: turn for turn, idx in enumerate(llm_indices)}
+            turn_by_index = {}
+            next_turn = len(llm_indices)
+            for idx in range(len(chat_log) - 1, -1, -1):
+                if idx in llm_turns:
+                    next_turn = llm_turns[idx]
+                turn_by_index[idx] = (
+                    0 if isinstance(chat_log[idx], WarmupLogItem) else next_turn
+                )
+            slice_end = start_at + num_turns
+            available_turns = max(1, len(llm_indices))
+
+            def _selected(turn: int) -> bool:
+                return start_at <= turn < min(slice_end, available_turns)
+
+            def _selected_index(idx: int) -> bool:
+                return _selected(turn_by_index[idx])
+        else:
+            def _selected(_turn: int) -> bool:
+                return True
+
+            def _selected_index(_idx: int) -> bool:
+                return True
+
         summary_by_index = {}
         covered_indices = set()
         if compacted_log is not None:
@@ -1381,6 +1433,12 @@ class Job:
             results = sorted(results or [], key=lambda result: result.chat_log_pos)
             summaries = (item for item in compacted_log if isinstance(item, JobSummary))
             for result, summary in zip(results, summaries):
+                if slicing and not all(
+                    _selected_index(idx)
+                    for idx in range(result.chat_log_pos,
+                                     result.chat_log_pos + result.chat_log_len)
+                ):
+                    continue
                 summary_by_index[result.chat_log_pos] = summary
                 covered_indices.update(range(
                     result.chat_log_pos, result.chat_log_pos + result.chat_log_len
@@ -1422,7 +1480,7 @@ class Job:
                 )
             elif v:
                 initial_parts.append(self._with_language_hint(v))
-        if initial_parts:
+        if initial_parts and _selected(0):
             yield ChatHistoryItem(
                 role=ChatRole.USER,
                 content="\n".join(initial_parts),
@@ -1463,8 +1521,10 @@ class Job:
         # Push log keys (excluding 0, already consumed as the initial user msg).
         sorted_push_keys = sorted(k for k in push_log.keys() if k != 0)
 
-        def _yield_pushes(lo: int, hi: int) -> Iterable[ChatHistoryItem]:
+        def _yield_pushes(lo: int, hi: int, include: bool = True) -> Iterable[ChatHistoryItem]:
             """Yield USER items for push_log entries in (lo, hi]."""
+            if not include:
+                return
             for k in sorted_push_keys:
                 if lo < k <= hi:
                     v = push_log[k]
@@ -1482,9 +1542,23 @@ class Job:
                 for summary in deferred_summaries:
                     yield _summary_item(summary)
                 deferred_emitted = True
-            if raw_index in summary_by_index and raw_index > last_warmup_index:
+            if (raw_index in summary_by_index and raw_index > last_warmup_index
+                    and _selected_index(raw_index)):
                 yield _summary_item(summary_by_index[raw_index])
             if raw_index in covered_indices:
+                continue
+            include_pushes = (
+                _selected(llm_turns[raw_index] + 1)
+                if slicing and isinstance(item, LLM_LogItem)
+                else _selected(0)
+                if slicing and isinstance(item, WarmupLogItem)
+                else True
+            )
+            if not _selected_index(raw_index):
+                if isinstance(item, LLM_LogItem):
+                    yield from _yield_pushes(
+                        item.console_pos, end_positions[idx], include_pushes
+                    )
                 continue
             if isinstance(item, UserLogItem):
                 if item.message:
@@ -1615,7 +1689,7 @@ class Job:
                         content_src=ContentSource.CONSOLE,
                         tool_calls=[warmup_call],
                     )
-                    yield from _yield_pushes(from_pos, to_pos)
+                    yield from _yield_pushes(from_pos, to_pos, include_pushes)
                     continue
 
                 if tool_calls:
@@ -1649,7 +1723,7 @@ class Job:
                     # any push_log yielding for this block.
                     from_pos = item.console_pos
                     to_pos = end_positions[idx]
-                    yield from _yield_pushes(from_pos, to_pos)
+                    yield from _yield_pushes(from_pos, to_pos, include_pushes)
                     continue
                 elif block_code:
                     yield ChatHistoryItem(
@@ -1679,15 +1753,26 @@ class Job:
                 )
 
             # Any push_log messages emitted while this block was running.
-            yield from _yield_pushes(from_pos, to_pos)
+            yield from _yield_pushes(from_pos, to_pos, include_pushes)
 
         if not deferred_emitted:
             for summary in deferred_summaries:
                 yield _summary_item(summary)
 
-    def get_chat_history(self, compacted: bool = True) -> Iterable[ChatHistoryItem]:
-        """Yield LLM-facing chat history, using available summaries by default."""
-        yield from self._iter_chat_history(compacted=compacted)
+    def get_chat_history(
+        self, compacted: bool = True, start_at: Optional[int] = None,
+        num_turns: Optional[int] = None,
+    ) -> Iterable[ChatHistoryItem]:
+        """Yield LLM-facing history, optionally selecting zero-based LLM turns."""
+        if (start_at is None) != (num_turns is None):
+            raise ValueError("start_at and num_turns must be provided together")
+        if start_at is not None and (start_at < 0 or num_turns < 0):
+            raise ValueError("start_at and num_turns must be non-negative")
+        if num_turns == 0:
+            return
+        yield from self._iter_chat_history(
+            compacted=compacted, start_at=start_at, num_turns=num_turns,
+        )
 
     def _build_request_data(
         self,
@@ -1974,10 +2059,14 @@ class Job:
             ))
         self.__last_difficulty = difficulty
 
+    def _execution_chat_log(self):
+        """Return records belonging to this job execution."""
+        return self.chat_log
+
     @property
     def difficulty_token_extension(self) -> int:
         """Derive the additional token budget from immutable escalation snapshots."""
-        return sum(item.cumulative_token_usage for item in self.chat_log
+        return sum(item.cumulative_token_usage for item in self._execution_chat_log()
                    if isinstance(item, DifficultyChangeLogItem))
 
     @property
@@ -2552,6 +2641,11 @@ class Job:
         """Returns the number of LLM turns (excludes warmup code blocks)."""
         return sum(1 for item in self.chat_log if isinstance(item, LLM_LogItem))
 
+    @property
+    def num_execution_turns(self) -> int:
+        """Number of turns charged against this execution's harness limit."""
+        return self.num_turns
+
     def count_llm_actions(self) -> int:
         """Return the number of LLM actions recorded in chat_log.
 
@@ -2566,7 +2660,7 @@ class Job:
             The total number of recorded LLM actions.
         """
         action_count = 0
-        for item in self.chat_log:
+        for item in self._execution_chat_log():
             if not isinstance(item, LLM_LogItem):
                 continue
 

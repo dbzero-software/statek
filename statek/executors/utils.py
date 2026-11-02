@@ -1153,6 +1153,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                                 ToolError(err_message=error) if error else joined
                             )
 
+        # Capture the baseline before exit handling or the first LLM request.
+        if job.status == JobStatus.WARMING_UP and not job.has_more_warmup_blocks():
+            job._Job__init_warmup_summary()  # pylint: disable=protected-access
+
         # Step 9: If code has finished, transition to DONE and return True
         if job.py_env.exit_status is not None:
             # Apply the Step 16 follow-up guard before code-triggered DONE.

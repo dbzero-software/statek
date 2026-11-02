@@ -698,6 +698,85 @@ class TestJobGetChatHistory:
         assert history[4].content == "resp3"
         assert history[5].content == "Out5"
 
+    def test_get_chat_history_turn_slice_keeps_prelude_and_complete_turns(self, job_factory):
+        job = job_factory(warmup_code="setup()")
+        job.py_env.push_log = {0: "initial"}
+        job.py_env.console = ["warmup out", "out1", "out2"]
+        set_warmup_positions(job, [1])
+        job.chat_log.extend([
+            create_chat_log_item(console_pos=1, llm_resp="resp1"),
+            create_chat_log_item(console_pos=2, llm_resp="resp2"),
+        ])
+
+        assert [item.content for item in job.get_chat_history(
+            compacted=False, start_at=0, num_turns=1,
+        )] == ["initial", "setup()", "warmup out", "resp1", "out1"]
+        assert [item.content for item in job.get_chat_history(
+            compacted=False, start_at=1, num_turns=1,
+        )] == ["resp2", "out2"]
+
+    def test_get_chat_history_slice_assigns_messages_to_following_turn(self, job_factory):
+        job = job_factory()
+        job.py_env.console = ["out1", "out2"]
+        job.py_env.push_log = {1: "pushed follow-up"}
+        job.chat_log.extend([
+            create_chat_log_item(console_pos=0, llm_resp="resp1"),
+            UserLogItem(message="logged follow-up"),
+            create_chat_log_item(console_pos=1, llm_resp="resp2"),
+        ])
+
+        assert [item.content for item in job.get_chat_history(
+            compacted=False, start_at=0, num_turns=1,
+        )] == ["resp1", "out1"]
+        assert [item.content for item in job.get_chat_history(
+            compacted=False, start_at=1, num_turns=1,
+        )] == ["pushed follow-up", "logged follow-up", "resp2", "out2"]
+
+    def test_get_chat_history_slice_clips_and_validates_arguments(self, job_factory):
+        job = job_factory()
+        job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp"))
+        assert [item.content for item in job.get_chat_history(
+            start_at=0, num_turns=10,
+        )] == ["resp"]
+        assert not list(job.get_chat_history(start_at=1, num_turns=1))
+        assert not list(job.get_chat_history(start_at=0, num_turns=0))
+        for kwargs in ({"start_at": 0}, {"num_turns": 1},
+                       {"start_at": -1, "num_turns": 1},
+                       {"start_at": 0, "num_turns": -1}):
+            with pytest.raises(ValueError):
+                list(job.get_chat_history(**kwargs))
+
+    def test_get_chat_history_slice_keeps_tool_call_with_result(self, job_factory):
+        job = job_factory()
+        call = CallSpec(id="call-1", func_name="python_cli", kwargs={"code": "1 + 1"})
+        first = create_chat_log_item(
+            console_pos=0, llm_resp=CodeBlock(tool_calls=[call]),
+        )
+        first.tool_log = ["2"]
+        job.chat_log.extend([
+            first, create_chat_log_item(console_pos=0, llm_resp="next"),
+        ])
+
+        history = list(job.get_chat_history(start_at=0, num_turns=1))
+
+        assert [item.role for item in history] == [ChatRole.ASSISTANT, ChatRole.TOOL]
+        assert history[0].tool_calls == [call]
+        assert history[1].content == "2"
+
+    def test_get_chat_history_slice_excludes_pending_follow_up(self, job_factory):
+        job = job_factory()
+        job.chat_log.extend([
+            create_chat_log_item(console_pos=0, llm_resp="resp"),
+            UserLogItem(message="next request"),
+        ])
+        job.py_env.push_log = {1: "pushed next request"}
+        job.py_env.console = ["out"]
+
+        assert [item.content for item in job.get_chat_history(
+            start_at=0, num_turns=10,
+        )] == ["resp", "out"]
+        assert not list(job.get_chat_history(start_at=1, num_turns=1))
+
     def test_get_chat_history_initial_user_message_from_push_log(self, job_factory):
         """A push_log entry at console position 0 becomes the initial USER item."""
         job = job_factory()

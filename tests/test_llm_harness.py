@@ -75,6 +75,7 @@ def _make_job(num_turns=0, exception_count=0, max_consecutive_exceptions=0,
               approx_token_usage=0, num_completions=None, difficulty_token_extension=0):
     job = MagicMock()
     job.num_turns = num_turns
+    job.num_execution_turns = num_turns
     job.exception_count = exception_count
     job.max_consecutive_exceptions = max_consecutive_exceptions
     job.approx_token_usage = approx_token_usage
