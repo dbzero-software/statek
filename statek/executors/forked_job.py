@@ -1,36 +1,100 @@
-"""Persistent continuations with independent history and execution accounting."""
+"""Persistent continuations viewing source history with independent execution."""
 # pylint: disable=protected-access,no-member
-from dataclasses import dataclass, fields
+from collections.abc import Mapping
+from dataclasses import dataclass
+from itertools import islice
+from operator import index as integer_index
 
 import dbzero as db0
 
 from statek.executors.chat_log_item import (
-    ChatLogItem, DifficultyChangeLogItem, LLM_LogItem, ToolError, UserLogItem,
-    WarmupLogItem,
+    ChatLogItem, DifficultyChangeLogItem, LLM_LogItem, WarmupLogItem,
 )
 from statek.executors.job import (
-    Job, JobStatus, JobCompactionResult, JobSummary, StateSummary, PyHandleDesc,
-    _get_static_task_difficulty,
+    Job, JobStatus, JobCompactionResult, _get_static_task_difficulty,
 )
-from statek.pyenv import Error, PyEnv
-from statek.utils import CodeBlock, CallSpec
+from statek.pyenv import PyEnv
+from statek.utils import CodeBlock
 
 
-def _copy_history(value):
-    """Copy owned history data while preserving external application handles."""
-    if isinstance(value, (ChatLogItem, UserLogItem, CodeBlock, CallSpec, ToolError,
-                          Error, JobCompactionResult, JobSummary, StateSummary, PyHandleDesc)):
-        return type(value)(**{field.name: _copy_history(getattr(value, field.name))
-                              for field in fields(value)})
-    if isinstance(value, (list, db0.types.List)):
-        return [_copy_history(item) for item in value]
-    if isinstance(value, (dict, db0.types.Dict)):
-        return {key: _copy_history(item) for key, item in value.items()}
-    if isinstance(value, (set, db0.types.Set)):
-        return {_copy_history(item) for item in value}
-    if isinstance(value, (tuple, db0.types.Tuple)):
-        return tuple(_copy_history(item) for item in value)
-    return value
+@db0.memo
+class _ForkedList:
+    """A bounded source prefix followed by a persistent, independently owned tail."""
+
+    def __init__(self, owner, attribute, boundary):
+        self.owner = owner
+        self.attribute = attribute
+        self.boundary = boundary
+        self.tail = []
+
+    def __len__(self):
+        return self.boundary + len(self.tail)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return [self[position] for position in range(*key.indices(len(self)))]
+        position = integer_index(key)
+        if position < 0:
+            position += len(self)
+        if not 0 <= position < len(self):
+            raise IndexError('forked list index out of range')
+        if position < self.boundary:
+            return getattr(self.owner, self.attribute)[position]
+        return self.tail[position - self.boundary]
+
+    def __setitem__(self, key, value):
+        position = integer_index(key)
+        if position < 0:
+            position += len(self)
+        if not 0 <= position < len(self):
+            raise IndexError('forked list index out of range')
+        if position < self.boundary:
+            raise TypeError('Cannot replace inherited history')
+        self.tail[position - self.boundary] = value
+
+    def __iter__(self):
+        return (self[position] for position in range(len(self)))
+
+    def append(self, value):
+        self.tail.append(value)
+
+    def extend(self, values):
+        for value in values:
+            self.append(value)
+
+
+@db0.memo
+class _ForkedLog(Mapping):
+    """Console-indexed source entries below a cutoff, with local overrides."""
+
+    def __init__(self, environment, attribute, end):
+        self.environment = environment
+        self.attribute = attribute
+        self.end = end
+        self.local = {}
+
+    @property
+    def _source(self):
+        source = getattr(self.environment, self.attribute)
+        return {} if source is None else source
+
+    def __getitem__(self, key):
+        if key in self.local:
+            return self.local[key]
+        if key < self.end:
+            return self._source[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        self.local[key] = value
+
+    def __iter__(self):
+        source = self._source
+        yield from (key for key in source if key < self.end and key not in self.local)
+        yield from self.local
+
+    def __len__(self):
+        return sum(1 for _ in self)
 
 
 @db0.memo
@@ -39,7 +103,8 @@ class ForkedJob(Job):
     """Continue a bounded conversation using current Python variable bindings.
 
     Variable maps are private, but objects referenced by their values remain
-    shared. Historical forks do not rewind application state.
+    shared. Historical forks do not rewind application state. Inherited history
+    is a live, bounded view; only the continuation is owned by this job.
     ``forked_at`` is the first excluded raw chat-log index, including user
     messages and warmup entries. The inherited range is [0, forked_at).
     """
@@ -54,7 +119,7 @@ class ForkedJob(Job):
         if not 0 <= forked_at <= len(src_job.chat_log):
             raise ValueError('forked_at is outside the source history')
         end = forked_at
-        inherited_log = src_job.chat_log[:end]
+        inherited_log = islice(src_job.chat_log, end)
         for item in inherited_log:
             if not isinstance(item, LLM_LogItem):
                 continue
@@ -69,7 +134,7 @@ class ForkedJob(Job):
                         raise ValueError('Cannot inherit incomplete tool results') from error
 
         source_console = src_job.py_env.console or []
-        console_end = next((item.console_pos for item in src_job.chat_log[end:]
+        console_end = next((item.console_pos for item in islice(src_job.chat_log, end, None)
                             if isinstance(item, ChatLogItem)
                             and not isinstance(item, DifficultyChangeLogItem)), len(source_console))
         if end == 0:
@@ -77,18 +142,13 @@ class ForkedJob(Job):
         # A push at the cutoff console position belongs to the retained tail.
         # A full-history fork also inherits pushes awaiting the next LLM turn.
         full_history = end == len(src_job.chat_log)
-        push_log = {
-            key: _copy_history(value)
-            for key, value in (src_job.py_env.push_log or {}).items()
-            if (full_history or end > 0)
-            and (key == 0 or key < console_end or (full_history and key <= console_end))
-        }
+        push_end = (console_end + 1 if full_history else max(1, console_end)) if end else 0
         summaries = getattr(src_job, '_Job__job_summaries', None) or []
         if isinstance(summaries, JobCompactionResult):
             summaries = [summaries]
         selected_summaries = [result for result in summaries
                               if result.chat_log_pos + result.chat_log_len <= end]
-        self.__src_job = src_job  # pylint: disable=unused-private-member
+        self.__src_job = src_job
         self.__forked_at = forked_at
         self.__inherited_log_len = end
         self.__inherited_console_len = console_end
@@ -99,23 +159,19 @@ class ForkedJob(Job):
         environment = PyEnv(
             local_state=dict(src_job.py_env.local_state or {}),
             global_state=dict(src_job.py_env.global_state or {}),
-            console=list(source_console[:console_end]),
-            exceptions={key: _copy_history(value)
-                        for key, value in (src_job.py_env.exceptions or {}).items()
-                        if key < console_end},
-            push_log=push_log,
+            console=_ForkedList(src_job.py_env, 'console', console_end),
+            exceptions=_ForkedLog(src_job.py_env, 'exceptions', console_end),
+            push_log=_ForkedLog(src_job.py_env, 'push_log', push_end),
         )
         super().__init__(job_def=src_job.job_def, job_status=JobStatus.STARTED,
                          py_env=environment,
-                         chat_log=[_copy_history(item) for item in inherited_log])
+                         chat_log=_ForkedList(self.__src_job, 'chat_log', end))
         self._Job__last_difficulty = self.__initial_difficulty
         self.__initializing = False
         self._sync_usage_pricing()
-        self._Job__job_summaries = [_copy_history(result) for result in selected_summaries]
-        if not any(isinstance(item, WarmupLogItem) for item in src_job.chat_log[end:]):
-            self._Job__warmup_summary = _copy_history(
-                getattr(src_job, '_Job__warmup_summary', None)
-            )
+        self._Job__job_summaries = selected_summaries
+        if not any(isinstance(item, WarmupLogItem) for item in islice(src_job.chat_log, end, None)):
+            self._Job__warmup_summary = getattr(src_job, '_Job__warmup_summary', None)
 
     def get_current_difficulty(self):
         """Keep initialization on the source model without replaying escalation."""

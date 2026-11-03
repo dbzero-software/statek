@@ -50,16 +50,19 @@ def test_fork_history_boundary(job_factory, boundary, expected):
     assert fork in list(db0.find(Job, JobStatus.STARTED))
 
 
-def test_fork_preserves_history_and_owns_execution(job_factory):
+def test_fork_views_history_and_owns_execution(job_factory):
     source = source_job(job_factory)
     handle = PyEnv()
     source.add_locals(shared=handle, value=1)
     fork = ForkedJob(source, 3)
-    before = [item.content for item in fork.get_chat_history()]
     source.chat_log[2].llm_resp = "changed"
     source.py_env.console[1] = "changed output"
     source.py_env.push_log[0] = "new initial"
-    assert [item.content for item in fork.get_chat_history()] == before
+    assert [item.content for item in fork.get_chat_history()] == [
+        'initial\nnew initial', 'setup()', 'ready', 'changed', 'changed output']
+    assert db0.uuid(fork.chat_log[2]) == db0.uuid(source.chat_log[2])
+    assert not fork.chat_log.tail
+    assert not fork.py_env.console.tail
     fork.add_locals(value=2)
     assert source.py_env.local_state['value'] == 1
     assert fork.py_env.local_state['shared'] == handle
@@ -97,7 +100,7 @@ def test_invalid_boundary(job_factory, boundary):
         ForkedJob(source_job(job_factory), boundary)
 
 
-def test_fork_has_fresh_limits_and_copies_tool_history(job_factory):
+def test_fork_has_fresh_limits_and_views_tool_history(job_factory):
     source = job_factory()
     source.chat_log = [LLM_LogItem(0, llm_resp=CodeBlock(tool_calls=[
         CallSpec('call', 'tool', kwargs={'x': [1]})]), tool_log=[ToolError('old error')])]
@@ -105,8 +108,8 @@ def test_fork_has_fresh_limits_and_copies_tool_history(job_factory):
     fork = ForkedJob(source, 1)
     source.chat_log[0].tool_log[0].err_message = 'changed'
     source.chat_log[0].llm_resp.tool_calls[0].kwargs['x'].append(2)
-    assert fork.chat_log[0].tool_log[0].err_message == 'old error'
-    assert list(fork.chat_log[0].llm_resp.tool_calls[0].kwargs['x']) == [1]
+    assert fork.chat_log[0].tool_log[0].err_message == 'changed'
+    assert list(fork.chat_log[0].llm_resp.tool_calls[0].kwargs['x']) == [1, 2]
     assert fork.exception_count == 0
     assert fork.count_llm_actions() == 0
     assert fork.approx_token_usage == 0
@@ -159,7 +162,7 @@ def test_fork_requests_and_slices_use_combined_timeline(job_factory):
         'fork prompt', 'fork answer']
 
 
-def test_fork_copies_warmup_baseline(job_factory):
+def test_fork_views_warmup_baseline(job_factory):
     source = source_job(job_factory)
     source.add_locals(warmup_name=1)
     source._Job__init_warmup_summary()
@@ -167,10 +170,10 @@ def test_fork_copies_warmup_baseline(job_factory):
     fork = ForkedJob(source, 3)
     summary = fork._Job__warmup_summary
     assert summary is not None
-    assert db0.uuid(summary) != db0.uuid(source._Job__warmup_summary)
+    assert db0.uuid(summary) == db0.uuid(source._Job__warmup_summary)
     assert {item.var_name for item in summary.state.locals} == {'warmup_name'}
     source._Job__warmup_summary.state.locals.clear()
-    assert {item.var_name for item in summary.state.locals} == {'warmup_name'}
+    assert not summary.state.locals
     assert ForkedJob(source, 1)._Job__warmup_summary is None
 
 
@@ -223,3 +226,48 @@ def test_legacy_fork_reports_raw_boundary_after_reopen(job_factory):
     assert restored.forked_at == 3
     assert restored.exception_count == 1
     assert restored.num_execution_turns == 1
+
+
+def test_view_stays_bounded_and_is_live_after_reopen(job_factory):
+    source = source_job(job_factory)
+    fork = ForkedJob(source, 3)
+    nested = ForkedJob(fork, 3)
+    fork.chat_log.append(LLM_LogItem(2, llm_resp='local'))
+    fork.console_append('local output')
+    source.chat_log.append(LLM_LogItem(3, llm_resp='excluded'))
+    source.console_append('excluded output')
+    source.chat_log[2].llm_resp = 'updated'
+    source.py_env.console[1] = 'updated output'
+    source.py_env.push_log[1] = 'updated push'
+    uuid = db0.uuid(nested)
+    source_uuid = db0.uuid(source)
+    db0.close()
+    db0.init(DB0_DIR, read_write=True)
+    db0.open('test_prefix', 'rw')
+    restored = db0.fetch(uuid)
+    assert len(restored.chat_log) == 3
+    assert list(restored.py_env.console) == ['ready', 'updated output']
+    assert restored.chat_log[-1].llm_resp == 'updated'
+    assert restored.py_env.push_log[1] == 'updated push'
+    db0.fetch(source_uuid).chat_log[2].llm_resp = 'changed after reopen'
+    assert restored.chat_log[-1].llm_resp == 'changed after reopen'
+    assert restored.chat_log[::-1] == list(reversed(restored.chat_log))
+    assert not restored.chat_log.tail
+    with pytest.raises(TypeError, match='inherited'):
+        restored.chat_log[0] = UserLogItem('overwrite')
+
+
+def test_fork_views_summaries_and_keeps_local_logs_separate(job_factory):
+    source = source_job(job_factory)
+    result = JobCompactionResult(2, 3, JobSummary('input', 'output'))
+    source._Job__job_summaries = result
+    fork = ForkedJob(source, len(source.chat_log))
+    result.job_summary.input_summary = 'updated summary'
+    assert 'updated summary' in list(fork.get_chat_history())[-1].content
+    fork.py_env.push_log[3] = 'fork push'
+    assert source.py_env.push_log[3] == 'pending'
+    assert fork.py_env.push_log[3] == 'fork push'
+    fork.chat_log.append(LLM_LogItem(3, llm_resp='original'))
+    fork.chat_log[-1] = LLM_LogItem(3, llm_resp='replaced')
+    assert fork.chat_log[-1].llm_resp == 'replaced'
+    assert len(source.chat_log) == 5
