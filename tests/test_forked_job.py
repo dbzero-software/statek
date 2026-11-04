@@ -12,8 +12,8 @@ from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats
 from statek.executors.forked_job import ForkedJob
 from statek.executors.job import Job, JobStatus, JobCompactionResult, JobSummary
 from statek.executors.chat_log_item import LLM_LogItem, UserLogItem, WarmupLogItem
-from statek.pyenv import PyEnv
-from tests.conftest import DB0_DIR
+from statek.pyenv import Error, ErrorKind, PyEnv, PyEnvForked
+from tests.conftest import DB0_DIR, seed_pyenv
 
 
 def source_job(job_factory):
@@ -21,8 +21,9 @@ def source_job(job_factory):
     job.chat_log = [UserLogItem("initial"), WarmupLogItem(0),
                     LLM_LogItem(1, llm_resp="first()"),
                     UserLogItem("follow-up"), LLM_LogItem(2, llm_resp="second()")]
-    job.py_env.console = ["ready", "first output", "second output"]
-    job.py_env.push_log = {2: "pushed follow-up", 3: "pending"}
+    job.py_env = seed_pyenv(
+        job.py_env, console=["ready", "first output", "second output"],
+        push_log={2: "pushed follow-up", 3: "pending"})
     return job
 
 
@@ -56,22 +57,22 @@ def test_fork_views_history_and_owns_execution(job_factory):
     source.add_locals(shared=handle, value=1)
     fork = ForkedJob(source, 3)
     source.chat_log[2].llm_resp = "changed"
-    source.py_env.console[1] = "changed output"
-    source.py_env.push_log[0] = "new initial"
+    source.py_env._console[1] = "changed output"
+    source.py_env._push_log[0] = "new initial"
     assert [item.content for item in fork.get_chat_history()] == [
         'initial\nnew initial', 'setup()', 'ready', 'changed', 'changed output']
     assert db0.uuid(fork.chat_log[2]) == db0.uuid(source.chat_log[2])
     assert not fork.chat_log.tail
-    assert not fork.py_env.console.tail
+    assert not fork.py_env._console
     fork.add_locals(value=2)
-    assert source.py_env.local_state['value'] == 1
-    assert fork.py_env.local_state['shared'] == handle
+    assert source.py_env.get_local('value') == 1
+    assert fork.py_env.get_local('shared') == handle
     fork.chat_log.append(LLM_LogItem(2, llm_resp="fork code"))
     fork.console_append("fork output")
     assert fork.num_turns == 2
     assert fork.num_execution_turns == 1
     assert fork.get_next_code_block() == "fork code"
-    assert len(source.py_env.console) == 3
+    assert source.py_env.console_len == 3
     nested = ForkedJob(fork, len(fork.chat_log))
     assert nested.num_execution_turns == 0
     assert list(nested.get_chat_history())[-1].content == "fork output"
@@ -148,7 +149,7 @@ async def test_engine_starts_with_inference_then_runs_only_fork_code(job_factory
         assert execute.call_args.args[0].code == 'x = 42'
     assert fork.num_execution_turns == 2
     assert source.num_turns == 2
-    assert len(source.py_env.console) == 3
+    assert source.py_env.console_len == 3
 
 
 def test_fork_requests_and_slices_use_combined_timeline(job_factory):
@@ -199,13 +200,14 @@ def test_push_log_is_bounded_by_console_position(job_factory):
     source = job_factory()
     source.chat_log = [LLM_LogItem(0, llm_resp='first'),
                        LLM_LogItem(2, llm_resp='second')]
-    source.py_env.console = ['out1', 'out2', 'out3']
-    source.py_env.push_log = {0: ['initial'], 1: ['during first'],
-                              2: 'cutoff message', 3: 'trailing'}
+    source.py_env = seed_pyenv(
+        source.py_env, console=['out1', 'out2', 'out3'],
+        push_log={0: ['initial'], 1: ['during first'],
+                  2: 'cutoff message', 3: 'trailing'})
     partial = ForkedJob(source, 1)
     assert [item.content for item in partial.get_chat_history()] == [
         'initial', 'first', 'out1\nout2', 'during first']
-    assert list(partial.py_env.console) == ['out1', 'out2']
+    assert list(partial.py_env.iter_console()) == ['out1', 'out2']
     full = ForkedJob(source, len(source.chat_log))
     assert [item.content for item in full.get_chat_history()] == [
         item.content for item in source.get_chat_history()]
@@ -230,6 +232,7 @@ def test_legacy_fork_reports_raw_boundary_after_reopen(job_factory):
 
 def test_view_stays_bounded_and_is_live_after_reopen(job_factory):
     source = source_job(job_factory)
+    source.py_env._push_log[1] = "original push"
     fork = ForkedJob(source, 3)
     nested = ForkedJob(fork, 3)
     fork.chat_log.append(LLM_LogItem(2, llm_resp='local'))
@@ -237,8 +240,8 @@ def test_view_stays_bounded_and_is_live_after_reopen(job_factory):
     source.chat_log.append(LLM_LogItem(3, llm_resp='excluded'))
     source.console_append('excluded output')
     source.chat_log[2].llm_resp = 'updated'
-    source.py_env.console[1] = 'updated output'
-    source.py_env.push_log[1] = 'updated push'
+    source.py_env._console[1] = 'updated output'
+    source.py_env._push_log[1] = 'updated push'
     uuid = db0.uuid(nested)
     source_uuid = db0.uuid(source)
     db0.close()
@@ -246,9 +249,9 @@ def test_view_stays_bounded_and_is_live_after_reopen(job_factory):
     db0.open('test_prefix', 'rw')
     restored = db0.fetch(uuid)
     assert len(restored.chat_log) == 3
-    assert list(restored.py_env.console) == ['ready', 'updated output']
+    assert list(restored.py_env.iter_console()) == ['ready', 'updated output']
     assert restored.chat_log[-1].llm_resp == 'updated'
-    assert restored.py_env.push_log[1] == 'updated push'
+    assert dict(restored.py_env.iter_push_log())[1] == 'updated push'
     db0.fetch(source_uuid).chat_log[2].llm_resp = 'changed after reopen'
     assert restored.chat_log[-1].llm_resp == 'changed after reopen'
     assert restored.chat_log[::-1] == list(reversed(restored.chat_log))
@@ -264,10 +267,27 @@ def test_fork_views_summaries_and_keeps_local_logs_separate(job_factory):
     fork = ForkedJob(source, len(source.chat_log))
     result.job_summary.input_summary = 'updated summary'
     assert 'updated summary' in list(fork.get_chat_history())[-1].content
-    fork.py_env.push_log[3] = 'fork push'
-    assert source.py_env.push_log[3] == 'pending'
-    assert fork.py_env.push_log[3] == 'fork push'
+    fork.py_env.push_append('fork push')
+    assert dict(source.py_env.iter_push_log())[3] == 'pending'
+    assert dict(fork.py_env.iter_push_log())[3] == ['pending', 'fork push']
     fork.chat_log.append(LLM_LogItem(3, llm_resp='original'))
     fork.chat_log[-1] = LLM_LogItem(3, llm_resp='replaced')
     assert fork.chat_log[-1].llm_resp == 'replaced'
     assert len(source.chat_log) == 5
+
+
+def test_partial_environment_view_keeps_local_errors_at_cutoff(job_factory):
+    source = source_job(job_factory)
+    source.py_env = seed_pyenv(
+        source.py_env, exceptions={1: Error(ErrorKind.EXECUTION, 'inherited'),
+                                   2: Error(ErrorKind.HARNESS, 'excluded')})
+    fork = ForkedJob(source, 3)
+    assert isinstance(fork.py_env, PyEnvForked)
+    assert fork.py_env.get_exception(2) is None
+    fork.py_env.push_append('fork push')
+    fork.py_env.console_append('fork error', error=Error(ErrorKind.EXECUTION, 'local'))
+    assert [(pos, error.message) for pos, error in fork.py_env.iter_exceptions()] == [
+        (1, 'inherited'), (2, 'local')]
+    assert dict(fork.py_env.iter_push_log())[2] == 'fork push'
+    assert source.py_env.get_exception(2).message == 'excluded'
+    assert dict(source.py_env.iter_push_log())[2] == 'pushed follow-up'

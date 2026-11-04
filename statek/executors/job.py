@@ -763,7 +763,7 @@ class Job:
             input_summary="",
             output_summary="",
             state=StateSummary(locals={
-                PyHandleDesc(var_name=name) for name in self.py_env.local_state or {}
+                PyHandleDesc(var_name=name) for name, _ in self.py_env.iter_locals()
             }),
         )
 

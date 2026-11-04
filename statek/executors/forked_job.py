@@ -13,7 +13,7 @@ from statek.executors.chat_log_item import (
 from statek.executors.job import (
     Job, JobStatus, JobCompactionResult, _get_static_task_difficulty,
 )
-from statek.pyenv import PyEnv
+from statek.pyenv import fork_env
 from statek.utils import CodeBlock
 
 
@@ -100,9 +100,9 @@ class _ForkedLog(Mapping):
 @db0.memo
 @dataclass(init=False, eq=False, repr=False)
 class ForkedJob(Job):
-    """Continue a bounded conversation using current Python variable bindings.
+    """Continue a bounded conversation using generation-resolved Python bindings.
 
-    Variable maps are private, but objects referenced by their values remain
+    Variable bindings are source views with private overrides; their values remain
     shared. Historical forks do not rewind application state. Inherited history
     is a live, bounded view; only the continuation is owned by this job.
     ``forked_at`` is the first excluded raw chat-log index, including user
@@ -133,10 +133,10 @@ class ForkedJob(Job):
                     except (KeyError, IndexError) as error:
                         raise ValueError('Cannot inherit incomplete tool results') from error
 
-        source_console = src_job.py_env.console or []
+        source_console_len = src_job.py_env.console_len
         console_end = next((item.console_pos for item in islice(src_job.chat_log, end, None)
                             if isinstance(item, ChatLogItem)
-                            and not isinstance(item, DifficultyChangeLogItem)), len(source_console))
+                            and not isinstance(item, DifficultyChangeLogItem)), source_console_len)
         if end == 0:
             console_end = 0
         # A push at the cutoff console position belongs to the retained tail.
@@ -156,13 +156,8 @@ class ForkedJob(Job):
         self.__initial_difficulty = (getattr(src_job, '_Job__last_difficulty', None)
                                      or _get_static_task_difficulty(src_job.job_def.metadata))
         self.__initializing = True
-        environment = PyEnv(
-            local_state=dict(src_job.py_env.local_state or {}),
-            global_state=dict(src_job.py_env.global_state or {}),
-            console=_ForkedList(src_job.py_env, 'console', console_end),
-            exceptions=_ForkedLog(src_job.py_env, 'exceptions', console_end),
-            push_log=_ForkedLog(src_job.py_env, 'push_log', push_end),
-        )
+        environment = fork_env(src_job.py_env)
+        environment._bound_history(console_end, push_end)
         super().__init__(job_def=src_job.job_def, job_status=JobStatus.STARTED,
                          py_env=environment,
                          chat_log=_ForkedList(self.__src_job, 'chat_log', end))

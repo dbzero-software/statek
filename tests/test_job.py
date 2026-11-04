@@ -701,8 +701,8 @@ class TestJobGetChatHistory:
 
     def test_get_chat_history_turn_slice_keeps_prelude_and_complete_turns(self, job_factory):
         job = job_factory(warmup_code="setup()")
-        job.py_env.push_log = {0: "initial"}
-        job.py_env.console = ["warmup out", "out1", "out2"]
+        job.py_env = seed_pyenv(job.py_env, push_log={0: "initial"},
+                                   console=["warmup out", "out1", "out2"])
         set_warmup_positions(job, [1])
         job.chat_log.extend([
             create_chat_log_item(console_pos=1, llm_resp="resp1"),
@@ -718,8 +718,8 @@ class TestJobGetChatHistory:
 
     def test_get_chat_history_slice_assigns_messages_to_following_turn(self, job_factory):
         job = job_factory()
-        job.py_env.console = ["out1", "out2"]
-        job.py_env.push_log = {1: "pushed follow-up"}
+        job.py_env = seed_pyenv(job.py_env, console=["out1", "out2"],
+                                   push_log={1: "pushed follow-up"})
         job.chat_log.extend([
             create_chat_log_item(console_pos=0, llm_resp="resp1"),
             UserLogItem(message="logged follow-up"),
@@ -770,8 +770,8 @@ class TestJobGetChatHistory:
             create_chat_log_item(console_pos=0, llm_resp="resp"),
             UserLogItem(message="next request"),
         ])
-        job.py_env.push_log = {1: "pushed next request"}
-        job.py_env.console = ["out"]
+        job.py_env = seed_pyenv(job.py_env, push_log={1: "pushed next request"},
+                                   console=["out"])
 
         assert [item.content for item in job.get_chat_history(
             start_at=0, num_turns=10,
