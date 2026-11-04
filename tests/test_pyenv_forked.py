@@ -4,7 +4,7 @@ import dbzero as db0
 import pytest
 
 from statek.pyenv import Error, ErrorKind, PyEnv, PyEnvForked, fork_env
-from tests.test_pyenv import _legacy_env, _reopen_env
+from tests.test_pyenv import _reopen_env
 
 
 pytestmark = pytest.mark.usefixtures("db0_fixture")
@@ -95,8 +95,9 @@ def test_empty_state_and_independent_continuation(globals_state):
 
 
 @pytest.mark.parametrize("read_only", [False, True])
-def test_nested_legacy_views_survive_reopen(read_only):
-    source = _legacy_env()
+def test_nested_views_survive_reopen(read_only):
+    source = PyEnv(local_state={'local': 1}, console=['old output'],
+                   exceptions={0: Error(ErrorKind.HARNESS, 'limit')})
     fork = fork_env(source)
     fork.update_state(local=10)
     fork.console_append("fork output")

@@ -214,11 +214,9 @@ def test_push_log_is_bounded_by_console_position(job_factory):
     assert not list(ForkedJob(source, 0).get_chat_history())
 
 
-def test_legacy_fork_reports_raw_boundary_after_reopen(job_factory):
+def test_fork_reports_raw_boundary_after_reopen(job_factory):
     source = source_job(job_factory)
     fork = ForkedJob(source, 3)
-    # Simulate the stored fields of a fork created with the old LLM-count API.
-    fork._ForkedJob__forked_at = 1
     fork.chat_log.append(LLM_LogItem(2, llm_resp='new', tool_log=ToolError('local error')))
     uuid = db0.uuid(fork)
     db0.close()

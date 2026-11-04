@@ -1,6 +1,5 @@
 """Persistent continuations viewing source history with independent execution."""
 # pylint: disable=protected-access,no-member
-from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import islice
 from operator import index as integer_index
@@ -64,40 +63,6 @@ class _ForkedList:
 
 
 @db0.memo
-class _ForkedLog(Mapping):
-    """Console-indexed source entries below a cutoff, with local overrides."""
-
-    def __init__(self, environment, attribute, end):
-        self.environment = environment
-        self.attribute = attribute
-        self.end = end
-        self.local = {}
-
-    @property
-    def _source(self):
-        source = getattr(self.environment, self.attribute)
-        return {} if source is None else source
-
-    def __getitem__(self, key):
-        if key in self.local:
-            return self.local[key]
-        if key < self.end:
-            return self._source[key]
-        raise KeyError(key)
-
-    def __setitem__(self, key, value):
-        self.local[key] = value
-
-    def __iter__(self):
-        source = self._source
-        yield from (key for key in source if key < self.end and key not in self.local)
-        yield from self.local
-
-    def __len__(self):
-        return sum(1 for _ in self)
-
-
-@db0.memo
 @dataclass(init=False, eq=False, repr=False)
 class ForkedJob(Job):
     """Continue a bounded conversation using generation-resolved Python bindings.
@@ -143,17 +108,16 @@ class ForkedJob(Job):
         # A full-history fork also inherits pushes awaiting the next LLM turn.
         full_history = end == len(src_job.chat_log)
         push_end = (console_end + 1 if full_history else max(1, console_end)) if end else 0
-        summaries = getattr(src_job, '_Job__job_summaries', None) or []
+        summaries = src_job._Job__job_summaries or []
         if isinstance(summaries, JobCompactionResult):
             summaries = [summaries]
         selected_summaries = [result for result in summaries
                               if result.chat_log_pos + result.chat_log_len <= end]
         self.__src_job = src_job
         self.__forked_at = forked_at
-        self.__inherited_log_len = end
         self.__inherited_console_len = console_end
         # Establish the model baseline before Job initializes usage pricing.
-        self.__initial_difficulty = (getattr(src_job, '_Job__last_difficulty', None)
+        self.__initial_difficulty = (src_job._Job__last_difficulty
                                      or _get_static_task_difficulty(src_job.job_def.metadata))
         self.__initializing = True
         environment = fork_env(src_job.py_env)
@@ -166,7 +130,7 @@ class ForkedJob(Job):
         self._sync_usage_pricing()
         self._Job__job_summaries = selected_summaries
         if not any(isinstance(item, WarmupLogItem) for item in islice(src_job.chat_log, end, None)):
-            self._Job__warmup_summary = getattr(src_job, '_Job__warmup_summary', None)
+            self._Job__warmup_summary = src_job._Job__warmup_summary
 
     def get_current_difficulty(self):
         """Keep initialization on the source model without replaying escalation."""
@@ -177,12 +141,10 @@ class ForkedJob(Job):
     @property
     def forked_at(self) -> int:
         """First raw source chat-log index excluded from the inherited history."""
-        # Older persisted forks stored an LLM count in __forked_at; their
-        # inherited-log boundary already records the corresponding raw index.
-        return getattr(self, '_ForkedJob__inherited_log_len', self.__forked_at)
+        return self.__forked_at
 
     def _execution_chat_log(self):
-        return self.chat_log[self.__inherited_log_len:]
+        return self.chat_log[self.__forked_at:]
 
     @property
     def num_execution_turns(self) -> int:
@@ -205,7 +167,7 @@ class ForkedJob(Job):
 
     def _exception_messages_by_turn(self):
         remaining = sum(isinstance(item, LLM_LogItem)
-                        for item in self.chat_log[:self.__inherited_log_len])
+                        for item in self.chat_log[:self.__forked_at])
         for item, messages in super()._exception_messages_by_turn():
             if isinstance(item, WarmupLogItem):
                 continue
