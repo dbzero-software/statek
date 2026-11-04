@@ -688,6 +688,7 @@ _notify_bound_critical_error.is_error_handler = True
 
 @memo
 @db0.tag_fields("agent", "job_def", "job_status")
+@db0.indexed_fields("_Job__last_activity")
 class Job:
     """
     A single "job" is a stateful class representing the current state of a single unit-of-work, being performed end-to-end by a single agent. By a "job" we might mean either a very simple operation such as answering a basic question ("Hey, what day of week is today") or a complex task involving retrieving information from external systems, communicating with external actors, waiting for approvals etc. - before the final response is generated.
@@ -748,6 +749,7 @@ class Job:
         ] = None
         # Local names present after warmup, used as the summarization baseline.
         self.__warmup_summary: Optional[JobSummary] = None
+        self.__last_activity: Optional[datetime] = None
         # Shared context is bound explicitly by the init_shared_context tool.
         self.__shared_context = None
 
@@ -766,6 +768,15 @@ class Job:
                 PyHandleDesc(var_name=name) for name, _ in self.py_env.iter_locals()
             }),
         )
+
+    @property
+    def last_activity(self) -> Optional[datetime]:
+        """Last conversation mutation or status transition, if recorded."""
+        return getattr(self, "_Job__last_activity", None)
+
+    def record_activity(self) -> None:
+        """Refresh the persisted activity index after a mutation."""
+        self.__last_activity = datetime.now()
 
     @property
     def model_family(self) -> Optional[str]:
@@ -879,6 +890,7 @@ class Job:
             if isinstance(item, NotificationLogItem) and item.tool_log is None:
                 item.tool_log = format_default_llm_repr([item])
         self.chat_log.extend(pending)
+        self.record_activity()
         self.__pending_chat_log = []
         return True
 
@@ -896,10 +908,12 @@ class Job:
 
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
             self.chat_log.append(item)
+            self.record_activity()
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
             self.py_env.exit_status = None
             return
         self._pending_notifications().append(item)
+        self.record_activity()
 
     def send_notification(self, message: str) -> None:
         """Record a plain-text notification for this job's next safe boundary.
@@ -914,10 +928,12 @@ class Job:
         item.tool_log = format_default_llm_repr([item])
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
             self.chat_log.append(item)
+            self.record_activity()
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
             self.py_env.exit_status = None
             return
         self._pending_notifications().append(item)
+        self.record_activity()
 
     def _current_model_pricing(self):
         """Return pricing for the concrete model used by the current LLM request."""
@@ -1155,7 +1171,9 @@ class Job:
         Args:
             new_status: The status/tag to be assigned or updated
         """
-        self.job_status = new_status
+        if self.job_status != new_status:
+            self.job_status = new_status
+            self.record_activity()
 
     def _language_hint_suffix(self) -> str:
         """Return the configured locale hint suffix for user messages, if enabled.
@@ -2047,6 +2065,7 @@ class Job:
                 difficulty=difficulty,
                 cumulative_token_usage=usage,
             ))
+            self.record_activity()
         self.__last_difficulty = difficulty
 
     def _execution_chat_log(self):
@@ -2146,6 +2165,7 @@ class Job:
                                     else cumulative_token_usage),
         )
         self.chat_log.append(chat_item)
+        self.record_activity()
 
         # Log the LLM response in the same format sent back as history
         resp_code = stored_resp.code if isinstance(stored_resp, CodeBlock) else stored_resp
@@ -2167,6 +2187,7 @@ class Job:
             console_pos=console_pos,
             reminder=reminder,
         ))
+        self.record_activity()
         self.py_env.console_append(reminder.text)
         return True
 
@@ -2200,6 +2221,7 @@ class Job:
                 post_processor=post_processor,
                 message=result,
             ))
+            self.record_activity()
             return None, True
 
         if not isinstance(result, tuple):
@@ -2221,6 +2243,7 @@ class Job:
                     post_processor=post_processor,
                     message=item,
                 ))
+                self.record_activity()
                 activated = True
                 continue
 
@@ -2796,6 +2819,7 @@ class Job:
                 self.chat_log.append(UserLogItem(message=message))
         else:
             self.py_env.push_append(message)
+        self.record_activity()
 
         reactivated = False
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
@@ -2806,6 +2830,7 @@ class Job:
                 console_pos=self.py_env.console_len,
                 llm_resp=None
             ))
+            self.record_activity()
             reactivated = True
 
         self.bind_critical_error_context(source_message)
