@@ -779,7 +779,7 @@ class Job:
             return getattr(self.py_env, 'perm_ctx', None)
 
         yield from _find_locals_in_context(
-            self.py_env.local_state,
+            dict(self.py_env.iter_locals()),
             var_type=var_type,
             var_name=var_name,
             ext_scan=ext_scan,
@@ -859,7 +859,7 @@ class Job:
         pending = self._pending_notifications()
         if not pending or not self._chat_log_finalized_for_notifications():
             return False
-        console_pos = len(self.py_env.console) if self.py_env.console else 0
+        console_pos = self.py_env.console_len
         for item in pending:
             item.console_pos = console_pos
             if isinstance(item, NotificationLogItem) and item.tool_log is None:
@@ -874,7 +874,7 @@ class Job:
             raise RuntimeError("Subtask handler must be completed before notification")
 
         item = SubTaskLogItem(
-            console_pos=len(self.py_env.console) if self.py_env.console else 0,
+            console_pos=self.py_env.console_len,
             handler=handler,
         )
         if handler.error is None:
@@ -894,7 +894,7 @@ class Job:
         jobs queue it without disturbing their pending execution or future.
         """
         item = NotificationLogItem(
-            console_pos=len(self.py_env.console) if self.py_env.console else 0,
+            console_pos=self.py_env.console_len,
             message=message,
         )
         item.tool_log = format_default_llm_repr([item])
@@ -1068,7 +1068,7 @@ class Job:
             return
         settings = get_statek_settings()
         text = prompt_append_console(
-            self.py_env.console, self.job_def.chat_style,
+            list(self.py_env.iter_console()), self.job_def.chat_style,
             from_pos=from_pos, limit=to_pos - from_pos,
             xml_tags=settings.get_xml_box_tags()
         )
@@ -1120,12 +1120,7 @@ class Job:
             output: The output string to append
             error: optional classified error associated with the console entry
         """
-        self.py_env.console_append(output)
-        if error is not None:
-            console_pos = len(self.py_env.console) - 1
-            if self.py_env.exceptions is None:
-                self.py_env.exceptions = {}
-            self.py_env.exceptions[console_pos] = error
+        self.py_env.console_append(output, error=error)
         # Console is logged in batches at block/turn boundaries (see _log_console_batch)
 
     @property
@@ -1180,13 +1175,10 @@ class Job:
         Returns:
             Newline-joined string of all matching messages, or empty string if none.
         """
-        if not self.py_env.push_log:
-            return ""
         hint_suffix = self._language_hint_suffix()
         parts = []
-        for key in sorted(self.py_env.push_log.keys()):
+        for key, value in self.py_env.iter_push_log():
             if key >= from_pos:
-                value = self.py_env.push_log[key]
                 if not isinstance(value, str):
                     parts.extend(f"{v}{hint_suffix}" for v in value)
                 else:
@@ -1268,7 +1260,7 @@ class Job:
                 last_end = (
                     positions[block_idx]
                     if block_idx < len(positions)
-                    else len(self.py_env.console) if self.py_env.console else 0
+                    else self.py_env.console_len
                 )
                 prev_end = (
                     positions[block_idx - 1]
@@ -1277,7 +1269,7 @@ class Job:
                 )
                 limit = last_end - prev_end
                 console_part = prompt_append_console(
-                    self.py_env.console, chat_style,
+                    list(self.py_env.iter_console()), chat_style,
                     from_pos=prev_end, limit=limit if limit > 0 else 0,
                     xml_tags=xml_tags
                 ) if limit > 0 else ""
@@ -1288,7 +1280,7 @@ class Job:
                 # No warmup: system_prompt + all console is the first user prompt
                 sys_prompt = self.system_prompt() or None
                 console_part = prompt_append_console(
-                    self.py_env.console, chat_style, from_pos=0, xml_tags=xml_tags
+                    list(self.py_env.iter_console()), chat_style, from_pos=0, xml_tags=xml_tags
                 )
                 push_part = self._collect_push_log(from_pos=0)
                 parts = [p for p in [sys_prompt, console_part, push_part] if p]
@@ -1297,7 +1289,7 @@ class Job:
             # Not first prompt: format console from last LLM element's console position
             from_pos = llm_items[-1].console_pos
             console_part = prompt_append_console(
-                self.py_env.console,
+                list(self.py_env.iter_console()),
                 chat_style,
                 from_pos=from_pos,
                 xml_tags=xml_tags
@@ -1319,8 +1311,8 @@ class Job:
             if compacted and chat_log is None else None
         )
         chat_log = self.chat_log if chat_log is None else chat_log
-        push_log = self.py_env.push_log if push_log is None else push_log
-        console = self.py_env.console if console is None else console
+        push_log = dict(self.py_env.iter_push_log()) if push_log is None else push_log
+        console = list(self.py_env.iter_console()) if console is None else console
 
         yield from self._build_chat_history(
             chat_log=chat_log,
@@ -1342,7 +1334,7 @@ class Job:
 
           1. Optional USER item with the initial user message — sourced from
              ``chat_log[0]`` (UserLogItem, set by ``push_user_message`` in
-             MD_DIALOG/DIRECT) and/or ``py_env.push_log[0]``.  When neither
+             MD_DIALOG/DIRECT) and/or ``dict(py_env.iter_push_log())[0]``.  When neither
              exists this slot is omitted.
           2. Warmup blocks as alternating ASSISTANT (code or tool-call request)
              + USER/TOOL (console output / tool result) pairs, in
@@ -1351,7 +1343,7 @@ class Job:
              response) + USER/TOOL (console / tool result), woven together
              with any USER messages from ``UserLogItem`` entries, SYSTEM
              post-processor/reminder messages, and USER messages from
-             ``py_env.push_log`` keyed by console position.
+             ``dict(py_env.iter_push_log())`` keyed by console position.
 
         ``CodeBlock`` responses with ``tool_calls`` produce an ASSISTANT item
         with ``tool_calls`` set, followed by one TOOL item per call carrying
@@ -1777,8 +1769,8 @@ class Job:
         if target_idx is None:
             raise IndexError(f"turn_num out of range: {turn_num}")
 
-        console = self.py_env.console or []
-        push_log = self.py_env.push_log or {}
+        console = list(self.py_env.iter_console())
+        push_log = dict(self.py_env.iter_push_log())
         history_chat_log = self.chat_log[:target_idx]
         history_console = console[:console_limit]
         history_push_log = {
@@ -1889,10 +1881,7 @@ class Job:
                 return result
         
         # finally, try resolving from the default_example_id in the local state
-        local_state = self.py_env.local_state or {}
-        if "default_example_id" in local_state:
-            return local_state["default_example_id"]        
-        return None
+        return self.py_env.get_local("default_example_id")
 
     def _get_last_example_source(self) -> Optional[Tuple[str, int]]:
         """Return a validated source role/local ID for the last shown example."""
@@ -1967,7 +1956,7 @@ class Job:
             # Model pricing resolves difficulty before usage exists during initialization.
             usage = self.approx_token_usage if hasattr(self, "usage") else 0
             self.chat_log.append(DifficultyChangeLogItem(
-                console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                console_pos=self.py_env.console_len,
                 previous_difficulty=previous,
                 difficulty=difficulty,
                 cumulative_token_usage=usage,
@@ -2059,7 +2048,7 @@ class Job:
                 stored_resp = strip_markup(step_data.text, strict=is_md_style)
 
         chat_item = LLM_LogItem(
-            console_pos=len(self.py_env.console) if self.py_env.console else 0,
+            console_pos=self.py_env.console_len,
             llm_resp=stored_resp,
             llm_reasoning_payload=step_data.reasoning_payload,
             request_difficulty=request_difficulty,
@@ -2083,7 +2072,7 @@ class Job:
         if not reminder.fire_ready(self):
             return False
 
-        console_pos = len(self.py_env.console) if self.py_env.console else 0
+        console_pos = self.py_env.console_len
         self.chat_log.append(ReminderLogItem(
             console_pos=console_pos,
             reminder=reminder,
@@ -2117,7 +2106,7 @@ class Job:
 
         if isinstance(result, str):
             self.chat_log.append(PostProcessedItem(
-                console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                console_pos=self.py_env.console_len,
                 post_processor=post_processor,
                 message=result,
             ))
@@ -2138,7 +2127,7 @@ class Job:
 
             if isinstance(item, str):
                 self.chat_log.append(PostProcessedItem(
-                    console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                    console_pos=self.py_env.console_len,
                     post_processor=post_processor,
                     message=item,
                 ))
@@ -2204,8 +2193,7 @@ class Job:
 
     def _iter_chat_response_tool_logs(self, from_pos: int, to_pos: int) -> Iterable[str]:
         """Yield answer bodies from console output in ``[from_pos, to_pos)``."""
-        console = self.py_env.console or []
-        for output in console[from_pos:to_pos]:
+        for output in self.py_env.iter_console(from_pos, to_pos):
             for line in output.splitlines():
                 body = self._chat_response_from_tool_log(line)
                 if body is not None:
@@ -2218,7 +2206,7 @@ class Job:
 
     def get_chat_responses(self) -> Iterable[str]:
         """Yield user-facing chat responses from the chat log, oldest first."""
-        console_len = len(self.py_env.console) if self.py_env.console else 0
+        console_len = self.py_env.console_len
         items = [
             item for item in self.chat_log
             if isinstance(item, (WarmupLogItem, LLM_LogItem))
@@ -2242,7 +2230,7 @@ class Job:
 
     def get_dialog(self) -> Iterable[DialogItem]:
         """Yield user/assistant dialog messages in chronological order."""
-        console_len = len(self.py_env.console) if self.py_env.console else 0
+        console_len = self.py_env.console_len
         turn_items = [
             item for item in self.chat_log
             if isinstance(item, (WarmupLogItem, LLM_LogItem))
@@ -2410,7 +2398,7 @@ class Job:
         Output tokens cover the LLM response text plus the JSON encoding of any
         tool call requests.
         """
-        console = self.py_env.console or []
+        console = list(self.py_env.iter_console())
         is_first = True
         prev_console_pos = 0
         prev_item = None
@@ -2508,7 +2496,7 @@ class Job:
         The end position is derived from the next element's console_pos in chat_log.
         For the last warmup item (no next element), the current console length is used.
         """
-        console_len = len(self.py_env.console) if self.py_env.console else 0
+        console_len = self.py_env.console_len
         # Collect (warmup_block_num, end_pos) pairs
         pairs = []
         for i, item in enumerate(self.chat_log):
@@ -2617,7 +2605,7 @@ class Job:
         """
         items = [item for item in self.chat_log
                  if isinstance(item, (LLM_LogItem, WarmupLogItem))]
-        errors = sorted((self.py_env.exceptions or {}).items())
+        errors = list(self.py_env.iter_exceptions())
         position = 0
         for index, item in enumerate(items):
             end = items[index + 1].console_pos if index + 1 < len(items) else None
@@ -2689,7 +2677,7 @@ class Job:
         in ``chat_log``. The first message retains the job creation timestamp.
 
         For all other chat styles the message is appended to
-        ``py_env.push_log`` keyed by the current console length.
+        ``dict(py_env.iter_push_log())`` keyed by the current console length.
 
         When the job transitions DONE → STARTED a new ``LLM_LogItem`` with
         ``llm_resp=None`` is appended to ``chat_log`` to indicate that an
@@ -2712,16 +2700,7 @@ class Job:
             else:
                 self.chat_log.append(UserLogItem(message=message))
         else:
-            if self.py_env.push_log is None:
-                self.py_env.push_log = {}
-            key = len(self.py_env.console) if self.py_env.console else 0
-            existing = self.py_env.push_log.get(key)
-            if existing is None:
-                self.py_env.push_log[key] = message
-            elif isinstance(existing, list):
-                existing.append(message)
-            else:
-                self.py_env.push_log[key] = [existing, message]
+            self.py_env.push_append(message)
 
         reactivated = False
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
@@ -2729,7 +2708,7 @@ class Job:
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
             self.py_env.exit_status = None
             self.chat_log.append(LLM_LogItem(
-                console_pos=len(self.py_env.console) if self.py_env.console else 0,
+                console_pos=self.py_env.console_len,
                 llm_resp=None
             ))
             reactivated = True

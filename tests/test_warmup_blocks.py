@@ -193,14 +193,14 @@ class TestRunJobStepMultipleBlocks:
         result1 = await run_job_step(job)
         assert result1 is False
         assert job.status == JobStatus.WARMING_UP
-        assert job.py_env.local_state.get('x') == 1
+        assert job.py_env.get_local('x') == 1
         assert job.warmup_block_num == 1
 
         # Second block: y = x + 1
         result2 = await run_job_step(job)
         assert result2 is False
         assert job.status == JobStatus.WARMING_UP
-        assert job.py_env.local_state.get('y') == 2
+        assert job.py_env.get_local('y') == 2
         assert job.warmup_block_num == 2
 
         # Third block: exit("complete")
@@ -230,13 +230,13 @@ class TestRunJobStepMultipleBlocks:
         await run_job_step(job)
         positions = job._warmup_end_positions()  # pylint: disable=protected-access
         assert len(positions) == 1
-        assert positions[0] == len(job.py_env.console)
+        assert positions[0] == job.py_env.console_len
 
         # After second block: two positions recorded
         await run_job_step(job)
         positions = job._warmup_end_positions()  # pylint: disable=protected-access
         assert len(positions) == 2
-        assert positions[1] == len(job.py_env.console)
+        assert positions[1] == job.py_env.console_len
 
     @pytest.mark.asyncio
     async def test_warmup_console_positions_interleave_correctly(
@@ -263,11 +263,11 @@ class TestRunJobStepMultipleBlocks:
         pos1 = positions[1]
 
         # Console lines for block 0 are before pos0
-        block0_output = job.py_env.console[:pos0]
+        block0_output = list(job.py_env.iter_console())[:pos0]
         assert any("block0" in line for line in block0_output)
 
         # Console lines for block 1 are between pos0 and pos1
-        block1_output = job.py_env.console[pos0:pos1]
+        block1_output = list(job.py_env.iter_console())[pos0:pos1]
         assert any("block1" in line for line in block1_output)
 
     @pytest.mark.asyncio
@@ -292,12 +292,12 @@ class TestRunJobStepMultipleBlocks:
         result1 = await run_job_step(job)
         assert result1 is False
         assert job.status == JobStatus.WARMING_UP
-        assert job.py_env.local_state.get('x') == 1
+        assert job.py_env.get_local('x') == 1
         assert job.warmup_block_num == 1
 
         # Inject not-ready future before second block
         future_not_ready = create_future_not_ready()
-        job.py_env.local_state['future_val'] = future_not_ready
+        job.py_env.update_locals(**{'future_val': future_not_ready})
 
         # Second block should suspend (stay in WARMING_UP, FutureError caught)
         result2 = await run_job_step(job)
@@ -319,7 +319,7 @@ class TestRunJobStepMultipleBlocks:
         result3 = await run_job_step(job)
         assert result3 is False
         assert job.status == JobStatus.WARMING_UP
-        assert "42" in job.py_env.console[0]
+        assert "42" in list(job.py_env.iter_console())[0]
         assert job.warmup_block_num == 2
 
         # Third block: exit
@@ -351,9 +351,9 @@ class TestRunJobStepMultipleBlocks:
         )
 
         await run_job_step(job)
-        assert any("hello from warmup" in line for line in job.py_env.console)
+        assert any("hello from warmup" in line for line in list(job.py_env.iter_console()))
         positions = job._warmup_end_positions()  # pylint: disable=protected-access
-        assert positions[0] == len(job.py_env.console)
+        assert positions[0] == job.py_env.console_len
         assert positions[0] > 0
 
     @pytest.mark.asyncio
@@ -380,6 +380,6 @@ class TestRunJobStepMultipleBlocks:
 
         assert result is False
         assert job.status == JobStatus.WARMING_UP
-        assert job.py_env.local_state["x"] == 41
-        assert any("hidden ran" in line for line in job.py_env.console)
+        assert job.py_env.get_local("x") == 41
+        assert any("hidden ran" in line for line in list(job.py_env.iter_console()))
         assert job.warmup_block_num == 1

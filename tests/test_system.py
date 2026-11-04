@@ -721,7 +721,7 @@ class TestSubtaskDecorator:
 
         assert isinstance(handler, SubTaskHandler)
         assert handler.id == "child-1"
-        assert handler.job.py_env.local_state["sub_task_handler"] is handler
+        assert handler.job.py_env.get_local("sub_task_handler") is handler
 
     def test_existing_handler_result_passes_through_and_injects_local(self, job_factory):
         """A returned SubTaskHandler is reused and made available to its child job."""
@@ -733,7 +733,7 @@ class TestSubtaskDecorator:
 
         assert start_child(id="ignored") is existing
         assert existing.id == "existing"
-        assert existing.job.py_env.local_state["sub_task_handler"] is existing
+        assert existing.job.py_env.get_local("sub_task_handler") is existing
 
     def test_existing_handler_without_id_uses_framework_id(self, job_factory):
         """A returned handler without id adopts the framework-managed id."""
@@ -745,7 +745,7 @@ class TestSubtaskDecorator:
 
         assert start_child(id="child-1") is existing
         assert existing.id == "child-1"
-        assert existing.job.py_env.local_state["sub_task_handler"] is existing
+        assert existing.job.py_env.get_local("sub_task_handler") is existing
 
     def test_string_converted_to_enum(self, db0_fixture, job_factory):  # pylint: disable=unused-argument
         """Subtasks share @tool enum conversion behavior."""

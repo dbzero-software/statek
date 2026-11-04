@@ -117,7 +117,7 @@ def test_list_documents_sets_last_topic_id(docs_dir):
     """Accessing a topic stores its ID in _PERM_CTX."""
     job = StatekContextJob()
     run_with_statek_job(job, lambda: _impl("agent_a", docs_dir, topic=0))
-    assert job.py_env.local_state["_PERM_CTX"]["last_topic_id"] == 0
+    assert job.py_env.get_local("_PERM_CTX")["last_topic_id"] == 0
 
 
 def test_list_topics_respects_limit(docs_dir, capsys):

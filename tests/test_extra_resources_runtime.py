@@ -336,7 +336,7 @@ async def test_exec_step_calls_inherited_action_in_receiver_context(
     """Python execution can call a donor action while retaining receiver job identity."""
     await exec_step("result = preference_action('saved')", resource_tool_job)
 
-    assert resource_tool_job.py_env.local_state["result"] == "receiver:receiver:saved"
+    assert resource_tool_job.py_env.get_local("result") == "receiver:receiver:saved"
 
 
 @pytest.mark.asyncio
@@ -349,7 +349,7 @@ async def test_exec_step_refreshes_inherited_tools_after_panic_in_same_block(
         resource_tool_job,
     )
 
-    assert resource_tool_job.py_env.local_state["result"] == "schedule:expanded"
+    assert resource_tool_job.py_env.get_local("result") == "schedule:expanded"
 
 
 @pytest.mark.asyncio
@@ -414,7 +414,7 @@ async def test_exec_cli_step_calls_researcher_tool_without_context_keyword(
 
     await exec_cli_step("result = ask('question')", job, lambda _output: None)
 
-    assert job.py_env.local_state["result"] == "response:question"
+    assert job.py_env.get_local("result") == "response:question"
 
 
 @pytest.mark.asyncio
@@ -474,8 +474,8 @@ async def test_exec_step_calls_inherited_dynamic_and_internal_tools(
         resource_tool_job,
     )
 
-    assert resource_tool_job.py_env.local_state["dynamic_result"] == "dynamic:receiver:ok"
-    assert resource_tool_job.py_env.local_state["internal_result"] == "internal:ok"
+    assert resource_tool_job.py_env.get_local("dynamic_result") == "dynamic:receiver:ok"
+    assert resource_tool_job.py_env.get_local("internal_result") == "internal:ok"
     prompt = resource_tool_job.system_prompt()
     assert "dynamic_preference" in prompt
     assert "_preference_internal" not in prompt
@@ -498,7 +498,7 @@ async def test_receiver_tool_name_takes_precedence_over_donor_tool(
     tools = resource_tool_job.get_resource_tools()
     assert [tool_fn.__name__ for tool_fn in tools].count("receiver_action") == 1
     await exec_step("collision_result = receiver_action('ok')", resource_tool_job)
-    assert resource_tool_job.py_env.local_state["collision_result"] == "receiver:ok"
+    assert resource_tool_job.py_env.get_local("collision_result") == "receiver:ok"
 
 
 def test_historical_requests_keep_resources_from_their_original_difficulty(
