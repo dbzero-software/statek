@@ -291,7 +291,7 @@ class StatekContextJob:
         def get_local(self, name, default=None):
             return self._local_state.get(name, default)
 
-        def update_locals(self, **kwargs):
+        def update_state(self, **kwargs):
             self._local_state.update(kwargs)
 
         def iter_locals(self):

@@ -73,7 +73,7 @@ class TestExecAllSteps:
     async def test_future_error_in_cli_step_has_tuple_instr_num(self, job_factory):
         """FutureError from a CLI step carries (cli_step_index, instr_num) tuple."""
         job = self.create_job(job_factory)
-        job.py_env.update_locals(get_value_not_ready=get_value_not_ready)
+        job.py_env.update_state(get_value_not_ready=get_value_not_ready)
         cs = CallSpec(id="1", func_name="python_cli",
                       kwargs={"code": "result = get_value_not_ready()\nprint(result)"})
         block = CodeBlock(code=None, tool_calls=[cs])
@@ -129,7 +129,7 @@ class TestExecAllSteps:
     async def test_future_error_in_cli_step(self, job_factory):
         """FutureError in a CLI step carries a (cli_step_index, instr_num) tuple."""
         job = self.create_job(job_factory)
-        job.py_env.update_locals(get_value_not_ready=get_value_not_ready)
+        job.py_env.update_state(get_value_not_ready=get_value_not_ready)
         cs = CallSpec(id="a", func_name="python_cli",
                       kwargs={"code": "result = get_value_not_ready()\nprint(result)"})
         block = CodeBlock(code=None, tool_calls=[cs])
@@ -155,7 +155,7 @@ class TestExecAllSteps:
         assert job.py_env.get_local('b') == 2
 
         # Replace with ready future and resume
-        job.py_env.update_locals(**{'future_val': create_future_ready(77)})
+        job.py_env.update_state(**{'future_val': create_future_ready(77)})
         outputs = []
         await exec_all_steps(block, job,
                              lambda idx, s: outputs.append((idx, s)),

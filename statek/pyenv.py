@@ -167,10 +167,6 @@ class PyEnv:
         else:
             existing.append(message)
 
-    def update_locals(self, **kwargs):
-        """Merge local bindings while retaining overwritten values."""
-        self.update_state(**kwargs)
-
     def update_state(self, **kwargs):
         """Retain overwritten bindings and advance the generation once per batch."""
         missing = object()

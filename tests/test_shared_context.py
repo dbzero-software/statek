@@ -167,7 +167,7 @@ async def test_hidden_shared_context_warmup_executes_without_history_exposure(
     )
     job_def = job_def_factory(warmup_code=parsed_warmup)
     job = Job(job_def=job_def, job_status=JobStatus.READY)
-    job.py_env.update_locals(**{"user": "user-1"})
+    job.py_env.update_state(**{"user": "user-1"})
 
     await run_job_step(job)
 

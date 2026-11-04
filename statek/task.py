@@ -503,7 +503,7 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
 
     initial_locals.update(shared_vars)
     env = PyEnv()
-    env.update_locals(**initial_locals)
+    env.update_state(**initial_locals)
 
     job = Job(
         job_def=job_def,

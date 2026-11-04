@@ -986,7 +986,7 @@ def _get_or_create_perm_ctx(py_env):
     missing = object()
     ctx = py_env.get_local("_PERM_CTX", missing)
     if ctx is missing:
-        py_env.update_locals(_PERM_CTX={})
+        py_env.update_state(_PERM_CTX={})
         ctx = py_env.get_local("_PERM_CTX")
     return ctx
 

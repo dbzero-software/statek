@@ -375,7 +375,7 @@ def _copy_modified_locals(current_locals: dict, py_env) -> None:
         if previous is missing or _value_changed(previous, value):
             updates[key] = value
     if updates:
-        py_env.update_locals(**updates)
+        py_env.update_state(**updates)
 
 
 def _hidden_registered_tool_names() -> set[str]:

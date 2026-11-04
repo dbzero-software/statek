@@ -25,7 +25,7 @@ def test_set_and_get():
 
 def test_get_missing_key_raises():
     job = _FakeJob()
-    job.py_env.update_locals(**{"_PERM_CTX": {}})
+    job.py_env.update_state(**{"_PERM_CTX": {}})
 
     def exercise():
         perm_ctx_get("missing")
@@ -36,7 +36,7 @@ def test_get_missing_key_raises():
 
 def test_get_missing_key_with_default():
     job = _FakeJob()
-    job.py_env.update_locals(**{"_PERM_CTX": {}})
+    job.py_env.update_state(**{"_PERM_CTX": {}})
 
     def exercise():
         return perm_ctx_get("missing", None), perm_ctx_get("missing", 42)
@@ -46,7 +46,7 @@ def test_get_missing_key_with_default():
 
 def test_set_overwrites_existing():
     job = _FakeJob()
-    job.py_env.update_locals(**{"_PERM_CTX": {"x": 1}})
+    job.py_env.update_state(**{"_PERM_CTX": {"x": 1}})
 
     def exercise():
         perm_ctx_set(x=2)
@@ -133,7 +133,7 @@ def test_set_unique_uses_key_when_available():
 
 def test_set_unique_suffixes_when_perm_ctx_key_exists():
     job = _FakeJob()
-    job.py_env.update_locals(**{"_PERM_CTX": {"result": "old", "result_1": "older"}})
+    job.py_env.update_state(**{"_PERM_CTX": {"result": "old", "result_1": "older"}})
 
     def exercise():
         assigned = perm_ctx_set_unique("result", "new")
@@ -201,7 +201,7 @@ class _FakeJob:
         def get_local(self, name, default=None):
             return self._locals.get(name, default)
 
-        def update_locals(self, **kwargs):
+        def update_state(self, **kwargs):
             self._locals.update(kwargs)
 
         def iter_locals(self):

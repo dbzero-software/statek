@@ -856,7 +856,7 @@ def test_get_current_difficulty_uses_example_difficulty(job_def_factory):
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 3}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 3}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -877,7 +877,7 @@ def test_get_current_difficulty_uses_source_aware_donor_example(
         job_def=job_def_factory(extra_resources=(["donor"], None, None)),
         job_status=JobStatus.READY,  # pylint: disable=no-member
     )
-    job.py_env.update_locals(**{"_PERM_CTX": {
+    job.py_env.update_state(**{"_PERM_CTX": {
         "last_example_id": 7,
         "last_example_source": {"agent_name": "donor", "example_id": 1},
     }})
@@ -895,7 +895,7 @@ def test_get_current_difficulty_uses_source_aware_donor_example(
 def test_get_current_difficulty_malformed_source_uses_legacy_receiver_id(job_def_factory):
     """Malformed persisted source data falls back to the legacy receiver-local ID."""
     job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {
+    job.py_env.update_state(**{"_PERM_CTX": {
         "last_example_id": 3,
         "last_example_source": {"agent_name": "donor", "example_id": "invalid"},
     }})
@@ -912,7 +912,7 @@ def test_get_current_difficulty_malformed_source_uses_legacy_receiver_id(job_def
 def test_get_current_difficulty_unconfigured_source_uses_legacy_receiver_id(job_def_factory):
     """A forged source outside configured resources cannot influence job difficulty."""
     job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {
+    job.py_env.update_state(**{"_PERM_CTX": {
         "last_example_id": 3,
         "last_example_source": {"agent_name": "../foreign", "example_id": 0},
     }})
@@ -935,7 +935,7 @@ def test_get_current_difficulty_uses_registered_job_perm_ctx_example_id(job_def_
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 8}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 8}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -958,7 +958,7 @@ def test_get_current_difficulty_example_does_not_downgrade_last_dynamic(
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 4}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 4}})
     job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
     with patch(
@@ -981,7 +981,7 @@ def test_get_current_difficulty_example_can_upgrade_last_dynamic(
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 5}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 5}})
     job._Job__last_difficulty = TaskDifficulty.low  # pylint: disable=protected-access
 
     with patch(
@@ -1004,7 +1004,7 @@ def test_get_current_difficulty_missing_example_difficulty_falls_back_to_metadat
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 6}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 6}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -1085,7 +1085,7 @@ def test_example_escalation_extends_budget_once(job_def_factory, starting_diffic
     ))
     job._Job__last_difficulty = starting_difficulty  # pylint: disable=protected-access
     job.usage.total_bytes_sent = 40000
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 1}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=TaskDifficulty.medium):
         assert job.get_current_difficulty() == TaskDifficulty.medium
@@ -1105,7 +1105,7 @@ def test_direct_example_jump_is_one_bonus(job_def_factory) -> None:
         metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
     ))
     job.usage.total_bytes_sent = 40000
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 1}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=TaskDifficulty.high):
         assert job.get_current_difficulty() == TaskDifficulty.high
@@ -1119,7 +1119,7 @@ def test_non_increasing_example_grants_no_bonus(job_def_factory, example_difficu
         metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "medium"},
     ))
     job.usage.total_bytes_sent = 40000
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 1}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=example_difficulty):
         assert job.get_current_difficulty() == example_difficulty
@@ -1139,7 +1139,7 @@ def test_panic_with_zero_usage_grants_no_bonus(job_def_factory) -> None:
 def test_example_difficulty_during_initialization_has_zero_usage(job_def_factory) -> None:
     """Pricing may resolve a default example before the usage object exists."""
     env = PyEnv()
-    env.update_locals(**{"default_example_id": 1})
+    env.update_state(**{"default_example_id": 1})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=TaskDifficulty.medium):
         job = Job(job_def=job_def_factory(metadata={
@@ -1305,7 +1305,7 @@ def test_get_current_model_uses_example_dynamic_difficulty(job_def_factory):
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 1}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -1392,7 +1392,7 @@ def test_get_next_request_uses_last_dynamic_difficulty(
         job_def=job_def,
         job_status=JobStatus.STARTED,  # pylint: disable=no-member
     )
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 2}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 2}})
     job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
     with patch(
@@ -1952,7 +1952,7 @@ class TestJobGetRequestData:
             }
         )
         job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-        job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 7}})
+        job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 7}})
         job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
         with patch(

@@ -61,7 +61,7 @@ def test_legacy_writes_preserve_contents_and_references():
     env.console_append("new output", error=error)
     env.push_append("third")
     env.update_globals(added=4)
-    env.update_locals(local=10)
+    env.update_state(local=10)
     assert env.perm_ctx is context
     env = _reopen_env(db0.uuid(env))
     assert list(env.iter_console()) == ["old output", "new output"]
@@ -129,10 +129,10 @@ def test_update_state_records_overwrites_once_per_batch():
 
 
 @pytest.mark.usefixtures("db0_fixture")
-def test_update_locals_records_equal_and_identical_overwrites():
+def test_update_state_records_equal_and_identical_overwrites():
     env = PyEnv(local_state={"value": [1], "equal": 1000})
     old_value = env.get_local("value")
-    env.update_locals(value=old_value, equal=int("1000"))
+    env.update_state(value=old_value, equal=int("1000"))
     assert env._generation == 1
     assert env._update_log["equal"] == (None, 1000)
     old_value.append(2)
@@ -304,19 +304,19 @@ class TestPyEnv:  # pylint: disable=too-few-public-methods
         env.console_append("Second output")
         assert list(env.iter_console()) == ["First output", "Second output"]
 
-    def test_update_locals_adds_and_overwrites_values(self, db0_fixture):  # pylint: disable=unused-argument
-        """update_locals merges new values into local_state."""
+    def test_update_state_adds_and_overwrites_values(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_state merges new values into local_state."""
         env = PyEnv(local_state={"x": 1, "y": 2})
 
-        env.update_locals(y=20, z=30)
+        env.update_state(y=20, z=30)
 
         assert dict(env.iter_locals()) == {"x": 1, "y": 20, "z": 30}
 
-    def test_update_locals_initializes_local_state_when_missing(self, db0_fixture):  # pylint: disable=unused-argument
-        """update_locals creates local_state when it is None."""
+    def test_update_state_initializes_local_state_when_missing(self, db0_fixture):  # pylint: disable=unused-argument
+        """update_state creates local_state when it is None."""
         env = PyEnv(local_state=None)
 
-        env.update_locals(answer=42)
+        env.update_state(answer=42)
 
         assert dict(env.iter_locals()) == {"answer": 42}
 
@@ -382,14 +382,15 @@ def test_collection_interface():
     assert not list(env.iter_exceptions())
     assert not list(env.iter_push_log())
     env.update_globals(shared="global", count=1)
-    env.update_locals(shared=None)
+    env.update_state(shared=None)
     assert env.has_global_state
     assert env.get_global("count") == 1
     assert env.get_local("shared", 3) is None
     assert dict(env.iter_globals()) == {"shared": "global", "count": 1}
     assert env.resolve_locals(["shared"]) == {"shared": type(None)}
     assert PyEnv(global_state={}).has_global_state
-    for name in ("local_state", "global_state", "console", "exceptions", "push_log"):
+    for name in ("local_state", "global_state", "console", "exceptions", "push_log",
+                 "update_locals"):
         assert not hasattr(env, name)
 
 

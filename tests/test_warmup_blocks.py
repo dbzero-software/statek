@@ -297,7 +297,7 @@ class TestRunJobStepMultipleBlocks:
 
         # Inject not-ready future before second block
         future_not_ready = create_future_not_ready()
-        job.py_env.update_locals(**{'future_val': future_not_ready})
+        job.py_env.update_state(**{'future_val': future_not_ready})
 
         # Second block should suspend (stay in WARMING_UP, FutureError caught)
         result2 = await run_job_step(job)

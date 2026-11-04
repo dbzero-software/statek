@@ -136,7 +136,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
                   job_status=JobStatus.STARTED)
         t0 = datetime(2026, 10, 15, 12)
         job.created_at = t0
-        job.py_env.update_locals(**{"waiting": create_future_not_ready()})
+        job.py_env.update_state(**{"waiting": create_future_not_ready()})
         continuation = "print(waiting)" if suspend else "raise ValueError('after delivery')"
         turn = LLM_LogItem(console_pos=0, llm_resp=CodeBlock(tool_calls=[
             CallSpec(id="send", func_name="python_cli", kwargs={
@@ -810,10 +810,10 @@ class TestRunJobStepFutureErrorResumption:
 
         # Seed the environment with initial values
         future_not_ready = create_future_not_ready()
-        job.py_env.update_locals(**{'counter': 0})
-        job.py_env.update_locals(**{'before_flag': False})
-        job.py_env.update_locals(**{'after_flag': False})
-        job.py_env.update_locals(**{'future_val': future_not_ready})
+        job.py_env.update_state(**{'counter': 0})
+        job.py_env.update_state(**{'before_flag': False})
+        job.py_env.update_state(**{'after_flag': False})
+        job.py_env.update_state(**{'future_val': future_not_ready})
 
         # First run: executes idx 0 (counter=1), idx 1 (before_flag=True),
         # then idx 2 raises FutureError
@@ -1645,7 +1645,7 @@ class TestRunJobStepWarmupException:
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
-        job.py_env.update_locals(**{'future_val': future_not_ready})
+        job.py_env.update_state(**{'future_val': future_not_ready})
 
         result = await run_job_step(job)
 

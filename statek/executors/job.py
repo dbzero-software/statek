@@ -788,7 +788,7 @@ class Job:
 
     def add_locals(self, **kwargs) -> None:
         """Inject additional values into this job's Python local state."""
-        self.py_env.update_locals(**kwargs)
+        self.py_env.update_state(**kwargs)
 
     def get_compacted_chat_log(
         self,

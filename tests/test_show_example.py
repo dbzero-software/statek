@@ -304,7 +304,7 @@ def test_show_example_syncs_last_example_id_to_current_job(
 def test_show_example_missing_id_does_not_overwrite_last_example_id(capsys, examples_dir):
     """Failed lookups do not replace the previous successful example trace."""
     job = StatekContextJob()
-    job.py_env.update_locals(**{"_PERM_CTX": {"last_example_id": 7}})
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 7}})
     settings = _settings(
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
