@@ -1058,6 +1058,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 warmup_block_num=block_num
             )
             job.chat_log.append(warmup_log_item)
+            job.record_activity()
 
         # Log warmup block before execution
         if job.status == JobStatus.WARMING_UP and code_str:
@@ -1086,6 +1087,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # well-defined even if a call is skipped.
             if last_chat_log_item is not None:
                 last_chat_log_item.tool_log = ["" for _ in code.tool_calls]
+                job.record_activity()
             for j, call_spec in enumerate(code.tool_calls):
                 if call_spec.func_name == "python_cli":
                     continue  # CLI calls are executed and logged in Step 6
@@ -1094,6 +1096,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                     last_chat_log_item.tool_log[j] = (
                         ToolError(err_message=error) if error is not None else result
                     )
+                    job.record_activity()
                 job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
 
         # Step 6: Execute code and CLI tool calls using exec_all_steps
@@ -1153,6 +1156,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                             last_chat_log_item.tool_log[j] = (
                                 ToolError(err_message=error) if error else joined
                             )
+                            job.record_activity()
 
         # Step 9: If code has finished, transition to DONE and return True
         if job.py_env.exit_status is not None:
@@ -1426,9 +1430,10 @@ async def job_worker(semaphore, job: Job, provider: str = None):
                            f"cost: ${job.usage.total_cost or 0.0:.4f}", level='info')
             except LLM_HarnessError as e:
                 if job.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
-                    finish_message_waits(
+                    if finish_message_waits(
                         (item for item in job.chat_log if isinstance(item, UserLogItem)), datetime.now(),
-                    )
+                    ):
+                        job.record_activity()
                 error_msg = f"LLM_HarnessError: {e}"
                 statek_log(error_msg, level='error')
                 job.py_env.exit_status = f"Error: {e}"
