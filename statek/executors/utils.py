@@ -362,15 +362,20 @@ def _value_changed(before, after) -> bool:
         return True
 
 
-def _copy_modified_locals(current_locals: dict, job_locals: dict) -> None:
+def _copy_modified_locals(current_locals: dict, py_env) -> None:
     """Copy locals from then current execution step into job persistent locals without dropping keys"""
     from statek.python_sandbox import is_sandbox_transient_value  # pylint: disable=import-outside-toplevel
 
+    missing = object()
+    updates = {}
     for key, value in current_locals.items():
         if is_sandbox_transient_value(value):
             continue
-        if key not in job_locals or _value_changed(job_locals[key], value):
-            job_locals[key] = value
+        previous = py_env.get_local(key, missing)
+        if previous is missing or _value_changed(previous, value):
+            updates[key] = value
+    if updates:
+        py_env.update_locals(**updates)
 
 
 def _hidden_registered_tool_names() -> set[str]:
@@ -602,12 +607,12 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
         Console outputs (print results) are appended to _X_console
         local_state might be updated by the program
     """
-    if job.py_env.global_state is None:
+    if not job.py_env.has_global_state:
         global_context = globals()
     else:
-        global_context = {key: value for key, value in job.py_env.global_state.items()}
+        global_context = dict(job.py_env.iter_globals())
     if local_context is None:
-        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+        local_context = dict(job.py_env.iter_locals())
     from statek.shared_context import ContextFallbackProxy  # pylint: disable=import-outside-toplevel
     local_context = ContextFallbackProxy(
         local_context,
@@ -623,9 +628,7 @@ async def exec_step(code_str: str, job: Job, instr_num: Optional[int] = None,
             allowed_tools=allowed_tools,
         )
     finally:
-        if job.py_env.local_state is None:
-            job.py_env.local_state = {}        
-        _copy_modified_locals(local_context, job.py_env.local_state)
+        _copy_modified_locals(local_context, job.py_env)
 
     return job.py_env.exit_status is None
 
@@ -654,19 +657,19 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
         otherwise.
     """
     job_uuid = str(db0.uuid(job))
-    context_names = set(job.py_env.local_state or {})
+    context_names = set(dict(job.py_env.iter_locals()))
     if job.job_def.agent is not None and job.job_def.agent.context is not None:
         context_names.update(job.job_def.agent.context)
     full_agent_trace(
         "python_cli.request",
         {"job_uuid": job_uuid, "code": code_str, "context_names": sorted(context_names)},
     )
-    if job.py_env.global_state is None:
+    if not job.py_env.has_global_state:
         global_context = globals()
     else:
-        global_context = {key: value for key, value in job.py_env.global_state.items()}
+        global_context = dict(job.py_env.iter_globals())
     if local_context is None:
-        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}    
+        local_context = dict(job.py_env.iter_locals())
 
     def cli_print(*args, sep=' ', end='\n', **kwargs):  # pylint: disable=unused-argument
         output = sep.join(_fmt_print_arg(arg) for arg in args) + end
@@ -687,9 +690,7 @@ async def exec_cli_step(code_str: str, job: Job, console_append: Callable,
             instr_num=instr_num,
         )
     finally:
-        if job.py_env.local_state is None:
-            job.py_env.local_state = {}
-        _copy_modified_locals(local_context, job.py_env.local_state)
+        _copy_modified_locals(local_context, job.py_env)
 
     exited = job.py_env.exit_status is not None
     full_agent_trace("python_cli.completed", {"job_uuid": job_uuid, "exited": exited})
@@ -832,12 +833,12 @@ async def exec_tool(call_spec: CallSpec, job: Job,
     policy = _execution_sandbox_policy()
 
     # Build global and local contexts — mirrors exec_step
-    if job.py_env.global_state is None:
+    if not job.py_env.has_global_state:
         global_context = globals()
     else:
-        global_context = {key: value for key, value in job.py_env.global_state.items()}
+        global_context = dict(job.py_env.iter_globals())
     if local_context is None:
-        local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+        local_context = dict(job.py_env.iter_locals())
 
     with _setup_execution_context(job, global_context, local_context, print_fn=_private_print):
         # Re-wrap the original tool with a combined context (global + local) so that
@@ -912,7 +913,7 @@ def _log_pending_console(job: Job):
     """Log console output since the last conversation boundary, ignoring budget metadata."""
     last = job.last_chat_log_item
     from_pos = last.console_pos if isinstance(last, ChatLogItem) else 0
-    to_pos = len(job.py_env.console) if job.py_env.console else 0
+    to_pos = job.py_env.console_len
     job._log_console_batch(from_pos, to_pos)  # pylint: disable=protected-access
 
 
@@ -1030,7 +1031,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         return False
 
     # Build shared local_context for all context-aware functions in this step
-    local_context = dict(job.py_env.local_state) if job.py_env.local_state else {}
+    local_context = dict(job.py_env.iter_locals())
 
     # Step 2: Get next code block pending execution
     code = job.get_next_code_block()
@@ -1053,7 +1054,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         if job.status == JobStatus.WARMING_UP:
             block_num = job.warmup_block_num if job.warmup_block_num is not None else 0
             warmup_log_item = WarmupLogItem(
-                console_pos=len(job.py_env.console) if job.py_env.console else 0,
+                console_pos=job.py_env.console_len,
                 warmup_block_num=block_num
             )
             job.chat_log.append(warmup_log_item)
@@ -1134,7 +1135,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         finally:
             # Write each CLI call's joined output into its pre-allocated
             # tool_log slot.  python_cli output is intentionally not copied
-            # into job.py_env.console; tool_log is its single persisted home.
+            # into the job console; tool_log is its single persisted home.
             cli_calls = code_block.get_cli_tool_calls()
             if cli_calls:
                 cli_tool_log_positions = [
@@ -1167,7 +1168,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         if job.status == JobStatus.WARMING_UP:
             # Log this warmup block's console slice
             warmup_batch_from = warmup_log_item.console_pos
-            warmup_batch_to = len(job.py_env.console) if job.py_env.console else 0
+            warmup_batch_to = job.py_env.console_len
             job._log_console_batch(warmup_batch_from, warmup_batch_to)  # pylint: disable=protected-access
             if job.has_more_warmup_blocks():
                 # Advance to next warmup block, stay in WARMING_UP

@@ -70,7 +70,7 @@ class TestHandleCriticalError:
             await job_worker(asyncio.Semaphore(1), job)
         assert job.status == JobStatus.DONE
         assert list(job.get_response_times()) == [(t0, 5.0)]
-        assert job.py_env.exceptions[len(job.py_env.console) - 1].kind == ErrorKind.HARNESS
+        assert job.py_env.get_exception(job.py_env.console_len - 1).kind == ErrorKind.HARNESS
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("style", [ChatStyle.DIRECT, ChatStyle.MD_DIALOG])
@@ -201,14 +201,14 @@ class TestHandleCriticalError:
         _call_log.clear()
         job = job_factory()
         for index in range(3 if with_execution_errors else 1):
-            job.chat_log.append(LLM_LogItem(console_pos=len(job.py_env.console or [])))
+            job.chat_log.append(LLM_LogItem(console_pos=len(list(job.py_env.iter_console()) or [])))
             if with_execution_errors:
                 execution_error = f"ValueError: failure {index}"
                 job.console_append(
                     execution_error, error=Error(ErrorKind.EXECUTION, execution_error),
                 )
         previous_errors = {
-            key: error.message for key, error in (job.py_env.exceptions or {}).items()
+            key: error.message for key, error in (dict(job.py_env.iter_exceptions()) or {}).items()
         }
         job.add_error_handler(_capture, "ctx")
         semaphore = asyncio.Semaphore(1)
@@ -225,13 +225,13 @@ class TestHandleCriticalError:
         assert job.error.error_message == message
         assert job.py_env.exit_status == f"Error: {message}"
         error_msg = f"LLM_HarnessError: {message}"
-        assert job.py_env.console[-1] == error_msg
-        assert {key: error.message for key, error in job.py_env.exceptions.items()} == {
-            **previous_errors, len(job.py_env.console) - 1: error_msg,
+        assert list(job.py_env.iter_console())[-1] == error_msg
+        assert {key: error.message for key, error in job.py_env.iter_exceptions()} == {
+            **previous_errors, job.py_env.console_len - 1: error_msg,
         }
         assert job.exception_count == (3 if with_execution_errors else 0)
         assert job.max_consecutive_exceptions == (3 if with_execution_errors else 0)
-        assert job.py_env.exceptions[len(job.py_env.console) - 1].kind == ErrorKind.HARNESS
+        assert job.py_env.get_exception(job.py_env.console_len - 1).kind == ErrorKind.HARNESS
 
     @pytest.mark.asyncio
     async def test_job_worker_notifies_handlers_on_generic_exception(self, job_factory):
@@ -253,7 +253,7 @@ class TestHandleCriticalError:
         assert isinstance(job.error, JobDefError)
         assert job.error.error_message == "unexpected failure"
         assert job.exception_count == 1
-        assert job.py_env.exceptions[0].kind == ErrorKind.EXECUTION
+        assert job.py_env.get_exception(0).kind == ErrorKind.EXECUTION
 
     @pytest.mark.asyncio
     async def test_job_worker_notifies_bound_application_handler(self, job_factory):

@@ -104,7 +104,7 @@ class TestExecTool:
         result, _ = await exec_tool(_call_spec("add", kwargs={"a": 3, "b": 4}), job)
 
         assert "7" in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_trace_records_direct_tool_request_and_output(self, db0_fixture, monkeypatch):  # pylint: disable=unused-argument
@@ -183,7 +183,7 @@ class TestExecTool:
 
         assert "NameError" in result
         assert "nonexistent_func" in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_exception_not_reraised(self, db0_fixture):  # pylint: disable=unused-argument
@@ -196,7 +196,7 @@ class TestExecTool:
 
         assert "ValueError" in result
         assert "something went wrong" in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_no_output_returns_empty_string(self, db0_fixture):  # pylint: disable=unused-argument
@@ -242,7 +242,7 @@ class TestExecTool:
         )
 
         assert 'tool: ok' in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_job_console_not_touched(self, db0_fixture):  # pylint: disable=unused-argument
@@ -253,7 +253,7 @@ class TestExecTool:
         job = _make_job("role_no_console", context_extras={"compute": compute})
         await exec_tool(_call_spec("compute", args=[7]), job)
 
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_existing_job_console_untouched(self, db0_fixture):  # pylint: disable=unused-argument
@@ -266,8 +266,8 @@ class TestExecTool:
 
         await exec_tool(_call_spec("compute", args=[5]), job)
 
-        assert len(job.py_env.console) == 1
-        assert job.py_env.console[0] == "existing line"
+        assert job.py_env.console_len == 1
+        assert list(job.py_env.iter_console())[0] == "existing line"
 
     @pytest.mark.asyncio
     async def test_async_tool_return_value_captured(self, db0_fixture):  # pylint: disable=unused-argument
@@ -279,7 +279,7 @@ class TestExecTool:
         result, _ = await exec_tool(_call_spec("async_double", args=[21]), job)
 
         assert "42" in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_async_tool_exception_captured(self, db0_fixture):  # pylint: disable=unused-argument
@@ -292,7 +292,7 @@ class TestExecTool:
 
         assert "RuntimeError" in result
         assert "async error" in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_string_tool_name_resolved_to_callable(self, db0_fixture):  # pylint: disable=unused-argument
@@ -323,7 +323,7 @@ class TestExecTool:
         )
 
         assert 'async_tool: ok' in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_async_agent_tool_exception_captured(self, db0_fixture):  # pylint: disable=unused-argument
@@ -333,7 +333,7 @@ class TestExecTool:
 
         assert "ValueError" in result
         assert "async agent tool error" in result
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
 
 # Module-level @tool for _STATEK_CTX tests (must be at module level due to db0 constraints)

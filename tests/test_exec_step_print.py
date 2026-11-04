@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import pytest
+
 import dbzero as db0
 
 import statek
@@ -10,6 +11,7 @@ from statek.python_sandbox import SandboxViolation
 from statek.settings import StatekSettings
 from statek.system import tool
 from statek.utils import CallSpec
+from tests.conftest import seed_pyenv
 
 
 DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
@@ -47,37 +49,37 @@ class TestExecStepPrint:
         """print() outputs strings as-is, without wrapping quotes."""
         job = self._make_job(job_factory)
         await exec_step('print("hello")', job)
-        assert job.py_env.console[0] == 'hello'
+        assert list(job.py_env.iter_console())[0] == 'hello'
 
     @pytest.mark.asyncio
     async def test_print_object_uses_llm_repr(self, job_factory):
         """print() calls __llm_repr__ when available, as statek_print does."""
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'obj': _LLMReprObject(name="test")}
+        job.py_env = seed_pyenv(job.py_env, local_state={'obj': _LLMReprObject(name="test")})
         await exec_step('print(obj)', job)
-        assert job.py_env.console[0] == "custom:test"
+        assert list(job.py_env.iter_console())[0] == "custom:test"
 
     @pytest.mark.asyncio
     async def test_print_dbzero_memo_object_uses_llm_repr_in_restricted_context(self, job_factory):
         """Trusted print formatting should access __llm_repr__ outside restricted mode."""
         statek.init(StatekSettings(prompt_defs={}))
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'obj': _LLMReprObject(name="restricted")}
+        job.py_env = seed_pyenv(job.py_env, local_state={'obj': _LLMReprObject(name="restricted")})
 
         await exec_step('print(obj)', job)
 
-        assert job.py_env.console[0] == "custom:restricted"
+        assert list(job.py_env.iter_console())[0] == "custom:restricted"
 
     @pytest.mark.asyncio
     async def test_expression_output_uses_llm_repr_in_restricted_context(self, job_factory):
         """REPL-style expression output should use unrestricted trusted formatting."""
         statek.init(StatekSettings(prompt_defs={}))
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'obj': _LLMReprObject(name="expr")}
+        job.py_env = seed_pyenv(job.py_env, local_state={'obj': _LLMReprObject(name="expr")})
 
         await exec_step('obj', job)
 
-        assert job.py_env.console[0] == "custom:expr"
+        assert list(job.py_env.iter_console())[0] == "custom:expr"
 
     @pytest.mark.asyncio
     async def test_tool_result_output_uses_llm_repr_in_restricted_context(
@@ -113,46 +115,46 @@ class TestExecStepFStringFormatting:
     async def test_fstring_object_uses_llm_repr(self, job_factory):
         """F-string expressions use __llm_repr__ for objects."""
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'obj': _LLMReprObject(name="test")}
+        job.py_env = seed_pyenv(job.py_env, local_state={'obj': _LLMReprObject(name="test")})
         await exec_step('result = f"Object: {obj}"', job)
-        assert job.py_env.local_state['result'] == 'Object: custom:test'
+        assert job.py_env.get_local('result') == 'Object: custom:test'
 
     @pytest.mark.asyncio
     async def test_fstring_string_passes_through(self, job_factory):
         """F-string string variables pass through without extra quoting."""
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'greeting': 'hello'}
+        job.py_env = seed_pyenv(job.py_env, local_state={'greeting': 'hello'})
         await exec_step('result = f"Say: {greeting}"', job)
-        assert job.py_env.local_state['result'] == 'Say: hello'
+        assert job.py_env.get_local('result') == 'Say: hello'
 
     @pytest.mark.asyncio
     async def test_fstring_int_formatted_as_str(self, job_factory):
         """F-string integer variables are formatted as plain numbers."""
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'count': 42}
+        job.py_env = seed_pyenv(job.py_env, local_state={'count': 42})
         await exec_step('result = f"Count: {count}"', job)
-        assert job.py_env.local_state['result'] == 'Count: 42'
+        assert job.py_env.get_local('result') == 'Count: 42'
 
     @pytest.mark.asyncio
     async def test_fstring_explicit_r_conversion_not_transformed(self, job_factory):
         """F-string with !r conversion uses repr(), not format_default_llm_repr."""
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'obj': _LLMReprObject(name="test")}
+        job.py_env = seed_pyenv(job.py_env, local_state={'obj': _LLMReprObject(name="test")})
         await exec_step('result = f"{obj!r}"', job)
-        assert 'custom:test' not in job.py_env.local_state['result']
+        assert 'custom:test' not in job.py_env.get_local('result')
 
     @pytest.mark.asyncio
     async def test_fstring_format_spec_not_transformed(self, job_factory):
         """F-string with explicit format spec is not transformed."""
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'value': 3.14159}
+        job.py_env = seed_pyenv(job.py_env, local_state={'value': 3.14159})
         await exec_step('result = f"{value:.2f}"', job)
-        assert job.py_env.local_state['result'] == '3.14'
+        assert job.py_env.get_local('result') == '3.14'
 
     @pytest.mark.asyncio
     async def test_print_fstring_uses_llm_repr(self, job_factory):
         """print() with f-string uses format_default_llm_repr for embedded objects."""
         job = self._make_job(job_factory)
-        job.py_env.local_state = {'obj': _LLMReprObject(name="slot")}
+        job.py_env = seed_pyenv(job.py_env, local_state={'obj': _LLMReprObject(name="slot")})
         await exec_step('print(f"Object is: {obj}")', job)
-        assert job.py_env.console[0] == 'Object is: custom:slot'
+        assert list(job.py_env.iter_console())[0] == 'Object is: custom:slot'

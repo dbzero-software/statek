@@ -74,7 +74,7 @@ def test_perm_ctx_helpers_work_under_statek_context():
         perm_ctx_set(answer=42)
         assert perm_ctx_get("answer") == 42
 
-    assert job.py_env.local_state == {"_PERM_CTX": {"answer": 42}}
+    assert dict(job.py_env.iter_locals()) == {"_PERM_CTX": {"answer": 42}}
 
 
 class _FakeJob:
@@ -89,11 +89,21 @@ class _FakeJob:
     class _FakePyEnv:
         """Minimal PyEnv stub with persistent context support."""
 
-        local_state = None
+        def __init__(self):
+            self._locals = {}
 
         @property
         def perm_ctx(self):
-            return None if self.local_state is None else self.local_state.get("_PERM_CTX")
+            return self.get_local("_PERM_CTX")
+
+        def get_local(self, name, default=None):
+            return self._locals.get(name, default)
+
+        def update_locals(self, **kwargs):
+            self._locals.update(kwargs)
+
+        def iter_locals(self):
+            yield from self._locals.items()
 
     def __init__(self, agent=None):
         self.job_def = self._FakeJobDef(agent=agent)

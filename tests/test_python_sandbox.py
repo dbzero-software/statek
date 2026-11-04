@@ -372,7 +372,7 @@ async def test_allowed_imports_work(job_factory):
         job,
     )
 
-    assert job.py_env.console == ["31"]
+    assert list(job.py_env.iter_console()) == ["31"]
 
 
 @pytest.mark.asyncio
@@ -385,7 +385,7 @@ async def test_restricted_mode_allows_datetime_f_string_formatting(job_factory):
         job,
     )
 
-    assert job.py_env.local_state["formatted_datetime"] == "2026-07-22 14:30"
+    assert job.py_env.get_local("formatted_datetime") == "2026-07-22 14:30"
 
 
 @pytest.mark.asyncio
@@ -413,7 +413,7 @@ async def test_restricted_mode_allows_time_strftime(job_factory):
         job,
     )
 
-    assert job.py_env.local_state["formatted_time"] == "2026-07-22"
+    assert job.py_env.get_local("formatted_time") == "2026-07-22"
 
 
 @pytest.mark.asyncio
@@ -493,7 +493,7 @@ async def test_restricted_mode_allows_sanitized_stdlib_helpers(job_factory, sour
 
     await exec_step(source, job)
 
-    assert job.py_env.local_state["stdlib_result"] == expected
+    assert job.py_env.get_local("stdlib_result") == expected
 
 
 @pytest.mark.asyncio
@@ -600,9 +600,9 @@ async def test_sandbox_import_wrappers_are_not_persisted(job_factory):
         job,
     )
 
-    assert job.py_env.local_state["primitive_result"] == 5
-    assert "re" not in job.py_env.local_state
-    assert "math" not in job.py_env.local_state
+    assert job.py_env.get_local("primitive_result") == 5
+    assert "re" not in dict(job.py_env.iter_locals())
+    assert "math" not in dict(job.py_env.iter_locals())
 
 
 @pytest.mark.asyncio
@@ -620,9 +620,9 @@ async def test_unrestricted_mode_uses_normal_imports(job_factory):
         job,
     )
 
-    assert job.py_env.local_state["off_mode_result"] == ["example.txt", "restricted"]
-    assert "os" not in job.py_env.local_state
-    assert "statek_settings" not in job.py_env.local_state
+    assert job.py_env.get_local("off_mode_result") == ["example.txt", "restricted"]
+    assert "os" not in dict(job.py_env.iter_locals())
+    assert "statek_settings" not in dict(job.py_env.iter_locals())
 
 
 @pytest.mark.asyncio
@@ -653,7 +653,7 @@ async def test_exec_step_enables_dbzero_restricted_context(job_factory):
         },
     )
 
-    assert job.py_env.local_state["probe_mode"] == "restricted"
+    assert job.py_env.get_local("probe_mode") == "restricted"
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 
@@ -719,9 +719,9 @@ async def test_tool_body_runs_unrestricted_inside_restricted_exec(db0_fixture): 
         },
     )
 
-    assert job.py_env.local_state["before_mode"] == "restricted"
-    assert job.py_env.local_state["tool_mode"] == "unrestricted"
-    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert job.py_env.get_local("before_mode") == "restricted"
+    assert job.py_env.get_local("tool_mode") == "unrestricted"
+    assert job.py_env.get_local("after_mode") == "restricted"
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 
@@ -754,7 +754,7 @@ async def test_tool_body_unrestricted_scope_resets_after_error(db0_fixture):  # 
         },
     )
 
-    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert job.py_env.get_local("after_mode") == "restricted"
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 
@@ -786,15 +786,15 @@ async def test_subtask_creates_child_job_from_restricted_python_cli(db0_fixture)
         },
     )
 
-    handler = job.py_env.local_state["handler"]
+    handler = job.py_env.get_local("handler")
 
     assert not outputs
     assert observed_modes == ["unrestricted"]
-    assert job.py_env.local_state["before_mode"] == "restricted"
-    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert job.py_env.get_local("before_mode") == "restricted"
+    assert job.py_env.get_local("after_mode") == "restricted"
     assert handler.id == "child-1"
     assert handler.job.job_def.agent is child_agent
-    assert handler.job.py_env.local_state["sub_task_handler"] is handler
+    assert handler.job.py_env.get_local("sub_task_handler") is handler
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 
@@ -831,7 +831,7 @@ async def test_subtask_unrestricted_scope_resets_after_error(db0_fixture):  # py
     )
 
     assert not outputs
-    assert job.py_env.local_state["after_mode"] == "restricted"
+    assert job.py_env.get_local("after_mode") == "restricted"
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 
@@ -868,7 +868,7 @@ async def test_adversarial_memo_reflection_attacks_are_blocked(job_factory, sour
         await exec_step(source, job, local_context={"probe": probe})
 
     assert _probe_dbzero_mode(probe) == "unrestricted"
-    assert "leak" not in (job.py_env.local_state or {})
+    assert "leak" not in (dict(job.py_env.iter_locals()) or {})
 
 
 @pytest.mark.asyncio
@@ -911,7 +911,7 @@ async def test_adversarial_dbzero_container_attacks_are_blocked(job_factory, sou
         )
 
     assert _probe_dbzero_mode(probe) == "unrestricted"
-    assert "leak" not in (job.py_env.local_state or {})
+    assert "leak" not in (dict(job.py_env.iter_locals()) or {})
 
 
 @pytest.mark.asyncio
@@ -937,7 +937,7 @@ async def test_restricted_mode_still_allows_safe_dbzero_field_and_container_use(
         },
     )
 
-    assert job.py_env.local_state["allowed_values"] == [
+    assert job.py_env.get_local("allowed_values") == [
         456,
         "probe",
         457,
@@ -994,7 +994,7 @@ async def test_restricted_context_recovers_after_adversarial_failure(job_factory
         local_context={"probe": probe},
     )
 
-    assert job.py_env.local_state["after_attack"] == 123
+    assert job.py_env.get_local("after_attack") == 123
     assert _probe_dbzero_mode(probe) == "unrestricted"
 
 

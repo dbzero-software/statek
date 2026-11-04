@@ -349,11 +349,11 @@ class TestDelegateTask:
         result = delegate_task(supervised_agent, warmup_code=warmup_code)
 
         # Verify local_state contains referenced variables
-        assert result.job.py_env.local_state["x"] == 10
-        assert result.job.py_env.local_state["y"] == 20
+        assert result.job.py_env.get_local("x") == 10
+        assert result.job.py_env.get_local("y") == 20
 
         # Verify unused variable was not copied
-        assert 'unused_var' not in result.job.py_env.local_state
+        assert 'unused_var' not in dict(result.job.py_env.iter_locals())
 
     def test_delegate_task_with_kwargs(self, db0_fixture, mock_settings):
         """Test delegate_task passes kwargs as job_params to agent.create_job_def."""
@@ -455,8 +455,8 @@ class TestDelegateTask:
         result = delegate_task(
             supervised_agent, shared_vars={"alpha": 42, "label": "test"}
         )
-        assert result.job.py_env.local_state["alpha"] == 42
-        assert result.job.py_env.local_state["label"] == "test"
+        assert result.job.py_env.get_local("alpha") == 42
+        assert result.job.py_env.get_local("label") == "test"
 
     def test_delegate_task_dict_shared_vars_not_reported_in_job_params(
         self, db0_fixture, supervised_agent, mock_settings
@@ -484,15 +484,15 @@ class TestDelegateTask:
             warmup_code="result = x",
             shared_vars={"alpha": 99},
         )
-        assert result.job.py_env.local_state["x"] == 5
-        assert result.job.py_env.local_state["alpha"] == 99
+        assert result.job.py_env.get_local("x") == 5
+        assert result.job.py_env.get_local("alpha") == 99
 
     def test_delegate_task_no_shared_vars_keeps_local_state_empty(
         self, db0_fixture, supervised_agent, mock_settings
     ):
         """Without shared_vars or warmup_code, local_state stays empty."""
         result = delegate_task(supervised_agent)
-        assert not result.job.py_env.local_state
+        assert not dict(result.job.py_env.iter_locals())
 
     def test_delegate_task_locale_forwarded_to_job_def(
         self, db0_fixture, supervised_agent, mock_settings
@@ -581,8 +581,8 @@ class TestCreateFutureTask:
         assert result.job.status == JobStatus.READY
         assert result.job.job_def.agent is supervised_agent
         assert result.job.job_def.job_params is None
-        assert result.job.py_env.local_state["alpha"] == 42
-        assert result.job.py_env.local_state["label"] == "test"
+        assert result.job.py_env.get_local("alpha") == 42
+        assert result.job.py_env.get_local("label") == "test"
         assert result.job.parent_job is None
 
     def test_inherits_parent_locale_and_error_handlers(
@@ -655,9 +655,9 @@ class TestCreateFutureTask:
         )
 
         assert result.job.job_def.warmup_code == "result = x + alpha"
-        assert result.job.py_env.local_state["x"] == 10
-        assert result.job.py_env.local_state["alpha"] == 42
-        assert "unused_var" not in result.job.py_env.local_state
+        assert result.job.py_env.get_local("x") == 10
+        assert result.job.py_env.get_local("alpha") == 42
+        assert "unused_var" not in dict(result.job.py_env.iter_locals())
 
     def test_kwargs_forwarded_as_job_params(
         self, db0_fixture, supervised_agent
@@ -707,7 +707,7 @@ class TestCreateNewJob:
         assert job.job_def.locale is parent_locale
         assert job.job_def.job_params["topic"] == "orders"
         assert "shared_vars" not in job.job_def.job_params
-        assert job.py_env.local_state["alpha"] == 42
+        assert job.py_env.get_local("alpha") == 42
         assert job.parent_job is parent
         assert len(job.error_handlers) == 1
         assert job.error_handlers[0].error_handler is _noop_error_handler
@@ -742,9 +742,9 @@ class TestCreateNewJob:
         )
 
         assert job.job_def.warmup_code == "result = x + alpha"
-        assert job.py_env.local_state["x"] == 10
-        assert job.py_env.local_state["alpha"] == 42
-        assert "unused_var" not in job.py_env.local_state
+        assert job.py_env.get_local("x") == 10
+        assert job.py_env.get_local("alpha") == 42
+        assert "unused_var" not in dict(job.py_env.iter_locals())
 
     def test_code_block_warmup_copies_referenced_caller_locals(
         self, db0_fixture, supervised_agent
@@ -762,8 +762,8 @@ class TestCreateNewJob:
             ],
         )
 
-        assert job.py_env.local_state["external_value"] == 10
-        assert "unused_var" not in job.py_env.local_state
+        assert job.py_env.get_local("external_value") == 10
+        assert "unused_var" not in dict(job.py_env.iter_locals())
 
     def test_reuses_job_def_with_agent_code_block_warmup(
         self, db0_fixture, supervised_agent
@@ -793,8 +793,8 @@ class TestCreateNewJob:
 
         assert second.job_def is first.job_def
         assert len(db0.find(JobDef, db0.as_tag(supervised_agent))) == 1
-        assert first.py_env.local_state["alpha"] == 1
-        assert second.py_env.local_state["alpha"] == 2
+        assert first.py_env.get_local("alpha") == 1
+        assert second.py_env.get_local("alpha") == 2
 
     def test_creates_distinct_job_def_for_different_static_inputs(
         self, db0_fixture, supervised_agent
@@ -1049,7 +1049,7 @@ class TestCreateSubTask:
         assert isinstance(handler, SubTaskHandler)
         assert handler.job is child
         assert handler.id == "child-1"
-        assert child.py_env.local_state["sub_task_handler"] is handler
+        assert child.py_env.get_local("sub_task_handler") is handler
 
     def test_supports_custom_handler_type(self, job_factory):
         """create_sub_task can construct custom handler subclasses."""
@@ -1059,7 +1059,7 @@ class TestCreateSubTask:
 
         assert isinstance(handler, CustomSubTaskHandler)
         assert handler.id == "custom"
-        assert child.py_env.local_state["sub_task_handler"] is handler
+        assert child.py_env.get_local("sub_task_handler") is handler
 
 
 class TestDelegateMuteTask:
@@ -1197,7 +1197,7 @@ class TestDelegateMuteDialog:
 
         assert result.job.error_handlers[0].error_handler is _noop_error_handler
         assert result.job.parent_job is parent
-        assert result.job.py_env.local_state["alpha"] == 42
+        assert result.job.py_env.get_local("alpha") == 42
         assert result.job.job_def.locale is locale
         assert result.job.job_def.job_params["topic"] == "weather"
         assert "shared_vars" not in result.job.job_def.job_params
@@ -1290,8 +1290,8 @@ class TestStartDialog:
                 and item.message == "hello world")
             for item in job.chat_log
         ) or (
-            job.py_env.push_log is not None
-            and "hello world" in str(job.py_env.push_log)
+            dict(job.py_env.iter_push_log())
+            and "hello world" in str(dict(job.py_env.iter_push_log()))
         )
         assert has_msg
 
@@ -1363,8 +1363,8 @@ class TestStartDialog:
         job = start_dialog(
             agent, message="hi", shared_vars={"alpha": 42, "label": "test"}
         )
-        assert job.py_env.local_state["alpha"] == 42
-        assert job.py_env.local_state["label"] == "test"
+        assert job.py_env.get_local("alpha") == 42
+        assert job.py_env.get_local("label") == "test"
 
     def test_start_dialog_dict_shared_vars_not_reported_in_job_params(
         self, db0_fixture, mock_settings
@@ -1396,8 +1396,8 @@ class TestStartDialog:
             warmup_code="result = x",
             shared_vars={"alpha": 99},
         )
-        assert job.py_env.local_state["x"] == 5
-        assert job.py_env.local_state["alpha"] == 99
+        assert job.py_env.get_local("x") == 5
+        assert job.py_env.get_local("alpha") == 99
 
     def test_start_dialog_no_shared_vars_keeps_local_state_empty(
         self, db0_fixture, mock_settings
@@ -1405,7 +1405,7 @@ class TestStartDialog:
         """Without shared_vars or warmup_code, local_state stays empty."""
         agent = DialogAgent(send_message=_make_send_message, _metadata={"MODEL": "test-model"})
         job = start_dialog(agent, message="hi")
-        assert not job.py_env.local_state
+        assert not dict(job.py_env.iter_locals())
 
     def test_start_dialog_locale_forwarded_to_job_def(
         self, db0_fixture, mock_settings
@@ -1631,14 +1631,14 @@ class TestSubmitNewJob:
         """Creates a job with empty local_state when no shared_vars given."""
         job = submit_new_job(supervised_agent)
         assert isinstance(job, Job)
-        assert not job.py_env.local_state
+        assert not dict(job.py_env.iter_locals())
 
     def test_dict_shared_vars(self, db0_fixture, supervised_agent, mock_settings):
         """Dict shared_vars populate local_state with correct names."""
         data = {"count": 42, "label": "test"}
         job = submit_new_job(supervised_agent, shared_vars=data)
-        assert job.py_env.local_state["count"] == 42
-        assert job.py_env.local_state["label"] == "test"
+        assert job.py_env.get_local("count") == 42
+        assert job.py_env.get_local("label") == "test"
         assert job.job_def.job_params is None
 
     def test_kwargs_forwarded_as_job_params(self, db0_fixture, mock_settings):
@@ -1699,9 +1699,9 @@ class TestSubmitNewJobsBatch:
         ]
         jobs = submit_new_jobs_batch(supervised_agent, batch)
         assert len(jobs) == 3
-        assert jobs[0].py_env.local_state["x"] == 1
-        assert jobs[1].py_env.local_state["x"] == 2
-        assert not jobs[2].py_env.local_state
+        assert jobs[0].py_env.get_local("x") == 1
+        assert jobs[1].py_env.get_local("x") == 2
+        assert not dict(jobs[2].py_env.iter_locals())
 
     def test_locale_forwarded_to_each_job_def(
         self, db0_fixture, supervised_agent, mock_settings

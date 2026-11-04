@@ -15,8 +15,10 @@ echo of the trailing expression produced no output at all.
 
 import pytest
 
+
 from statek.exceptions import FutureError
 from statek.executors.utils import exec_cli_step
+from tests.conftest import seed_pyenv
 
 
 DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
@@ -90,7 +92,7 @@ async def test_intermediate_statement_raises(job_factory):
     outer layers swallowed the error text.
     """
     job = job_factory(job_params=DEFAULT_JOB_PARAMS)
-    job.py_env.local_state = {"calculate_est_budget": _raising_call}
+    job.py_env = seed_pyenv(job.py_env, local_state={"calculate_est_budget": _raising_call})
     outputs = []
     # Flattened to plain values so intermediate state is dbzero-compatible —
     # the shape still mirrors production (4 statements, final = f-string echo).
@@ -123,7 +125,7 @@ async def test_intermediate_statement_returns_none_then_fstring(job_factory):
     gets echoed, outputs should contain 'estimated cost: None points'.
     """
     job = job_factory(job_params=DEFAULT_JOB_PARAMS)
-    job.py_env.local_state = {"calculate_est_budget": _return_none}
+    job.py_env = seed_pyenv(job.py_env, local_state={"calculate_est_budget": _return_none})
     outputs = []
     code = (
         "strength = 0.5\n"
@@ -150,7 +152,7 @@ async def test_intermediate_future_error_suspends_with_empty_output(job_factory)
     the ``<CONSOLE_OUTPUT>\\n\\n</CONSOLE_OUTPUT>`` the LLM receives.
     """
     job = job_factory(job_params=DEFAULT_JOB_PARAMS)
-    job.py_env.local_state = {"calculate_est_budget": _raise_future}
+    job.py_env = seed_pyenv(job.py_env, local_state={"calculate_est_budget": _raise_future})
     outputs = []
     code = (
         "strength = 0.5\n"

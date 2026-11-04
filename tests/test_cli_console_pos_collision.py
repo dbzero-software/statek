@@ -39,18 +39,18 @@ class TestCliConsoleAppendRouting:
         await exec_all_steps(code, job, _cli_console_append)
 
         assert cli_outputs[0] == ["hello"]
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_cli_execution_does_not_advance_console_position(self, job_factory):
         """Capturing python_cli output does not mutate the job console."""
         job = self.create_job(job_factory)
-        pos_before = len(job.py_env.console) if job.py_env.console else 0
+        pos_before = job.py_env.console_len if list(job.py_env.iter_console()) else 0
 
         code = _make_cli_code_block('x = 1\nprint("done")')
         await exec_all_steps(code, job, lambda _cli_idx, _text: None)
 
-        pos_after = len(job.py_env.console) if job.py_env.console else 0
+        pos_after = job.py_env.console_len if list(job.py_env.iter_console()) else 0
         assert pos_after == pos_before
 
     @pytest.mark.asyncio
@@ -60,10 +60,10 @@ class TestCliConsoleAppendRouting:
 
         code1 = _make_cli_code_block('print("first")')
         await exec_all_steps(code1, job, lambda _cli_idx, _text: None)
-        pos_after_first = len(job.py_env.console) if job.py_env.console else 0
+        pos_after_first = job.py_env.console_len if list(job.py_env.iter_console()) else 0
 
         code2 = _make_cli_code_block('print("second")')
         await exec_all_steps(code2, job, lambda _cli_idx, _text: None)
-        pos_after_second = len(job.py_env.console) if job.py_env.console else 0
+        pos_after_second = job.py_env.console_len if list(job.py_env.iter_console()) else 0
 
         assert pos_after_second == pos_after_first == 0

@@ -2,6 +2,7 @@
 from typing import Tuple
 import asyncio
 import pytest
+
 import dbzero as db0
 from statek.utils import (
     find_locals,
@@ -17,6 +18,7 @@ from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.future import FutureResult, temporal
 from statek.exceptions import FutureError
+from tests.conftest import seed_pyenv
 
 
 # --- Helpers for FutureResult-based tests ---
@@ -83,11 +85,11 @@ class _FakeJob:
 
     class _FakePyEnv:
         def __init__(self, perm_ctx=None):
-            self.local_state = {} if perm_ctx is None else {"_PERM_CTX": perm_ctx}
+            self._perm_ctx = perm_ctx
 
         @property
         def perm_ctx(self):
-            return self.local_state.get("_PERM_CTX")
+            return self._perm_ctx
 
     def __init__(self, perm_ctx=None):
         self.py_env = self._FakePyEnv(perm_ctx)
@@ -313,7 +315,7 @@ class TestJobFindLocals:
     def test_finds_values_from_job_local_state(self, job_factory):
         """Job.find_locals scans the job's py_env.local_state."""
         job = job_factory()
-        job.py_env.local_state = {"answer": 42, "message": "hello"}
+        job.py_env = seed_pyenv(job.py_env, local_state={"answer": 42, "message": "hello"})
 
         assert list(job.find_locals(var_name="answer")) == [42]
         assert list(job.find_locals(var_type=str)) == ["hello"]
@@ -321,7 +323,7 @@ class TestJobFindLocals:
     def test_scans_perm_ctx_by_default(self, job_factory):
         """Job.find_locals includes perm_ctx when ext_scan is enabled."""
         job = job_factory()
-        job.py_env.local_state = {"_PERM_CTX": {"answer": 42}}
+        job.py_env = seed_pyenv(job.py_env, local_state={"_PERM_CTX": {"answer": 42}})
 
         assert list(job.find_locals(var_name="answer")) == [42]
         assert 42 in list(job.find_locals(var_type=int))
@@ -329,27 +331,27 @@ class TestJobFindLocals:
     def test_ext_scan_false_ignores_perm_ctx(self, job_factory):
         """Job.find_locals can be limited to py_env.local_state."""
         job = job_factory()
-        job.py_env.local_state = {"_PERM_CTX": {"answer": 42}}
+        job.py_env = seed_pyenv(job.py_env, local_state={"_PERM_CTX": {"answer": 42}})
 
         assert not list(job.find_locals(var_name="answer", ext_scan=False))
 
     def test_local_value_shadows_perm_ctx(self, job_factory):
         """A py_env local with the same name takes precedence over perm_ctx."""
         job = job_factory()
-        job.py_env.local_state = {
+        job.py_env = seed_pyenv(job.py_env, local_state={
             "message": "from local",
             "_PERM_CTX": {"message": "from perm"},
-        }
+        })
 
         assert list(job.find_locals(var_name="message")) == ["from local"]
 
     def test_resolves_futures_like_find_locals(self, job_factory, db0_fixture):
         """Job.find_locals uses the same FutureResult matching behavior."""
         job = job_factory()
-        job.py_env.local_state = {
+        job.py_env = seed_pyenv(job.py_env, local_state={
             "ready": _make_future("Alice", ready=True),
             "blocked": _make_future("Bob", ready=False),
-        }
+        })
 
         assert list(job.find_locals(var_name="ready")) == ["Alice"]
         assert "Alice" in list(job.find_locals(var_type=str))
@@ -636,7 +638,7 @@ class TestFindLocalsFromAsyncToolInExecStep:
         await exec_step('greeting = "hello world"', job)
         await exec_step('result = _async_find_local_tool(var_name="greeting")', job)
 
-        assert job.py_env.local_state['result'] == "hello world"
+        assert job.py_env.get_local('result') == "hello world"
 
     @pytest.mark.asyncio
     async def test_async_tool_finds_variable_from_same_exec_step(self, db0_fixture):
@@ -648,7 +650,7 @@ class TestFindLocalsFromAsyncToolInExecStep:
             job,
         )
 
-        assert job.py_env.local_state['result'] == "hello world"
+        assert job.py_env.get_local('result') == "hello world"
 
     @pytest.mark.asyncio
     async def test_async_tool_returns_none_for_missing_variable(self, db0_fixture):
@@ -657,7 +659,7 @@ class TestFindLocalsFromAsyncToolInExecStep:
 
         await exec_step('result = _async_find_local_tool(var_name="nonexistent")', job)
 
-        assert job.py_env.local_state['result'] is None
+        assert job.py_env.get_local('result') is None
 
 class TestFindLocalsInAsyncTools:
     """Tests that find_locals works correctly in both sync and async @tool functions.

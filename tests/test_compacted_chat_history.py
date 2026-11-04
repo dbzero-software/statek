@@ -4,12 +4,14 @@
 
 import pytest
 
+
 from statek.chat_history import ChatRole, ContentSource
 from statek.chat_style import ChatStyle
 from statek.executors.chat_log_item import (
     LLM_LogItem, NotificationLogItem, UserLogItem, WarmupLogItem,
 )
 from statek.executors.job import JobCompactionResult, JobSummary, format_job_summary
+from tests.conftest import seed_pyenv
 
 
 def _summary(label="summary"):
@@ -26,8 +28,11 @@ def test_compacted_history_preserves_initial_warmup_and_uncovered_turns(job_fact
         LLM_LogItem(console_pos=1, llm_resp="hidden_action()"),
         LLM_LogItem(console_pos=2, llm_resp="visible_action()"),
     ]
-    job.py_env.console = ["warmup output", "hidden output", "visible output"]
-    job.py_env.push_log = {0: "initial push", 2: "hidden push", 3: "visible push"}
+    job.py_env = seed_pyenv(
+        job.py_env,
+        console=["warmup output", "hidden output", "visible output"],
+        push_log={0: "initial push", 2: "hidden push", 3: "visible push"},
+    )
     summary = _summary()
     job._Job__job_summaries = JobCompactionResult(2, 1, summary)  # pylint: disable=protected-access
 
@@ -75,7 +80,7 @@ def test_compacted_history_places_covered_initial_summary_after_warmup(job_facto
         WarmupLogItem(console_pos=0, warmup_block_num=0),
         LLM_LogItem(console_pos=1, llm_resp="next()"),
     ]
-    job.py_env.console = ["ready"]
+    job.py_env = seed_pyenv(job.py_env, console=["ready"])
     job._Job__job_summaries = JobCompactionResult(0, 1, _summary())  # pylint: disable=protected-access
 
     history = list(job.get_chat_history())

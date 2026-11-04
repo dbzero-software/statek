@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 import dbzero as db0
 import statek
 
@@ -42,6 +43,7 @@ from statek.system import error_handler
 from statek.task import SubTaskHandler
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec, _statek_ctx_scope
+from tests.conftest import seed_pyenv
 
 
 _critical_error_calls = []
@@ -134,7 +136,7 @@ class TestDialogResponseTiming:  # pylint: disable=unused-argument
                   job_status=JobStatus.STARTED)
         t0 = datetime(2026, 10, 15, 12)
         job.created_at = t0
-        job.py_env.local_state["waiting"] = create_future_not_ready()
+        job.py_env.update_locals(**{"waiting": create_future_not_ready()})
         continuation = "print(waiting)" if suspend else "raise ValueError('after delivery')"
         turn = LLM_LogItem(console_pos=0, llm_resp=CodeBlock(tool_calls=[
             CallSpec(id="send", func_name="python_cli", kwargs={
@@ -808,19 +810,19 @@ class TestRunJobStepFutureErrorResumption:
 
         # Seed the environment with initial values
         future_not_ready = create_future_not_ready()
-        job.py_env.local_state['counter'] = 0
-        job.py_env.local_state['before_flag'] = False
-        job.py_env.local_state['after_flag'] = False
-        job.py_env.local_state['future_val'] = future_not_ready
+        job.py_env.update_locals(**{'counter': 0})
+        job.py_env.update_locals(**{'before_flag': False})
+        job.py_env.update_locals(**{'after_flag': False})
+        job.py_env.update_locals(**{'future_val': future_not_ready})
 
         # First run: executes idx 0 (counter=1), idx 1 (before_flag=True),
         # then idx 2 raises FutureError
         result1 = await run_job_step(job)
         assert result1 is False
         assert job.status == JobStatus.WARMING_UP
-        assert job.py_env.local_state['counter'] == 1
-        assert job.py_env.local_state['before_flag'] is True
-        assert job.py_env.local_state['after_flag'] is False
+        assert job.py_env.get_local('counter') == 1
+        assert job.py_env.get_local('before_flag') is True
+        assert job.py_env.get_local('after_flag') is False
         assert job.awaited_result is future_not_ready
         assert job.next_instr_num == 2  # suspended at idx 2
         assert job.warmup_block_num is None  # block did not advance (None means block 0)
@@ -837,9 +839,9 @@ class TestRunJobStepFutureErrorResumption:
         result2 = await run_job_step(job)
         assert result2 is False
         assert job.status == JobStatus.WARMING_UP
-        assert job.py_env.local_state['counter'] == 1  # NOT 2 — proves skip
-        assert job.py_env.local_state['result'] == 99
-        assert job.py_env.local_state['after_flag'] is True
+        assert job.py_env.get_local('counter') == 1  # NOT 2 — proves skip
+        assert job.py_env.get_local('result') == 99
+        assert job.py_env.get_local('after_flag') is True
         assert job.awaited_result is None
         assert job.next_instr_num is None
         assert job.warmup_block_num == 1  # block advanced
@@ -1643,7 +1645,7 @@ class TestRunJobStepWarmupException:
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
-        job.py_env.local_state['future_val'] = future_not_ready
+        job.py_env.update_locals(**{'future_val': future_not_ready})
 
         result = await run_job_step(job)
 
@@ -1745,7 +1747,7 @@ class TestRunJobStepEmptyLLMSubmission:
             mock_llm_api_cls.get.return_value = mock_api
             await run_job_step(job)
 
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        console_text = "\n".join(job.py_env.iter_console())
         assert "Error: no code submitted." in console_text
 
     @pytest.mark.asyncio
@@ -1780,7 +1782,7 @@ class TestRunJobStepEmptyLLMSubmission:
             mock_llm_api_cls.get.return_value = mock_api
             await run_job_step(job)
 
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        console_text = "\n".join(job.py_env.iter_console())
         assert "Error: no code submitted." in console_text
 
     @pytest.mark.asyncio
@@ -1815,7 +1817,7 @@ class TestRunJobStepEmptyLLMSubmission:
             mock_llm_api_cls.get.return_value = mock_api
             await run_job_step(job)
 
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        console_text = "\n".join(job.py_env.iter_console())
         assert "Error: no code submitted." in console_text
 
     @pytest.mark.asyncio
@@ -1838,7 +1840,7 @@ class TestRunJobStepEmptyLLMSubmission:
 
         await run_job_step(job)
 
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        console_text = "\n".join(job.py_env.iter_console())
         assert "Error: no code submitted." not in console_text
 
     @pytest.mark.asyncio
@@ -1860,7 +1862,7 @@ class TestRunJobStepEmptyLLMSubmission:
 
         await run_job_step(job)
 
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        console_text = "\n".join(job.py_env.iter_console())
         assert "Error: no code submitted." not in console_text
 
 
@@ -1889,7 +1891,7 @@ class TestRunJobStepEmptyCodeBlock:
         result = await run_job_step(job)
 
         assert result is False
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        console_text = "\n".join(job.py_env.iter_console())
         assert "TypeError" not in console_text
 
     @pytest.mark.asyncio
@@ -1943,7 +1945,7 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        assert not any("cli-hello" in line for line in job.py_env.console or [])
+        assert not any("cli-hello" in line for line in job.py_env.iter_console())
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) == 1
@@ -1978,7 +1980,7 @@ class TestRunJobStepCliToolCalls:
         # Regular tool was called via exec_tool
         assert len(exec_tool_calls) == 1
         # CLI tool still ran (x=1 in state)
-        assert job.py_env.local_state.get('x') == 1
+        assert job.py_env.get_local('x') == 1
 
     @pytest.mark.asyncio
     async def test_mixed_tool_results_regular_and_cli_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
@@ -2007,7 +2009,7 @@ class TestRunJobStepCliToolCalls:
         assert len(tool_log) == 2
         assert 'regular_out' in tool_log[0]
         assert tool_log[1] == "cli-out"
-        assert not any("cli-out" in line for line in job.py_env.console or [])
+        assert not any("cli-out" in line for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_cli_error_stored_as_tool_error_only_in_tool_log(self, db0_fixture):  # pylint: disable=unused-argument
@@ -2027,7 +2029,7 @@ class TestRunJobStepCliToolCalls:
 
         await run_job_step(job)
 
-        assert not any("ZeroDivisionError" in line for line in job.py_env.console or [])
+        assert not any("ZeroDivisionError" in line for line in job.py_env.iter_console())
         from statek.executors.chat_log_item import WarmupLogItem  # pylint: disable=import-outside-toplevel
         warmup_items = [item for item in job.chat_log if isinstance(item, WarmupLogItem)]
         assert len(warmup_items) >= 1
@@ -2124,7 +2126,7 @@ class TestRunJobStepCliToolCalls:
         job_def = JobDef(agent=agent, job_params=None, warmup_code=warmup_code)
         job = Job(job_def=job_def, model_family="test", model="test-model",
                   job_status=JobStatus.READY)
-        job.py_env.local_state = {'future_val': create_future_not_ready()}
+        job.py_env = seed_pyenv(job.py_env, local_state={'future_val': create_future_not_ready()})
 
         result = await run_job_step(job)
 
@@ -2385,7 +2387,7 @@ class TestRunJobStepMdDialog:
         mock_handle.assert_called_once()
         assert isinstance(job.chat_log[-1], ReminderLogItem)
         assert job.chat_log[-1].reminder is reminder
-        assert job.py_env.console[-1] == "Use report_outcome."
+        assert list(job.py_env.iter_console())[-1] == "Use report_outcome."
 
     @pytest.mark.asyncio
     async def test_md_dialog_code_response_executes_and_continues(
@@ -2441,7 +2443,7 @@ class TestRunJobStepMdDialog:
             result = await run_job_step(job)
 
         # Code from previous response was executed
-        assert job.py_env.local_state.get('test_var') == 42
+        assert job.py_env.get_local('test_var') == 42
         # Text-only response exits the job
         assert result is True
         assert job.status == JobStatus.DONE
@@ -2469,7 +2471,7 @@ class TestRunJobStepMdDialog:
             result = await run_job_step(job)
 
         # Warmup code was executed
-        assert job.py_env.local_state.get('test_var') == 42
+        assert job.py_env.get_local('test_var') == 42
         # Job exits after LLM response in MD_DIALOG
         assert result is True
         assert job.status == JobStatus.DONE
@@ -2505,7 +2507,7 @@ class TestRunJobStepMdDialog:
         assert result is False
         assert job.status != JobStatus.DONE
         # Error should be in the console
-        console_text = "\n".join(job.py_env.console)
+        console_text = "\n".join(list(job.py_env.iter_console()))
         assert "ConnectionError" in console_text
         assert "network is down" in console_text
 
@@ -2538,7 +2540,7 @@ class TestRunJobStepMdDialog:
         # Job should NOT exit — error means message wasn't delivered, LLM should react
         assert result is False
         assert job.status != JobStatus.DONE
-        console_text = "\n".join(job.py_env.console)
+        console_text = "\n".join(list(job.py_env.iter_console()))
         assert "RuntimeError" in console_text
         assert "send failed" in console_text
 
@@ -2583,7 +2585,7 @@ class TestRunJobStepDirect:
         assert result is True
         assert job.status == JobStatus.DONE
         mock_handle.assert_called_once()
-        console_text = "\n".join(job.py_env.console) if job.py_env.console else ""
+        console_text = "\n".join(job.py_env.iter_console())
         assert "Error: no code submitted." not in console_text
 
     @pytest.mark.asyncio
@@ -2624,7 +2626,7 @@ class TestRunJobStepDirect:
         assert job.status == JobStatus.STARTED
         assert isinstance(job.chat_log[-1], ReminderLogItem)
         assert job.chat_log[-1].reminder is reminder
-        assert job.py_env.console[-1] == "Use report_outcome."
+        assert list(job.py_env.iter_console())[-1] == "Use report_outcome."
 
 
     @pytest.mark.asyncio
@@ -2781,7 +2783,7 @@ class TestHandleDialogMarkdownMedia:
         # Job should continue so LLM can react to the error
         assert result is False
         assert job.status != JobStatus.DONE
-        console_text = "\n".join(job.py_env.console)
+        console_text = "\n".join(list(job.py_env.iter_console()))
         assert "ConnectionError" in console_text
         assert "send failed" in console_text
 

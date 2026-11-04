@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 import pytest
+
 import dbzero as db0
 
 import statek.executors.utils as executor_utils
@@ -20,6 +21,7 @@ from statek.shared_context import (
     shared_context_set_var,
 )
 from statek.utils import _statek_ctx_scope
+from tests.conftest import seed_pyenv
 
 
 class TestExecStepSharedContext:
@@ -43,20 +45,20 @@ class TestExecStepSharedContext:
 
         await exec_step("result = tone", job)
 
-        assert job.py_env.local_state["result"] == "concise"
-        assert "tone" not in job.py_env.local_state
+        assert job.py_env.get_local("result") == "concise"
+        assert "tone" not in dict(job.py_env.iter_locals())
         assert not hasattr(executor_utils, "tone")
 
     @pytest.mark.asyncio
     async def test_true_local_shadows_shared_variable(self, job_factory):
         job = job_factory()
         self._initialize(job)
-        job.py_env.local_state["tone"] = "local"
+        job.py_env.update_locals(**{"tone": "local"})
 
         await exec_step("result = tone\ntone = 'changed'", job)
 
-        assert job.py_env.local_state["result"] == "local"
-        assert job.py_env.local_state["tone"] == "changed"
+        assert job.py_env.get_local("result") == "local"
+        assert job.py_env.get_local("tone") == "changed"
 
     @pytest.mark.asyncio
     async def test_rejects_assignment_to_resolved_shared_variable(self, job_factory):
@@ -66,7 +68,7 @@ class TestExecStepSharedContext:
         with pytest.raises(PermissionError, match="tone"):
             await exec_step("tone = 'detailed'", job)
 
-        assert "tone" not in job.py_env.local_state
+        assert "tone" not in dict(job.py_env.iter_locals())
         assert job._get_shared_context().get_var("tone").value == "concise"
 
 
@@ -294,21 +296,21 @@ class TestExecStep:
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert "Hello, World!" in simple_job.py_env.console[0]
+        assert list(simple_job.py_env.iter_console())
+        assert "Hello, World!" in list(simple_job.py_env.iter_console())[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_print_from_function(self, job_factory):
         """Test exec_step with simple print statement."""
         simple_job = self.create_job(job_factory)
         code = 'local_print("Hello, World!")'
-        simple_job.py_env.local_state = {'local_print': local_print}
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={'local_print': local_print})
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert "Local print called with argument:" in simple_job.py_env.console[0]
-        assert "Hello, World!" in simple_job.py_env.console[1]
+        assert list(simple_job.py_env.iter_console())
+        assert "Local print called with argument:" in list(simple_job.py_env.iter_console())[0]
+        assert "Hello, World!" in list(simple_job.py_env.iter_console())[1]
 
     @pytest.mark.asyncio
     async def test_exec_step_variable_assignment(self, job_factory):
@@ -319,7 +321,7 @@ class TestExecStep:
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.local_state.get('x') == 42
+        assert simple_job.py_env.get_local('x') == 42
 
     @pytest.mark.asyncio
     async def test_exec_step_multiple_statements(self, job_factory):
@@ -335,11 +337,11 @@ print(f"Result: {z}")
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.local_state.get('x') == 10
-        assert simple_job.py_env.local_state.get('y') == 20
-        assert simple_job.py_env.local_state.get('z') == 30
-        assert simple_job.py_env.console is not None
-        assert "Result: 30" in simple_job.py_env.console[0]
+        assert simple_job.py_env.get_local('x') == 10
+        assert simple_job.py_env.get_local('y') == 20
+        assert simple_job.py_env.get_local('z') == 30
+        assert list(simple_job.py_env.iter_console())
+        assert "Result: 30" in list(simple_job.py_env.iter_console())[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_with_exit(self, job_factory):
@@ -365,8 +367,8 @@ print(f"Result: {z}")
         result = await exec_step(code3, simple_job)
 
         assert result is True
-        assert simple_job.py_env.local_state.get('counter') == 1
-        assert "1" in simple_job.py_env.console[0]
+        assert simple_job.py_env.get_local('counter') == 1
+        assert "1" in list(simple_job.py_env.iter_console())[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_print_with_separator(self, job_factory):
@@ -377,7 +379,7 @@ print(f"Result: {z}")
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console[0] == 'a-b-c'
+        assert list(simple_job.py_env.iter_console())[0] == 'a-b-c'
 
     @pytest.mark.asyncio
     async def test_exec_with_db0_objects(self, job_factory):
@@ -385,7 +387,7 @@ print(f"Result: {z}")
         simple_job = self.create_job(job_factory)
         code = '''memo_object.value = 15'''
         obj = MemoObject()
-        simple_job.py_env.local_state = {'memo_object': obj}
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={'memo_object': obj})
         result = await exec_step(code, simple_job)
 
         assert result is True
@@ -402,8 +404,8 @@ print("This should not run")'''
 
         assert result is False
         assert simple_job.py_env.exit_status == "Success"
-        assert any("Start" in line for line in simple_job.py_env.console)
-        assert not any("This should not run" in line for line in simple_job.py_env.console)
+        assert any("Start" in line for line in simple_job.py_env.iter_console())
+        assert not any("This should not run" in line for line in simple_job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_exec_step_print_with_future_result(self, job_factory):
@@ -414,7 +416,7 @@ print("This should not run")'''
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
 
-        simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
+        simple_job.py_env.update_locals(future_val=future_not_ready, local_print=local_print)
         code = 'print(future_val)'
 
         # First execution should raise FutureError with instr_num
@@ -425,18 +427,18 @@ print("This should not run")'''
         assert exc_info.value.instr_num == 0
         assert exc_info.value.future_result is future_not_ready
         # Console should be empty since print was not executed
-        assert simple_job.py_env.console is None
+        assert not list(simple_job.py_env.iter_console())
 
         # Now create a FutureResult that's ready
         future_ready = create_future_ready()
 
-        simple_job.py_env.local_state = {'future_val': future_ready, 'local_print': local_print}
+        simple_job.py_env.update_locals(future_val=future_ready, local_print=local_print)
 
         # Second execution should print the value
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert "42" in simple_job.py_env.console[0]
+        assert "42" in list(simple_job.py_env.iter_console())[0]
 
 
     @pytest.mark.asyncio
@@ -448,7 +450,7 @@ print("This should not run")'''
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
 
-        simple_job.py_env.local_state = {'future_val': future_not_ready, 'local_print': local_print}
+        simple_job.py_env.update_locals(future_val=future_not_ready, local_print=local_print)
         code = 'local_print(future_val)'
 
         # First execution should raise FutureError with instr_num
@@ -459,24 +461,24 @@ print("This should not run")'''
         assert exc_info.value.instr_num == 0
         assert exc_info.value.future_result is future_not_ready
         # Console should be empty since print was not executed
-        assert simple_job.py_env.console is None
+        assert not list(simple_job.py_env.iter_console())
 
         # Now create a FutureResult that's ready
         future_ready = create_future_ready()
 
-        simple_job.py_env.local_state = {'future_val': future_ready, 'local_print': local_print}
+        simple_job.py_env.update_locals(future_val=future_ready, local_print=local_print)
 
         # Second execution should print the value
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert "42" in simple_job.py_env.console[1]
+        assert "42" in list(simple_job.py_env.iter_console())[1]
 
     @pytest.mark.asyncio
     async def test_exec_step_temporal_function_print(self, job_factory):
         """Test exec_step with temporal function and print."""
         simple_job = self.create_job(job_factory)
-        simple_job.py_env.local_state = {'get_value': get_value}
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={'get_value': get_value})
 
         code = '''result = get_value()
 print(result)'''
@@ -485,15 +487,14 @@ print(result)'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert "42" in simple_job.py_env.console[0]
+        assert list(simple_job.py_env.iter_console())
+        assert "42" in list(simple_job.py_env.iter_console())[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_temporal_function_not_ready(self, job_factory):
         """Test exec_step with temporal function that's not ready."""
         simple_job = self.create_job(job_factory)
-        simple_job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
-        simple_job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
+        simple_job.py_env.update_locals(get_value_not_ready=get_value_not_ready)
 
         code = '''result = get_value_not_ready()
 print(result)'''
@@ -506,13 +507,13 @@ print(result)'''
         # The first instruction assigns the FutureResult, the second tries to print it
         assert exc_info.value.instr_num == 1
         # Console should be empty since print was not executed
-        assert simple_job.py_env.console is None
+        assert not list(simple_job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_exec_step_temporal_function_unpacks_to_future_elements(self, job_factory):
         """Temporal FutureResult tuple unpacking stores FutureElement instances."""
         simple_job = self.create_job(job_factory)
-        simple_job.py_env.local_state = {'get_two_values': get_two_values}
+        simple_job.py_env.update_locals(get_two_values=get_two_values)
 
         code = '''left, right = get_two_values()\nprint(left.get_value(), right.get_value())'''
 
@@ -520,15 +521,15 @@ print(result)'''
             await exec_step(code, simple_job)
 
         assert exc_info.value.instr_num == 1
-        assert simple_job.py_env.console is None
-        assert isinstance(simple_job.py_env.local_state.get('left'), FutureElement)
-        assert isinstance(simple_job.py_env.local_state.get('right'), FutureElement)
+        assert not list(simple_job.py_env.iter_console())
+        assert isinstance(simple_job.py_env.get_local('left'), FutureElement)
+        assert isinstance(simple_job.py_env.get_local('right'), FutureElement)
 
         result = await exec_step(code, simple_job, instr_num=1)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert any('7 9' in line for line in simple_job.py_env.console)
+        assert list(simple_job.py_env.iter_console())
+        assert any('7 9' in line for line in simple_job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_exec_step_continuation_with_instr_num(self, job_factory):
@@ -545,21 +546,21 @@ z = 3'''
         # Execute first time and check all statements execute
         result = await exec_step(code, simple_job)
         assert result is True
-        assert len(simple_job.py_env.console) == 2
-        assert "1" in simple_job.py_env.console[0]
-        assert "2" in simple_job.py_env.console[1]
+        assert simple_job.py_env.console_len == 2
+        assert "1" in list(simple_job.py_env.iter_console())[0]
+        assert "2" in list(simple_job.py_env.iter_console())[1]
 
         # Clear console for next test
-        simple_job.py_env.console = None
+        simple_job.py_env = seed_pyenv(simple_job.py_env, console=None)
 
         # Now execute starting from instruction 2 (third statement: print(x))
         result = await exec_step(code, simple_job, instr_num=2)
         assert result is True
         # Should only execute print(x), print(y), and z = 3
-        assert len(simple_job.py_env.console) == 2
-        assert "1" in simple_job.py_env.console[0]
-        assert "2" in simple_job.py_env.console[1]
-        assert simple_job.py_env.local_state['z'] == 3
+        assert simple_job.py_env.console_len == 2
+        assert "1" in list(simple_job.py_env.iter_console())[0]
+        assert "2" in list(simple_job.py_env.iter_console())[1]
+        assert simple_job.py_env.get_local('z') == 3
 
     @pytest.mark.asyncio
     async def test_exec_step_continuation_after_future_error(self, job_factory):
@@ -574,7 +575,7 @@ z = 3'''
 print(future_val)
 y = 2'''
 
-        simple_job.py_env.local_state = {'future_val': future_not_ready}
+        simple_job.py_env.update_locals(future_val=future_not_ready)
 
         # First execution should raise FutureError at instruction 1
         with pytest.raises(FutureError) as exc_info:
@@ -582,19 +583,19 @@ y = 2'''
 
         assert exc_info.value.instr_num == 1
         # x should be assigned but console should be empty
-        assert simple_job.py_env.local_state['x'] == 1
-        assert simple_job.py_env.console is None
+        assert simple_job.py_env.get_local('x') == 1
+        assert not list(simple_job.py_env.iter_console())
 
         # Now make the future ready
         future_ready = create_future_ready()
-        simple_job.py_env.local_state['future_val'] = future_ready
+        simple_job.py_env.update_locals(**{'future_val': future_ready})
 
         # Continue from instruction 1 (where error occurred)
         result = await exec_step(code, simple_job, instr_num=1)
         assert result is True
         # Now print should succeed and y should be assigned
-        assert "42" in simple_job.py_env.console[0]
-        assert simple_job.py_env.local_state['y'] == 2
+        assert "42" in list(simple_job.py_env.iter_console())[0]
+        assert simple_job.py_env.get_local('y') == 2
 
     @pytest.mark.asyncio
     async def test_exec_step_future_error_in_function_argument(self, job_factory):
@@ -604,10 +605,10 @@ y = 2'''
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'future_val': future_not_ready,
             'compute': compute
-        }
+        })
 
         # Code where FutureError occurs in middle of argument evaluation
         code = '''x = 1
@@ -621,20 +622,20 @@ y = 2'''
         assert exc_info.value.instr_num == 1
         assert exc_info.value.future_result is future_not_ready
         # First instruction executed, second failed, third not reached
-        assert simple_job.py_env.local_state['x'] == 1
-        assert 'result' not in simple_job.py_env.local_state
-        assert 'y' not in simple_job.py_env.local_state
+        assert simple_job.py_env.get_local('x') == 1
+        assert 'result' not in dict(simple_job.py_env.iter_locals())
+        assert 'y' not in dict(simple_job.py_env.iter_locals())
 
         # Now make the future ready
         future_ready = create_future_ready(20)
-        simple_job.py_env.local_state['future_val'] = future_ready
+        simple_job.py_env.update_locals(**{'future_val': future_ready})
 
         # Continue from instruction 1 (the compute call)
         result = await exec_step(code, simple_job, instr_num=1)
         assert result is True
         # Now compute should succeed with value 20 and y should be assigned
-        assert simple_job.py_env.local_state['result'] == 60  # 10 + 20 + 30
-        assert simple_job.py_env.local_state['y'] == 2
+        assert simple_job.py_env.get_local('result') == 60  # 10 + 20 + 30
+        assert simple_job.py_env.get_local('y') == 2
 
     @pytest.mark.asyncio
     async def test_exec_step_future_error_in_nested_expression(self, job_factory):
@@ -644,7 +645,7 @@ y = 2'''
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
 
-        simple_job.py_env.local_state = {'future_val': future_not_ready}
+        simple_job.py_env.update_locals(future_val=future_not_ready)
 
         # Code with nested expression containing FutureResult
         code = '''a = 5
@@ -657,19 +658,19 @@ c = 3'''
 
         assert exc_info.value.instr_num == 1
         assert exc_info.value.future_result is future_not_ready
-        assert simple_job.py_env.local_state['a'] == 5
-        assert 'b' not in simple_job.py_env.local_state
-        assert 'c' not in simple_job.py_env.local_state
+        assert simple_job.py_env.get_local('a') == 5
+        assert 'b' not in dict(simple_job.py_env.iter_locals())
+        assert 'c' not in dict(simple_job.py_env.iter_locals())
 
         # Now make the future ready
         future_ready = create_future_ready(10)
-        simple_job.py_env.local_state['future_val'] = future_ready
+        simple_job.py_env.update_locals(**{'future_val': future_ready})
 
         # Continue from instruction 1
         result = await exec_step(code, simple_job, instr_num=1)
         assert result is True
-        assert simple_job.py_env.local_state['b'] == 25  # 5 + 10 * 2
-        assert simple_job.py_env.local_state['c'] == 3
+        assert simple_job.py_env.get_local('b') == 25  # 5 + 10 * 2
+        assert simple_job.py_env.get_local('c') == 3
 
     @pytest.mark.asyncio
     async def test_exec_step_multiple_future_errors_in_sequence(self, job_factory):
@@ -680,10 +681,10 @@ c = 3'''
         future_not_ready_1 = create_future_not_ready()
         future_not_ready_2 = create_future_not_ready()
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'future_val_1': future_not_ready_1,
             'future_val_2': future_not_ready_2
-        }
+        })
 
         code = '''x = 1
 y = 2
@@ -698,12 +699,12 @@ w = 4'''
 
         assert exc_info.value.instr_num == 2
         assert exc_info.value.future_result is future_not_ready_1
-        assert simple_job.py_env.local_state['x'] == 1
-        assert simple_job.py_env.local_state['y'] == 2
+        assert simple_job.py_env.get_local('x') == 1
+        assert simple_job.py_env.get_local('y') == 2
 
         # Make first future ready but second still not ready
         future_ready_1 = create_future_ready()
-        simple_job.py_env.local_state['future_val_1'] = future_ready_1
+        simple_job.py_env.update_locals(**{'future_val_1': future_ready_1})
 
         # Continue from instruction 2, should now fail at instruction 4 (second print)
         with pytest.raises(FutureError) as exc_info:
@@ -711,24 +712,24 @@ w = 4'''
 
         assert exc_info.value.instr_num == 4
         assert exc_info.value.future_result is future_not_ready_2
-        assert simple_job.py_env.local_state['z'] == 3
-        assert 'w' not in simple_job.py_env.local_state
+        assert simple_job.py_env.get_local('z') == 3
+        assert 'w' not in dict(simple_job.py_env.iter_locals())
         # Should have printed 42
-        assert len(simple_job.py_env.console) == 1
-        assert "42" in simple_job.py_env.console[0]
+        assert simple_job.py_env.console_len == 1
+        assert "42" in list(simple_job.py_env.iter_console())[0]
 
         # Make second future ready
         future_ready_2 = create_future_ready(99)
-        simple_job.py_env.local_state['future_val_2'] = future_ready_2
+        simple_job.py_env.update_locals(**{'future_val_2': future_ready_2})
 
         # Continue from instruction 4, should complete successfully
         result = await exec_step(code, simple_job, instr_num=4)
         assert result is True
-        assert simple_job.py_env.local_state['w'] == 4
+        assert simple_job.py_env.get_local('w') == 4
         # Should now have both prints
-        assert len(simple_job.py_env.console) == 2
-        assert "42" in simple_job.py_env.console[0]
-        assert "99" in simple_job.py_env.console[1]
+        assert simple_job.py_env.console_len == 2
+        assert "42" in list(simple_job.py_env.iter_console())[0]
+        assert "99" in list(simple_job.py_env.iter_console())[1]
 
     @pytest.mark.asyncio
     async def test_exec_step_future_typehint_not_unwrapped(self, job_factory):
@@ -738,10 +739,10 @@ w = 4'''
         # Create a ready FutureResult
         future_ready = create_future_ready()
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'function_with_future_typehint': function_with_future_typehint,
             'future_val': future_ready
-        }
+        })
 
         code = '''result = function_with_future_typehint(future_val)'''
 
@@ -749,9 +750,9 @@ w = 4'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert "Received FutureResult object" in simple_job.py_env.console[0]
-        assert simple_job.py_env.local_state.get('result') is True
+        assert list(simple_job.py_env.iter_console())
+        assert "Received FutureResult object" in list(simple_job.py_env.iter_console())[0]
+        assert simple_job.py_env.get_local('result') is True
 
     @pytest.mark.asyncio
     async def test_exec_step_no_typehint_unwrapped(self, job_factory):
@@ -761,10 +762,10 @@ w = 4'''
         # Create a ready FutureResult
         future_ready = create_future_ready()
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'function_without_typehint': function_without_typehint,
             'future_val': future_ready
-        }
+        })
 
         code = '''result = function_without_typehint(future_val)'''
 
@@ -772,9 +773,9 @@ w = 4'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert "Received value: 42" in simple_job.py_env.console[0]
-        assert simple_job.py_env.local_state.get('result') == 42
+        assert list(simple_job.py_env.iter_console())
+        assert "Received value: 42" in list(simple_job.py_env.iter_console())[0]
+        assert simple_job.py_env.get_local('result') == 42
 
     @pytest.mark.asyncio
     async def test_exec_step_function_with_args(self, job_factory):
@@ -786,12 +787,12 @@ w = 4'''
         future2 = create_future_ready(20)
         future3 = create_future_ready(30)
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'function_with_args': function_with_args,
             'f1': future1,
             'f2': future2,
             'f3': future3
-        }
+        })
 
         code = '''result = function_with_args(f1, f2, f3)'''
 
@@ -799,11 +800,11 @@ w = 4'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert "Arg 0: 10" in simple_job.py_env.console[0]
-        assert "Arg 1: 20" in simple_job.py_env.console[1]
-        assert "Arg 2: 30" in simple_job.py_env.console[2]
-        assert simple_job.py_env.local_state.get('result') == [10, 20, 30]
+        assert list(simple_job.py_env.iter_console())
+        assert "Arg 0: 10" in list(simple_job.py_env.iter_console())[0]
+        assert "Arg 1: 20" in list(simple_job.py_env.iter_console())[1]
+        assert "Arg 2: 30" in list(simple_job.py_env.iter_console())[2]
+        assert simple_job.py_env.get_local('result') == [10, 20, 30]
 
     @pytest.mark.asyncio
     async def test_exec_step_function_with_kwargs(self, job_factory):
@@ -814,11 +815,11 @@ w = 4'''
         future_a = create_future_ready(100)
         future_b = create_future_ready(200)
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'function_with_kwargs': function_with_kwargs,
             'fa': future_a,
             'fb': future_b
-        }
+        })
 
         code = '''result = function_with_kwargs(x=fa, y=fb)'''
 
@@ -826,10 +827,10 @@ w = 4'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        assert "Kwarg x: 100" in simple_job.py_env.console[0]
-        assert "Kwarg y: 200" in simple_job.py_env.console[1]
-        assert simple_job.py_env.local_state.get('result') == {'x': 100, 'y': 200}
+        assert list(simple_job.py_env.iter_console())
+        assert "Kwarg x: 100" in list(simple_job.py_env.iter_console())[0]
+        assert "Kwarg y: 200" in list(simple_job.py_env.iter_console())[1]
+        assert simple_job.py_env.get_local('result') == {'x': 100, 'y': 200}
 
     @pytest.mark.asyncio
     async def test_exec_step_function_with_mixed_params(self, job_factory):
@@ -842,13 +843,13 @@ w = 4'''
         future_arg2 = create_future_ready(3)
         future_kw = create_future_ready(4)
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'function_with_mixed': function_with_mixed,
             'fr': future_reg,
             'fa1': future_arg1,
             'fa2': future_arg2,
             'fk': future_kw
-        }
+        })
 
         code = '''result = function_with_mixed(fr, fa1, fa2, key=fk)'''
 
@@ -856,8 +857,8 @@ w = 4'''
         result = await exec_step(code, simple_job)
 
         assert result is True
-        assert simple_job.py_env.console is not None
-        retrieved_result = simple_job.py_env.local_state.get('result')
+        assert list(simple_job.py_env.iter_console())
+        retrieved_result = simple_job.py_env.get_local('result')
         assert retrieved_result['regular'] == 1
         assert retrieved_result['args'] == (2, 3)
         assert retrieved_result['kwargs'] == {'key': 4}
@@ -884,8 +885,8 @@ print(f"Result: {result}")
 '''
         result = await exec_step(code_define, simple_job)
         assert result is True
-        assert simple_job.py_env.local_state.get('result') == 20  # (5 * 2) + 10
-        assert "Result: 20" in simple_job.py_env.console[0]
+        assert simple_job.py_env.get_local('result') == 20  # (5 * 2) + 10
+        assert "Result: 20" in list(simple_job.py_env.iter_console())[0]
 
 
     @pytest.mark.asyncio
@@ -925,8 +926,8 @@ value = agent_var
         await exec_step(code, job)
 
         # Verify that agent's context was accessible
-        assert job.py_env.local_state.get('result') == "agent_context_value"
-        assert job.py_env.local_state.get('value') == 42
+        assert job.py_env.get_local('result') == "agent_context_value"
+        assert job.py_env.get_local('value') == 42
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_output(self, job_factory):
@@ -939,9 +940,9 @@ a"""
         await exec_step(code, simple_job)
 
         # Verify the expression result was printed
-        assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
-        assert "5" in simple_job.py_env.console[0]
+        assert list(simple_job.py_env.iter_console())
+        assert simple_job.py_env.console_len == 1
+        assert "5" in list(simple_job.py_env.iter_console())[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_none_printed(self, job_factory):
@@ -952,9 +953,9 @@ a"""
 result"""
         await exec_step(code, simple_job)
 
-        assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
-        assert simple_job.py_env.console[0] == "None"
+        assert list(simple_job.py_env.iter_console())
+        assert simple_job.py_env.console_len == 1
+        assert list(simple_job.py_env.iter_console())[0] == "None"
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_string(self, job_factory):
@@ -966,37 +967,37 @@ text"""
         await exec_step(code, simple_job)
 
         # Verify the string was printed without quotes
-        assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
-        assert simple_job.py_env.console[0] == 'hello'
+        assert list(simple_job.py_env.iter_console())
+        assert simple_job.py_env.console_len == 1
+        assert list(simple_job.py_env.iter_console())[0] == 'hello'
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_uses_llm_repr(self, job_factory):
         """Test that standalone expressions use format_default_llm_repr, not repr."""
         simple_job = self.create_job(job_factory)
         obj = _LLMReprTestObj(name="slot")
-        simple_job.py_env.local_state = {'obj': obj}
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={'obj': obj})
 
         code = """obj"""
         await exec_step(code, simple_job)
 
-        assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
-        assert simple_job.py_env.console[0] == "custom:slot"
+        assert list(simple_job.py_env.iter_console())
+        assert simple_job.py_env.console_len == 1
+        assert list(simple_job.py_env.iter_console())[0] == "custom:slot"
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_list_uses_llm_repr_for_items(self, job_factory):
         """Test that list expressions format nested items via __llm_repr__."""
         simple_job = self.create_job(job_factory)
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'items': [_LLMReprTestObj(name="anna"), _LLMReprTestObj(name="jan")]
-        }
+        })
 
         await exec_step("items", simple_job)
 
-        assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
-        assert simple_job.py_env.console[0] == "[custom:anna,custom:jan]"
+        assert list(simple_job.py_env.iter_console())
+        assert simple_job.py_env.console_len == 1
+        assert list(simple_job.py_env.iter_console())[0] == "[custom:anna,custom:jan]"
 
     @pytest.mark.asyncio
     async def test_exec_step_expression_complex(self, job_factory):
@@ -1009,21 +1010,21 @@ x + y"""
         await exec_step(code, simple_job)
 
         # Verify the expression result was printed
-        assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
-        assert "30" in simple_job.py_env.console[0]
+        assert list(simple_job.py_env.iter_console())
+        assert simple_job.py_env.console_len == 1
+        assert "30" in list(simple_job.py_env.iter_console())[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_temporal_expression_prints_value(self, job_factory):
         """Standalone temporal function call prints the unwrapped FutureResult value."""
         simple_job = self.create_job(job_factory)
-        simple_job.py_env.local_state = {'get_value': get_value}
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={'get_value': get_value})
 
         await exec_step('get_value()', simple_job)
 
-        assert simple_job.py_env.console is not None
-        assert len(simple_job.py_env.console) == 1
-        assert "42" in simple_job.py_env.console[0]
+        assert list(simple_job.py_env.iter_console())
+        assert simple_job.py_env.console_len == 1
+        assert "42" in list(simple_job.py_env.iter_console())[0]
 
     @pytest.mark.asyncio
     async def test_exec_step_pending_temporal_expression_print_resume_does_not_reexecute(
@@ -1040,16 +1041,16 @@ x + y"""
         _pending_expression_future = future
         _pending_expression_call_count = 0
 
-        simple_job.py_env.local_state = {
+        simple_job.py_env = seed_pyenv(simple_job.py_env, local_state={
             'get_pending_expression_value': get_pending_expression_value
-        }
+        })
 
         with pytest.raises(FutureError) as exc_info:
             await exec_step('get_pending_expression_value()', simple_job)
 
         assert exc_info.value.instr_num == 0
         assert simple_job.py_env.future_result is future
-        assert simple_job.py_env.console is None
+        assert not list(simple_job.py_env.iter_console())
         assert _pending_expression_call_count == 1
 
         future.deps.ready = True
@@ -1059,7 +1060,7 @@ x + y"""
         )
 
         assert simple_job.py_env.future_result is None
-        assert simple_job.py_env.console == ["77"]
+        assert list(simple_job.py_env.iter_console()) == ["77"]
         assert _pending_expression_call_count == 1
 
     @pytest.mark.asyncio
@@ -1074,7 +1075,7 @@ result = [kw for kw in keywords if kw in cur_norm]"""
         await exec_step(code, simple_job)
 
         # Verify the comprehension executed successfully
-        assert simple_job.py_env.local_state.get('result') == ['a', 'b', 'c']
+        assert simple_job.py_env.get_local('result') == ['a', 'b', 'c']
 
     @pytest.mark.asyncio
     async def test_exec_step_local_vars_in_generator(self, job_factory):
@@ -1088,7 +1089,7 @@ has_match = any(kw in cur_norm for kw in keywords if kw)"""
         await exec_step(code, simple_job)
 
         # Verify the generator expression executed successfully
-        assert simple_job.py_env.local_state.get('has_match') is False
+        assert simple_job.py_env.get_local('has_match') is False
 
         # Test with matching keywords
         code2 = """keywords = ['a', 'b', 'c']
@@ -1096,7 +1097,7 @@ cur_norm = 'abc'
 has_match = any(kw in cur_norm for kw in keywords if kw)"""
         await exec_step(code2, simple_job)
 
-        assert simple_job.py_env.local_state.get('has_match') is True
+        assert simple_job.py_env.get_local('has_match') is True
 
     @pytest.mark.asyncio
     async def test_exec_step_nested_comprehension_with_locals(self, job_factory):
@@ -1110,7 +1111,7 @@ matches = [(kw, text_a, text_b) for kw in keywords if kw in text_a or kw in text
         await exec_step(code, simple_job)
 
         # Verify nested comprehension executed successfully
-        matches = simple_job.py_env.local_state.get('matches')
+        matches = simple_job.py_env.get_local('matches')
         assert len(matches) == 2
         assert matches[0][0] == 'world'
         assert matches[1][0] == 'peace'
@@ -1173,7 +1174,7 @@ class TestExecStepWithAsyncTools:
 
         await exec_step('result = _async_exec_tool_return("world")', job)
 
-        assert job.py_env.local_state.get("result") == "async_result: world"
+        assert job.py_env.get_local("result") == "async_result: world"
 
     @pytest.mark.asyncio
     async def test_async_tool_print_captured_in_job_console(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1182,9 +1183,9 @@ class TestExecStepWithAsyncTools:
 
         await exec_step("value = _async_exec_tool_print_and_return(21)", job)
 
-        assert job.py_env.local_state.get("value") == 42
-        assert job.py_env.console is not None
-        assert any("async_print: 21" in line for line in job.py_env.console)
+        assert job.py_env.get_local("value") == 42
+        assert list(job.py_env.iter_console())
+        assert any("async_print: 21" in line for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_async_tool_exception_written_to_console_and_reraised(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1194,9 +1195,9 @@ class TestExecStepWithAsyncTools:
         with pytest.raises(RuntimeError, match="async tool error"):
             await exec_step("_async_exec_tool_error()", job)
 
-        assert job.py_env.console is not None
-        assert any("RuntimeError" in line for line in job.py_env.console)
-        assert any("async tool error" in line for line in job.py_env.console)
+        assert list(job.py_env.iter_console())
+        assert any("RuntimeError" in line for line in job.py_env.iter_console())
+        assert any("async tool error" in line for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_multiple_async_tool_calls_in_one_exec_step(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1209,7 +1210,7 @@ class TestExecStepWithAsyncTools:
 
         await exec_step(code, job)
 
-        assert job.py_env.local_state.get("b") == "async_result: second"
+        assert job.py_env.get_local("b") == "async_result: second"
 
 
 class TestExecStepStatekCtx:
@@ -1220,49 +1221,49 @@ class TestExecStepStatekCtx:
         """_STATEK_CTX is accessible as a variable during code execution."""
         job = job_factory()
         await exec_step('_ctx = _STATEK_CTX', job)
-        assert job.py_env.local_state.get('_ctx') is not None
+        assert job.py_env.get_local('_ctx') is not None
 
     @pytest.mark.asyncio
     async def test_statek_ctx_get_current_job_in_exec_step(self, job_factory):
         """statek_ctx_get resolves the current job inside executed code."""
         job = job_factory()
         await exec_step('_ctx_job = statek_ctx_get("job")', job)
-        assert job.py_env.local_state.get('_ctx_job') is job
+        assert job.py_env.get_local('_ctx_job') is job
 
     @pytest.mark.asyncio
     async def test_statek_ctx_agent_is_job_agent(self, job_factory):
         """_STATEK_CTX['agent'] refers to the job's agent."""
         job = job_factory()
         await exec_step('_agent = _STATEK_CTX["agent"]', job)
-        assert job.py_env.local_state.get('_agent') is job.job_def.agent
+        assert job.py_env.get_local('_agent') is job.job_def.agent
 
     @pytest.mark.asyncio
     async def test_statek_ctx_not_persisted_after_exec_step(self, job_factory):
         """_STATEK_CTX is not saved to local_state after execution."""
         job = job_factory()
         await exec_step('x = 1', job)
-        assert '_STATEK_CTX' not in job.py_env.local_state
+        assert '_STATEK_CTX' not in dict(job.py_env.iter_locals())
 
     @pytest.mark.asyncio
     async def test_statek_ctx_reassignment_not_persisted_after_exec_step(self, job_factory):
         """Reassigning _STATEK_CTX in executed code remains volatile."""
         job = job_factory()
         await exec_step('_STATEK_CTX = {"replacement": True}', job)
-        assert '_STATEK_CTX' not in job.py_env.local_state
+        assert '_STATEK_CTX' not in dict(job.py_env.iter_locals())
 
     @pytest.mark.asyncio
     async def test_perm_ctx_created_on_demand_persists_after_exec_step(self, job_factory):
         """_PERM_CTX is created only when requested and remains in PyEnv locals."""
         job = job_factory()
         await exec_step('perm_ctx_set(key="value")', job)
-        assert job.py_env.local_state["_PERM_CTX"] == {"key": "value"}
+        assert job.py_env.get_local("_PERM_CTX") == {"key": "value"}
 
     @pytest.mark.asyncio
     async def test_perm_ctx_not_persisted_until_created(self, job_factory):
         """_PERM_CTX is absent from PyEnv locals until a tool creates it."""
         job = job_factory()
         await exec_step('x = 1', job)
-        assert '_PERM_CTX' not in job.py_env.local_state
+        assert '_PERM_CTX' not in dict(job.py_env.iter_locals())
 
     def test_existing_perm_ctx_does_not_leak_to_executor_globals(self, job_factory):
         """Temporary global _PERM_CTX injection is restored after execution."""
@@ -1292,12 +1293,12 @@ class TestExecStepStatekCtx:
         """Direct job local-state writes are not dropped by execution-local writeback."""
         job = job_factory()
         await exec_step(
-            '_STATEK_CTX["job"].py_env.local_state["external"] = "keep"\n'
+            '_STATEK_CTX["job"].py_env.update_locals(external="keep")\n'
             'x = 1',
             job,
         )
-        assert job.py_env.local_state["external"] == "keep"
-        assert job.py_env.local_state["x"] == 1
+        assert job.py_env.get_local("external") == "keep"
+        assert job.py_env.get_local("x") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1352,8 +1353,8 @@ class TestExecStepStringNameResolution:
 
         await exec_step('_resolve_type_tool("MemoObject")', job)
 
-        assert job.py_env.console is not None
-        assert any("resolved:MemoObject" in line for line in job.py_env.console)
+        assert list(job.py_env.iter_console())
+        assert any("resolved:MemoObject" in line for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_tool_passes_string_when_name_not_in_context(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1362,8 +1363,8 @@ class TestExecStepStringNameResolution:
 
         await exec_step('_resolve_type_tool("MemoObject")', job)
 
-        assert job.py_env.console is not None
-        assert any("got_string:MemoObject" in line for line in job.py_env.console)
+        assert list(job.py_env.iter_console())
+        assert any("got_string:MemoObject" in line for line in job.py_env.iter_console())
 
 
 # ---------------------------------------------------------------------------
@@ -1433,25 +1434,25 @@ class TestExecStepIsoDateParsing:
         """A string ISO date is converted to date when annotation is date."""
         job = self._make_job(tools=[_date_tool])
         await exec_step('_date_tool("2026-03-10")', job)
-        assert job.py_env.console is not None
-        assert any("date:datetime.date(2026, 3, 10)" in line for line in job.py_env.console)
+        assert list(job.py_env.iter_console())
+        assert any("date:datetime.date(2026, 3, 10)" in line for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_plain_datetime_annotation_parses_iso_string(self, db0_fixture):  # pylint: disable=unused-argument
         """A string ISO datetime is converted to datetime when annotation is datetime."""
         job = self._make_job(tools=[_datetime_tool])
         await exec_step('_datetime_tool("2026-03-10T12:30:00")', job)
-        assert job.py_env.console is not None
+        assert list(job.py_env.iter_console())
         assert any("datetime:datetime.datetime(2026, 3, 10, 12, 30)" in line
-                   for line in job.py_env.console)
+                   for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_union_date_or_datetime_date_string_uses_first_match(self, db0_fixture):  # pylint: disable=unused-argument
         """For date | datetime union, a date-only string is parsed as date (first in union)."""
         job = self._make_job(tools=[_date_or_datetime_tool])
         await exec_step('_date_or_datetime_tool("2026-03-10")', job)
-        assert job.py_env.console is not None
-        assert any("type:date" in line for line in job.py_env.console)
+        assert list(job.py_env.iter_console())
+        assert any("type:date" in line for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_union_datetime_string_falls_back_to_datetime(  # pylint: disable=unused-argument
@@ -1459,8 +1460,8 @@ class TestExecStepIsoDateParsing:
         """For date | datetime union, a full datetime string falls back to datetime."""
         job = self._make_job(tools=[_date_or_datetime_tool])
         await exec_step('_date_or_datetime_tool("2026-03-10T15:00:00")', job)
-        assert job.py_env.console is not None
-        assert any("type:datetime" in line for line in job.py_env.console)
+        assert list(job.py_env.iter_console())
+        assert any("type:datetime" in line for line in job.py_env.iter_console())
 
     @pytest.mark.asyncio
     async def test_non_date_string_still_resolves_via_find_locals(self, db0_fixture):  # pylint: disable=unused-argument
@@ -1468,8 +1469,8 @@ class TestExecStepIsoDateParsing:
         d = date(2025, 1, 1)
         job = self._make_job(tools=[_date_tool], context={"my_date": d})
         await exec_step('_date_tool("my_date")', job)
-        assert job.py_env.console is not None
-        assert any("date:datetime.date(2025, 1, 1)" in line for line in job.py_env.console)
+        assert list(job.py_env.iter_console())
+        assert any("date:datetime.date(2025, 1, 1)" in line for line in job.py_env.iter_console())
 
 
 # ---------------------------------------------------------------------------
@@ -1561,10 +1562,10 @@ class TestExecStepWeekendDutyCalendar:
         global _duty_calendar_return, _duty_answers  # pylint: disable=global-statement
         _duty_calendar_return = calendar_return
         _duty_answers = []
-        job.py_env.local_state = {
+        job.py_env = seed_pyenv(job.py_env, local_state={
             'get_user_calendar': _get_user_calendar_mock,
             'answer': _answer_mock,
-        }
+        })
 
     @pytest.mark.asyncio
     async def test_no_calendar_returns_not_found_message(self, job_factory):

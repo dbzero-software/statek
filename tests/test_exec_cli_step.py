@@ -2,12 +2,14 @@
 
 import pytest
 
+
 from statek.executors.utils import exec_cli_step
 from statek.exceptions import FutureError
 from tests.test_exec_step import (
     create_future_not_ready, create_future_ready,
     get_value, get_value_not_ready,
 )
+from tests.conftest import seed_pyenv
 
 
 def _render_calendar_media(d):
@@ -75,7 +77,7 @@ class TestExecCliStep:
         """Expression output works when preceded by a function call from local_state."""
         job = self.create_job(job_factory)
 
-        job.py_env.local_state = {'render_calendar_media': _render_calendar_media}
+        job.py_env.update_locals(render_calendar_media=_render_calendar_media)
         outputs = []
         code = ('from datetime import date\n'
                 'media_path = render_calendar_media(date(2026, 4, 1))\n'
@@ -89,7 +91,7 @@ class TestExecCliStep:
         """Execution modifies job local_state like exec_step does."""
         job = self.create_job(job_factory)
         await exec_cli_step('x = 42', job, lambda _: None)
-        assert job.py_env.local_state.get('x') == 42
+        assert job.py_env.get_local('x') == 42
 
     # --- Temporal function tests ---
 
@@ -97,7 +99,7 @@ class TestExecCliStep:
     async def test_future_error_raised_on_not_ready_access(self, job_factory):
         """Accessing a not-ready FutureResult in print raises FutureError."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'future_val': create_future_not_ready()}
+        job.py_env = seed_pyenv(job.py_env, local_state={'future_val': create_future_not_ready()})
 
         with pytest.raises(FutureError) as exc_info:
             await exec_cli_step('print(future_val)', job, lambda _: None)
@@ -108,7 +110,7 @@ class TestExecCliStep:
     async def test_future_error_has_correct_instr_num(self, job_factory):
         """FutureError carries the instruction index where access failed."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'future_val': create_future_not_ready()}
+        job.py_env = seed_pyenv(job.py_env, local_state={'future_val': create_future_not_ready()})
         code = 'x = 1\nprint(future_val)'
 
         with pytest.raises(FutureError) as exc_info:
@@ -121,7 +123,7 @@ class TestExecCliStep:
     async def test_ready_future_unwrapped_in_print(self, job_factory):
         """A ready FutureResult is unwrapped to its value inside print."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'future_val': create_future_ready(42)}
+        job.py_env = seed_pyenv(job.py_env, local_state={'future_val': create_future_ready(42)})
         outputs = []
         await exec_cli_step('print(future_val)', job, outputs.append)
         assert outputs == ["42"]
@@ -130,15 +132,15 @@ class TestExecCliStep:
     async def test_temporal_function_returns_future_result(self, job_factory):
         """Calling a temporal function stores a FutureResult in local state."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'get_value': get_value}
+        job.py_env = seed_pyenv(job.py_env, local_state={'get_value': get_value})
         await exec_cli_step('result = get_value()', job, lambda _: None)
-        assert job.py_env.local_state.get('result') is not None
+        assert job.py_env.get_local('result') is not None
 
     @pytest.mark.asyncio
     async def test_temporal_not_ready_blocks_on_access(self, job_factory):
         """Temporal function returning not-ready future raises FutureError on use."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
+        job.py_env.update_locals(get_value_not_ready=get_value_not_ready)
         code = 'result = get_value_not_ready()\nprint(result)'
 
         with pytest.raises(FutureError) as exc_info:
@@ -151,16 +153,16 @@ class TestExecCliStep:
     async def test_continuation_after_future_error(self, job_factory):
         """Resuming from instr_num skips already-executed instructions."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'future_val': create_future_not_ready()}
+        job.py_env = seed_pyenv(job.py_env, local_state={'future_val': create_future_not_ready()})
         code = 'x = 1\nprint(future_val)'
 
         # First run — blocks at instruction 1
         with pytest.raises(FutureError):
             await exec_cli_step(code, job, lambda _: None)
-        assert job.py_env.local_state.get('x') == 1
+        assert job.py_env.get_local('x') == 1
 
         # Replace with ready future and resume from instruction 1
-        job.py_env.local_state['future_val'] = create_future_ready(99)
+        job.py_env.update_locals(**{'future_val': create_future_ready(99)})
         outputs = []
         await exec_cli_step(code, job, outputs.append, instr_num=1)
         assert outputs == ["99"]
@@ -169,7 +171,7 @@ class TestExecCliStep:
     async def test_ready_future_expression_output(self, job_factory):
         """A ready FutureResult as a standalone expression outputs its value."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'get_value': get_value}
+        job.py_env = seed_pyenv(job.py_env, local_state={'get_value': get_value})
         outputs = []
         code = 'result = get_value()\nresult'
         await exec_cli_step(code, job, outputs.append)
