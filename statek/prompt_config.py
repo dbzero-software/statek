@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 import dbzero as db0
+from statek.compaction_threshold import DEFAULT_COMPACTION_THRESHOLD, parse_compaction_threshold
 from statek.task_difficulty import TaskDifficulty
 
 
@@ -440,7 +441,7 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
     """Update agent prompts and associated JobDef fields from prompt definitions.
 
     Updates agent system prompts and metadata, and propagates the CHAT_STYLE
-    metadata key to all JobDef instances associated with each agent.
+    metadata key, post-processors, and compaction thresholds to associated JobDefs.
 
     Args:
         prompt_defs: Dictionary of role -> PromptDef mappings
@@ -465,6 +466,9 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
             # Quietly skip agents without matching prompt definitions
             continue
 
+        new_compaction_threshold = parse_compaction_threshold(
+            (prompt_def.metadata or {}).get("COMPACTION_THRESHOLD", DEFAULT_COMPACTION_THRESHOLD)
+        )
         job_defs = tuple(db0.find(JobDef, db0.as_tag(agent)))  # pylint: disable=no-member
 
         # Update agent's system prompt if changed
@@ -487,3 +491,4 @@ def update_prompt_config(prompt_defs: Dict[str, PromptDef], agents=None):
         for job_def in job_defs:
             job_def.set_chat_style(new_chat_style)
             job_def.set_post_processing(new_post_processing)
+            job_def.set_compaction_threshold(new_compaction_threshold)

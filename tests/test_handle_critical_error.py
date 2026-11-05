@@ -25,6 +25,9 @@ from statek.utils import _statek_ctx_scope
 from tests.conftest import DB0_DIR
 
 
+pytestmark = pytest.mark.usefixtures("test_model_cards")
+
+
 # Module-level capture list — mutations visible across calls
 _call_log = []
 _application_call_log = []

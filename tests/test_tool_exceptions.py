@@ -10,6 +10,8 @@ from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.utils import CallSpec, CodeBlock
 
+pytestmark = pytest.mark.usefixtures("test_model_cards")
+
 
 class TestToolErrorInToolLog:
     """ToolError entries are stored positionally in tool_log alongside str results."""

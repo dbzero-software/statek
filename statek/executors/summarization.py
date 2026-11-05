@@ -15,13 +15,53 @@
 """Prepare jobs for structured summarization of their conversation and state."""
 
 import json
+import math
 import re
 
 import dbzero as db0
 
-from statek.executors.chat_log_item import LLM_LogItem, SystemLogItem
+from statek.executors.chat_log_item import LLM_LogItem, SystemLogItem, UserLogItem
 from statek.executors.job import Job, JobSummary, StateSummary, PyHandleDesc
 from statek.utils import CodeBlock
+
+
+def get_compaction_scope(job: Job, split_rate: float = 0.9) -> int:
+    """Return the raw cutoff retaining the newest sufficiently small user interaction.
+
+    The entry at the cutoff is excluded from the summarized prefix, matching
+    ForkedJob.forked_at. Stored estimates weight structured items; legacy string
+    messages use the current model card's high estimate without persisting it.
+    Existing summaries and queued notifications do not replace the raw log here.
+    Empty user messages are not boundaries. If no boundary qualifies, or all
+    estimates are zero, return the index past the end of the committed log.
+
+    Raises ValueError if split_rate is not finite or outside [0, 1], or a model
+    card needed to estimate legacy text is missing or invalid.
+    """
+    if not math.isfinite(split_rate) or not 0 <= split_rate <= 1:
+        raise ValueError("split_rate must be finite and in [0, 1]")
+    total = 0
+    cutoff = None
+    prefix_tokens = 0
+    card = None
+    for index, item in enumerate(job.chat_log):
+        message = item if isinstance(item, str) else (
+            item.message if isinstance(item, UserLogItem) else None
+        )
+        if message:
+            cutoff = index
+            prefix_tokens = total
+        if isinstance(item, str):
+            if item:
+                if card is None:
+                    card = job._get_token_estimation_card()  # pylint: disable=protected-access
+                total += card.est_token_count(item)[1]
+        else:
+            total += getattr(item, "est_token_usage", 0)
+    # Nonnegative weights make the last user boundary the largest possible prefix.
+    if total > 0 and cutoff is not None and prefix_tokens >= split_rate * total:
+        return cutoff
+    return len(job.chat_log)
 
 
 _SUMMARIZATION_INSTRUCTION = """Stop work on the existing task and summarize the preceding
@@ -66,7 +106,7 @@ def push_summarization_instr(job: Job) -> None:
     neither inspected nor embedded. Each call appends a fresh instruction.
     """
     names = json.dumps(sorted(job.get_diff_locals()))
-    job.chat_log.append(SystemLogItem(
+    job._append_chat_log_item(SystemLogItem(  # pylint: disable=protected-access
         console_pos=len(job.py_env.console or []),
         message=_SUMMARIZATION_INSTRUCTION + names,
     ))

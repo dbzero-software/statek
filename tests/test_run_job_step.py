@@ -35,6 +35,7 @@ from statek.future import FutureResult
 from statek.exceptions import FutureError, LLM_HarnessError
 from statek.llm_harness import LLM_Harness
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats, CallParams, OpenRouter_API
+from statek.model_card import set_model_card
 from statek.settings import (
     LLM_API_Settings, StatekSettings, get_statek_settings, set_statek_settings,
 )
@@ -42,6 +43,9 @@ from statek.system import error_handler
 from statek.task import SubTaskHandler
 from statek.task_difficulty import TaskDifficulty
 from statek.utils import CodeBlock, CallSpec, _statek_ctx_scope
+
+
+pytestmark = pytest.mark.usefixtures("test_model_cards")
 
 
 _critical_error_calls = []
@@ -1226,6 +1230,7 @@ class TestRunJobStepToolCallLogging:
         """Create mock settings that enable file logging to tmp_path."""
         mock_settings = MagicMock()
         mock_settings.logs_path = str(tmp_path)
+        mock_settings.default_llm_api_provider = "OPENROUTER"
         mock_settings.chat_style = None  # defaults to CONSOLE style
         mock_settings.get_xml_box_tags.return_value = {}
         return mock_settings
@@ -2865,6 +2870,7 @@ class TestProviderRouting:
     @pytest.mark.asyncio
     async def test_model_provider_overrides_metadata_provider(self, db0_fixture):
         """A provider embedded in MODEL takes precedence over metadata PROVIDER."""
+        set_model_card("openrouter", "openai/gpt-5.4", "openai", token_to_bytes=4)
         job = self._make_job(
             db0_fixture,
             {"MODEL": "openrouter/openai/gpt-5.4", "PROVIDER": "OPENAI"},

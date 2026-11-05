@@ -1123,6 +1123,7 @@ class TestDelegateMuteTask:
         assert child_result.job.parent_job is parent_result.job
 
 
+@pytest.mark.usefixtures("test_model_cards")
 class TestDelegateMuteDialog:
     """Tests for delegate_mute_dialog."""
 
@@ -1247,6 +1248,7 @@ class MessageForAdapter:
         return f"fallback-{self.value}"
 
 
+@pytest.mark.usefixtures("test_model_cards")
 class TestStartDialog:
     """Tests for start_dialog function."""
 

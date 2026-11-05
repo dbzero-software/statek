@@ -22,6 +22,7 @@ from statek.utils import CodeBlock
 
 
 if TYPE_CHECKING:
+    from statek.model_card import ModelCard
     from statek.agents.dialog_agent import Reminder
     from statek.executors.post_processor import PostProcessor
     from statek.task import SubTaskHandler
@@ -43,6 +44,27 @@ class ChatLogItem:
     tool_log: Optional[Union[str, ToolError, List[Union[str, ToolError]]]] = None
     # Date and time of generating this log item
     timestamp: datetime = field(default_factory=datetime.now)
+    # Conservative estimate of this item's currently stored LLM-facing content.
+    est_token_usage: int = field(default=0, kw_only=True)
+    # Retain the originating model across tool execution and persisted continuations.
+    _token_estimation_card: Optional["ModelCard"] = field(
+        default=None, kw_only=True, repr=False, compare=False,
+    )
+
+    def refresh_token_usage(self) -> None:
+        """Refresh configured items; legacy standalone items remain usable."""
+        card = getattr(self, "_token_estimation_card", None)
+        if card is not None:
+            self.est_token_usage = card.est_token_count(self)[1]
+
+    def set_tool_result(self, tool_call_id: int, tool_result: Union[str, ToolError]) -> None:
+        """Replace an existing result while keeping its token estimate current."""
+        self.get_tool_result(tool_call_id)
+        if isinstance(self.tool_log, (str, ToolError)):
+            self.tool_log = tool_result
+        else:
+            self.tool_log[tool_call_id] = tool_result
+        self.refresh_token_usage()
 
     def push_tool_result(self, tool_result: Union[str, ToolError]) -> int:
         """Append a tool result or error to tool_log and return its index.
@@ -55,11 +77,14 @@ class ChatLogItem:
         """
         if self.tool_log is None:
             self.tool_log = tool_result
+            self.refresh_token_usage()
             return 0
         if isinstance(self.tool_log, str) or isinstance(self.tool_log, ToolError):
             self.tool_log = [self.tool_log, tool_result]
+            self.refresh_token_usage()
             return 1
         self.tool_log.append(tool_result)
+        self.refresh_token_usage()
         return len(self.tool_log) - 1
 
     def get_tool_result(self, tool_call_id: int) -> Union[str, ToolError]:
@@ -165,6 +190,8 @@ class UserLogItem:
 
     message: str
     timestamp: datetime = field(default_factory=datetime.now)
+    # Conservative estimate captured when the message enters the chat log.
+    est_token_usage: int = field(default=0, kw_only=True)
     # First successful response or terminal harness failure ends this message's wait.
     wait_finished_at: Optional[datetime] = field(default=None, kw_only=True)
 

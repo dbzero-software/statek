@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Type
 import dbzero as db0
 from .exceptions import FutureError
 from .extra_resources import ExtraResources, extra_resources_from_metadata
+from .compaction_threshold import DEFAULT_COMPACTION_THRESHOLD, parse_compaction_threshold
 from .future import FutureResult, temporal
 from .system import tool
 from .agents.agent import Agent, SupervisedAgent
@@ -82,6 +83,9 @@ def _find_reusable_job_def(
         post_processing=resolved_post_processing,
         provider_config=provider_config,
         extra_resources=extra_resources,
+        compaction_threshold=parse_compaction_threshold(
+            metadata.get("COMPACTION_THRESHOLD", DEFAULT_COMPACTION_THRESHOLD)
+        ),
     )
 
 

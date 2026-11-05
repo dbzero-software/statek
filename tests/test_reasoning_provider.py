@@ -17,6 +17,9 @@ from statek.executors.job import Job, JobStatus
 from statek.provider_config import ProviderConfig
 
 
+pytestmark = pytest.mark.usefixtures("test_model_cards")
+
+
 def _config(provider, family=None, model=None, payload=None, ignored_parameters=None):
     """Create a single reasoning-level mapping at an optional model path."""
     reasoning = {"reasoning_level": [{"range": {"from": 1}, "payload": payload or {}}]}

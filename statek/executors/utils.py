@@ -27,6 +27,7 @@ from contextlib import contextmanager
 import dbzero as db0
 
 from statek.exceptions import FutureError, LLM_HarnessError
+from statek.compaction_threshold import DEFAULT_COMPACTION_THRESHOLD, parse_compaction_threshold
 from statek.extra_resources import extra_resources_from_metadata, extra_resources_identity
 from statek.future import FutureResult
 
@@ -1062,7 +1063,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 console_pos=len(job.py_env.console) if job.py_env.console else 0,
                 warmup_block_num=block_num
             )
-            job.chat_log.append(warmup_log_item)
+            job._append_chat_log_item(warmup_log_item)  # pylint: disable=protected-access
 
         # Log warmup block before execution
         if job.status == JobStatus.WARMING_UP and code_str:
@@ -1082,6 +1083,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
         last_chat_log_item = job.last_chat_log_item
+        if isinstance(last_chat_log_item, ChatLogItem):
+            job._refresh_token_usage(last_chat_log_item)  # pylint: disable=protected-access
 
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
             # Pre-allocate tool_log slots aligned 1-to-1 with the full
@@ -1096,7 +1099,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                     continue  # CLI calls are executed and logged in Step 6
                 result, error = await exec_tool(call_spec, job, local_context=dict(local_context))
                 if last_chat_log_item is not None:
-                    last_chat_log_item.tool_log[j] = (
+                    last_chat_log_item.set_tool_result(j,
                         ToolError(err_message=error) if error is not None else result
                     )
                 job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
@@ -1155,7 +1158,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                             and cli_idx < len(cli_tool_log_positions)):
                         j = cli_tool_log_positions[cli_idx]
                         if j < len(last_chat_log_item.tool_log):
-                            last_chat_log_item.tool_log[j] = (
+                            last_chat_log_item.set_tool_result(j,
                                 ToolError(err_message=error) if error else joined
                             )
 
@@ -1549,6 +1552,7 @@ def find_existing_job_def(
     post_processing: object = None,
     provider_config: Optional[ProviderConfig] = None,
     extra_resources: object = _MATCH_UNSET,
+    compaction_threshold: object = _MATCH_UNSET,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
@@ -1557,6 +1561,7 @@ def find_existing_job_def(
         warmup_code: the warmup code to match (compared after parsing)
         extra_resources: parsed resource criterion; omitted means no filter,
             while None or an empty triple matches no additional resources
+        compaction_threshold: omitted means no filter; None matches disabled compaction
 
     Returns:
         The first matching JobDef, or None if not found
@@ -1583,9 +1588,14 @@ def find_existing_job_def(
             return False
         if extra_resources is not _MATCH_UNSET and extra_resources_identity(job_def.extra_resources) != resource_identity:
             return False
+        if (threshold is not _MATCH_UNSET
+                and getattr(job_def, "compaction_threshold", DEFAULT_COMPACTION_THRESHOLD) != threshold):
+            return False
         return True
 
     parsed = parse_warmup_code(warmup_code)
+    threshold = (parse_compaction_threshold(compaction_threshold)
+                 if compaction_threshold is not _MATCH_UNSET else _MATCH_UNSET)
     resource_identity = extra_resources_identity(extra_resources) if extra_resources is not _MATCH_UNSET else None
     agent_tag = db0.as_tag(agent)
     if (
@@ -1606,6 +1616,7 @@ def find_existing_job_def(
             post_processing,
             provider_config,
             extra_resources,
+            threshold if threshold is not _MATCH_UNSET else DEFAULT_COMPACTION_THRESHOLD,
         )
         for job_def in db0.find(JobDef, agent_tag, lookup_tag):
             if _matches(job_def):

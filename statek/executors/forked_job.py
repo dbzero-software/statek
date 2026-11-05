@@ -22,7 +22,8 @@ def _copy_history(value):
                           Error, JobCompactionResult, JobSummary, StateSummary, PyHandleDesc)):
         return type(value)(**{
             field.name: _copy_history(
-                getattr(value, field.name, None) if field.name == 'raw_response_text'
+                getattr(value, field.name, field.default)
+                if field.name in ('raw_response_text', 'est_token_usage', '_token_estimation_card')
                 else getattr(value, field.name))
             for field in fields(value)
         })

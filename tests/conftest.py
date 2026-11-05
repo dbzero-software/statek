@@ -10,6 +10,7 @@ import shutil
 
 import pytest
 import dbzero as db0
+from statek.model_card import set_model_card
 
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.agents.agent import Agent, SupervisedAgent
@@ -182,14 +183,22 @@ def db0_fixture():
 
 
 @pytest.fixture
-def agent(db0_fixture):  # pylint: disable=unused-argument
+def test_model_cards(db0_fixture):  # pylint: disable=unused-argument
+    """Configured cards for synthetic models used by execution tests."""
+    for provider in ("OPENROUTER", "OPENAI", "CLAUDEAI"):
+        for model in ("test-model", "small", "medium", "large"):
+            set_model_card(provider, model, token_to_bytes=4)
+
+
+@pytest.fixture
+def agent(test_model_cards):  # pylint: disable=unused-argument
     """Create a test agent."""
     return Agent(role="test", _system_prompt=make_system_prompt("Test agent"), _tools=[],
                  _metadata={'MODEL': 'test-model'} )
 
 
 @pytest.fixture
-def agent_factory(db0_fixture):  # pylint: disable=unused-argument
+def agent_factory(test_model_cards):  # pylint: disable=unused-argument
     """Factory fixture to create Agent instances with custom parameters."""
     def _create_agent(role="test", system_prompt="Test", tools=None):
         return Agent(
@@ -202,7 +211,7 @@ def agent_factory(db0_fixture):  # pylint: disable=unused-argument
 
 
 @pytest.fixture
-def supervised_agent(db0_fixture):  # pylint: disable=unused-argument
+def supervised_agent(test_model_cards):  # pylint: disable=unused-argument
     """Create a test agent."""
     return SupervisedAgent(
         role="test",
