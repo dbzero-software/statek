@@ -1,13 +1,14 @@
 # pylint: disable=unused-argument,no-member
 """Tests that get_next_request emits ChatHistoryItem objects with tool calls."""
 
+
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.executors.job import Job, JobDef, JobStatus
 from statek.executors.chat_log_item import WarmupLogItem
 from statek.chat_history import ChatRole
 from statek.utils import CodeBlock, CallSpec
-from tests.conftest import create_chat_log_item
+from tests.conftest import create_chat_log_item, seed_pyenv
 
 
 def _make_agent(role):
@@ -133,7 +134,7 @@ class TestGetNextRequestToolCalls:
         warmup = CodeBlock(code="setup()", tool_calls=[cs_warmup])
         job = _make_job(_make_agent("tc8"), warmup_code=warmup, started=True)
 
-        job.py_env.console = ["warmup_line", "llm_line"]
+        job.py_env = seed_pyenv(job.py_env, console=["warmup_line", "llm_line"])
         _add_warmup_log_item(job, 0, tool_log="'warmup_result'")
         cs_llm = CallSpec(id="T-001", func_name="llm_tool", args=[], kwargs={})
         block = CodeBlock(code="run()", tool_calls=[cs_llm])
@@ -174,7 +175,7 @@ class TestGetNextRequestToolCalls:
         job = _make_job(_make_agent("tc_multi_wu"), warmup_code=[block1, block2])
         _add_warmup_log_item(job, 0, tool_log="'alpha'")
         _add_warmup_log_item(job, 1, tool_log="'beta'", console_pos=1)
-        job.py_env.console = ["tool_a_output", "tool_b_output"]
+        job.py_env = seed_pyenv(job.py_env, console=["tool_a_output", "tool_b_output"])
         job.warmup_block_num = 1
 
         history = list(job.get_next_request()["chat_history"])
@@ -190,7 +191,7 @@ class TestGetNextRequestToolCalls:
         job = _make_job(_make_agent("tc_multi_wu_llm"), warmup_code=[block1, block2],
                         started=True)
         job.warmup_block_num = 1
-        job.py_env.console = ["wu_a_out", "wu_b_out", "llm_line"]
+        job.py_env = seed_pyenv(job.py_env, console=["wu_a_out", "wu_b_out", "llm_line"])
         _add_warmup_log_item(job, 0, tool_log="'wu_alpha'")
         _add_warmup_log_item(job, 1, tool_log="'wu_beta'", console_pos=1)
         cs_llm = CallSpec(id="T-001", func_name="llm_tool", args=[], kwargs={})

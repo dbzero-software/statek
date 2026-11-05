@@ -169,8 +169,11 @@ class UserLogItem:
     wait_finished_at: Optional[datetime] = field(default=None, kw_only=True)
 
 
-def finish_message_waits(messages: Iterable[UserLogItem], timestamp: datetime) -> None:
-    """Close outstanding message waits without replacing an earlier completion."""
+def finish_message_waits(messages: Iterable[UserLogItem], timestamp: datetime) -> bool:
+    """Close outstanding waits and return whether any message changed."""
+    changed = False
     for message in messages:
         if message.message and message.wait_finished_at is None:
             message.wait_finished_at = timestamp
+            changed = True
+    return changed

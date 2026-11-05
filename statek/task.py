@@ -440,7 +440,7 @@ def complete_sub_task(result: Optional[Any] = None, error: Optional[str] = None)
     if job is None:
         raise RuntimeError("complete_sub_task requires a current job")
 
-    handler = job.py_env.local_state.get("sub_task_handler")
+    handler = job.py_env.get_local("sub_task_handler")
     if handler is None:
         raise RuntimeError("complete_sub_task requires sub_task_handler in current job locals")
     if not isinstance(handler, SubTaskHandler):
@@ -460,7 +460,7 @@ def create_sub_task(
     return handler
 
 
-def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     agent: Agent,
     shared_vars: Optional[Dict[str, Any]] = None,
     parent_job: Optional[Job] = None,
@@ -494,14 +494,16 @@ def create_new_job(  # pylint: disable=too-many-arguments,too-many-positional-ar
             **kwargs,
         )
 
-    env = PyEnv()
+    initial_locals = {}
     if warmup_code and caller_frame is None:
         caller_frame = inspect.currentframe().f_back
     if warmup_code and caller_frame is not None:
         caller_locals = caller_frame.f_locals
-        _copy_warmup_locals(warmup_code, env.local_state, caller_locals)
+        _copy_warmup_locals(warmup_code, initial_locals, caller_locals)
 
-    env.local_state.update(shared_vars)
+    initial_locals.update(shared_vars)
+    env = PyEnv()
+    env.update_state(**initial_locals)
 
     job = Job(
         job_def=job_def,

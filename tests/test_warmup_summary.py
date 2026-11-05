@@ -8,7 +8,7 @@ import pytest
 
 from statek.executors.utils import run_job_step
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats
-from tests.conftest import DB0_DIR
+from tests.conftest import DB0_DIR, seed_pyenv
 from tests.test_warmup_blocks import (
     create_future_not_ready, _fetch_result_from_deps, _check_condition_true,
 )
@@ -22,8 +22,8 @@ def _descriptions(job):
 def test_summary_records_names_once_and_survives_reopen(job_factory, locals_state):
     job = job_factory()
     assert job._Job__warmup_summary is None
-    job.py_env.local_state = locals_state
-    job.py_env.global_state = {'global_only': 42}
+    job.py_env = seed_pyenv(job.py_env, local_state=locals_state,
+                               global_state={'global_only': 42})
     job._Job__init_warmup_summary()
     summary = job._Job__warmup_summary
     expected = {key: None for key in locals_state or {}}
@@ -53,7 +53,9 @@ async def test_summary_after_last_block_exit(job_factory):
     job.add_locals(injected=0)
     assert not await run_job_step(job)
     assert job._Job__warmup_summary is None
-    job.py_env.local_state.pop('temporary')
+    locals_state = dict(job.py_env.iter_locals())
+    locals_state.pop('temporary')
+    job.py_env = seed_pyenv(job.py_env, local_state=locals_state)
     assert await run_job_step(job)
     assert _descriptions(job) == {'injected': None, 'kept': None, 'final': None}
 

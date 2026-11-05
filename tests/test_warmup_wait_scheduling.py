@@ -70,12 +70,12 @@ class TestWarmupWaitReadiness:
             ),
             job_status=JobStatus.READY,
         )
-        job.py_env.local_state["attempts"] = 0
-        job.py_env.local_state["future_value"] = future
+        job.py_env.update_state(**{"attempts": 0})
+        job.py_env.update_state(**{"future_value": future})
 
         assert await run_job_step(job) is False
         initial_history = list(job.chat_log)
-        initial_console = list(job.py_env.console or [])
+        initial_console = list(list(job.py_env.iter_console()) or [])
 
         assert await run_job_step(job) is False
         assert await run_job_step(job) is False
@@ -83,9 +83,9 @@ class TestWarmupWaitReadiness:
         assert job.status == JobStatus.WARMING_UP
         assert job.awaited_result is future
         assert job.next_instr_num == 1
-        assert job.py_env.local_state["attempts"] == 1
+        assert job.py_env.get_local("attempts") == 1
         assert list(job.chat_log) == initial_history
-        assert list(job.py_env.console or []) == initial_console
+        assert list(list(job.py_env.iter_console()) or []) == initial_console
         assert wait_state.condition_checks == 2
 
     @pytest.mark.asyncio
@@ -101,8 +101,8 @@ class TestWarmupWaitReadiness:
             ),
             job_status=JobStatus.READY,
         )
-        blocked_job.py_env.local_state["attempts"] = 0
-        blocked_job.py_env.local_state["future_value"] = future
+        blocked_job.py_env.update_state(**{"attempts": 0})
+        blocked_job.py_env.update_state(**{"future_value": future})
         assert await run_job_step(blocked_job) is False
 
         ready_job = Job(
@@ -132,7 +132,7 @@ class TestWarmupWaitReadiness:
             assert ready_job.status == JobStatus.DONE
             assert blocked_job.status == JobStatus.WARMING_UP
             assert blocked_job.awaited_result is future
-            assert blocked_job.py_env.local_state["attempts"] == 1
+            assert blocked_job.py_env.get_local("attempts") == 1
             assert len(_warmup_items(blocked_job)) == initial_history_length
 
             checks_before_release = wait_state.condition_checks
@@ -140,7 +140,7 @@ class TestWarmupWaitReadiness:
             await asyncio.wait_for(_wait_until_done(blocked_job), timeout=2)
 
             assert blocked_job.py_env.exit_status == "done"
-            assert blocked_job.py_env.local_state["attempts"] == 1
+            assert blocked_job.py_env.get_local("attempts") == 1
             assert blocked_job.awaited_result is None
             assert blocked_job.next_instr_num is None
             assert wait_state.condition_checks == checks_before_release + 1

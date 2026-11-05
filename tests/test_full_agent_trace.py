@@ -7,8 +7,10 @@ from unittest.mock import patch
 import dbzero as db0
 import pytest
 
+
 from statek.executors.utils import exec_cli_step
 from statek.settings import StatekSettings, full_agent_trace, set_statek_settings
+from tests.conftest import seed_pyenv
 
 
 def available_tool() -> str:
@@ -95,7 +97,7 @@ async def test_python_cli_trace_records_code_context_and_output(tmp_path, job_fa
     """Tracing must expose Python CLI payloads and safe context names for diagnosis."""
     enable_full_agent_trace(tmp_path / "full_agent_trace.jsonl")
     job = job_factory(job_params={"goal": "Trace test"})
-    job.py_env.local_state = {"available_tool": available_tool}
+    job.py_env = seed_pyenv(job.py_env, local_state={"available_tool": available_tool})
 
     with patch("statek.executors.utils.full_agent_trace") as trace:
         await exec_cli_step('print(available_tool())', job, lambda _: None)

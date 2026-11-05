@@ -8,7 +8,7 @@ import pytest
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 from statek.executors.forked_job import ForkedJob
 from statek.executors.job import Job, JobCompactionResult, JobSummary, PyHandleDesc, StateSummary
-from tests.conftest import DB0_DIR
+from tests.conftest import DB0_DIR, seed_pyenv
 
 
 def _summary(*names):
@@ -20,8 +20,8 @@ def _summary(*names):
 ])
 def test_current_local_names_without_summaries(job_factory, local_state, expected):
     job = job_factory()
-    job.py_env.local_state = local_state
-    job.py_env.global_state = {'global_only': 1}
+    job.py_env = seed_pyenv(job.py_env, local_state=local_state,
+                               global_state={'global_only': 1})
     result = job.get_diff_locals()
     assert isinstance(result, set)
     assert result == expected
@@ -38,7 +38,7 @@ def test_subtracts_warmup_and_all_compactions_without_mutation(job_factory, mult
     job._Job__job_summaries = [first, second, no_state] if multiple else first
     count_before = len(db0.find(JobSummary))
     assert job.get_diff_locals() == ({'new'} if multiple else {'second', 'new'})
-    assert dict(job.py_env.local_state) == {'warmup': 1, 'first': 2, 'second': 3, 'new': 4}
+    assert dict(job.py_env.iter_locals()) == {'warmup': 1, 'first': 2, 'second': 3, 'new': 4}
     assert {item.var_name for item in first.job_summary.state.locals} == {'first', 'warmup'}
     assert {item.var_name for item in job._Job__warmup_summary.state.locals} == {
         'warmup', 'removed'}
@@ -51,15 +51,16 @@ def test_known_name_stays_known_when_reassigned_or_reintroduced(job_factory):
     job._Job__init_warmup_summary()
     job.add_locals(known=2, new=3)
     assert job.get_diff_locals() == {'new'}
-    job.py_env.local_state.pop('known')
-    job.py_env.local_state.pop('new')
+    job.py_env = seed_pyenv(job.py_env, local_state={})
     assert job.get_diff_locals() == set()
     job.add_locals(known=4)
     assert job.get_diff_locals() == set()
 
 
-def test_old_job_without_summary_attributes():
-    old_job = SimpleNamespace(py_env=SimpleNamespace(local_state={'existing': 1}))
+def test_old_job_without_summary_attributes(job_factory):
+    job = job_factory()
+    job.add_locals(existing=1)
+    old_job = SimpleNamespace(py_env=job.py_env)
     assert Job.get_diff_locals(old_job) == {'existing'}
 
 

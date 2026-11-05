@@ -135,12 +135,12 @@ def test_empty_summary_and_raw_text_precedence(job_factory):
     data = payload()
     data.update(input_summary='', output_summary='', system_summary='A notification')
     job.chat_log.append(LLM_LogItem(0, llm_resp='not JSON', raw_response_text=json.dumps(data)))
-    before = list(job.chat_log), job.status, dict(job.py_env.local_state or {})
+    before = list(job.chat_log), job.status, dict(job.py_env.iter_locals())
     result = parse_summarization_result(job)
     assert result.input_summary == result.output_summary == ''
     assert result.system_summary == 'A notification'
     assert not result.state.locals
-    assert (list(job.chat_log), job.status, dict(job.py_env.local_state or {})) == before
+    assert (list(job.chat_log), job.status, dict(job.py_env.iter_locals())) == before
     job.chat_log[-1].llm_resp = json.dumps(data)
     job.chat_log[-1].raw_response_text = ''
     with pytest.raises(ValueError, match='empty'):

@@ -67,7 +67,7 @@ def test_show_document_by_title_fragment(docs_dir, capsys):
 def test_show_document_uses_last_topic_id(docs_dir, capsys):
     """Falls back to last_topic_id when topic is not specified."""
     job = StatekContextJob()
-    job.py_env.local_state["_PERM_CTX"] = {"last_topic_id": 0}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_topic_id": 0}})
     run_with_statek_job(job, lambda: show_document("agent_a", docs_dir, key=0))
     out = capsys.readouterr().out
     assert "Line 0" in out

@@ -53,7 +53,7 @@ def test_process_agent_events_creates_job_with_event_shared_var(db0_fixture):
     assert len(jobs) == 1
     job = jobs[0]
     assert job.job_def.agent is agent
-    assert job.py_env.local_state["event"] is event
+    assert job.py_env.get_local("event") is event
 
 
 def test_process_agent_events_binds_event_as_critical_error_context(db0_fixture):
@@ -89,7 +89,7 @@ def test_process_agent_events_reuses_matching_job_def(db0_fixture):
     assert len(jobs) == 2
     assert jobs[1].job_def is jobs[0].job_def
     assert len(db0.find(JobDef, db0.as_tag(agent))) == 1
-    payloads = sorted(job.py_env.local_state["event"].payload for job in jobs)
+    payloads = sorted(job.py_env.get_local("event").payload for job in jobs)
     assert payloads == ["first", "second"]
 
 
@@ -103,7 +103,7 @@ def test_process_agent_events_uses_all_supervised_agents_when_filter_missing(db0
 
     jobs = list(db0.find(Job, db0.as_tag(agent)))
     assert len(jobs) == 1
-    assert jobs[0].py_env.local_state["event"] is event
+    assert jobs[0].py_env.get_local("event") is event
 
 
 def test_process_agent_events_respects_agent_filter(db0_fixture):
@@ -206,4 +206,4 @@ def test_process_agent_events_uses_only_configured_queue_prefixes(db0_fixture, m
     jobs = list(db0.find(Job, db0.as_tag(agent), prefix=queue_prefix))
     assert observed_prefixes == [queue_prefix]
     assert len(jobs) == 1
-    assert jobs[0].py_env.local_state["event"] is event
+    assert jobs[0].py_env.get_local("event") is event

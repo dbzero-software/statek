@@ -67,7 +67,7 @@ def push_summarization_instr(job: Job) -> None:
     """
     names = json.dumps(sorted(job.get_diff_locals()))
     job.chat_log.append(SystemLogItem(
-        console_pos=len(job.py_env.console or []),
+        console_pos=job.py_env.console_len,
         message=_SUMMARIZATION_INSTRUCTION + names,
     ))
 

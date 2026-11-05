@@ -69,8 +69,8 @@ class TestProcessPushNotifications:
 
         process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
-        assert job.py_env.push_log is not None
-        assert job.py_env.push_log[0] == "hello"
+        assert dict(job.py_env.iter_push_log())
+        assert dict(job.py_env.iter_push_log())[0] == "hello"
 
     def test_processes_non_string_notification_via_str_conversion(self, db0_fixture):
         job = _make_started_job()
@@ -81,8 +81,8 @@ class TestProcessPushNotifications:
 
         process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
-        assert job.py_env.push_log is not None
-        assert job.py_env.push_log[0] == "hello-from-object"
+        assert dict(job.py_env.iter_push_log())
+        assert dict(job.py_env.iter_push_log())[0] == "hello-from-object"
         assert job.contains_ext_ref(message) is True
 
     def test_processes_non_string_notification_via_job_message_adapter(
@@ -99,8 +99,8 @@ class TestProcessPushNotifications:
 
         process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
-        assert job.py_env.push_log is not None
-        assert job.py_env.push_log[0] == "adapted-object"
+        assert dict(job.py_env.iter_push_log())
+        assert dict(job.py_env.iter_push_log())[0] == "adapted-object"
         assert job.contains_ext_ref(message) is True
 
     def test_string_notification_is_not_registered_as_ext_ref(self, db0_fixture):
@@ -111,7 +111,7 @@ class TestProcessPushNotifications:
 
         process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
-        assert job.py_env.push_log[0] == "hello"
+        assert dict(job.py_env.iter_push_log())[0] == "hello"
         assert job.contains_ext_ref("hello") is False
 
     def test_queue_is_empty_after_processing(self, db0_fixture):
@@ -134,8 +134,8 @@ class TestProcessPushNotifications:
 
         process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
-        assert job.py_env.push_log is not None
-        val = job.py_env.push_log[0]
+        assert dict(job.py_env.iter_push_log())
+        val = dict(job.py_env.iter_push_log())[0]
         assert not isinstance(val, str)
         assert "msg1" in val
         assert "msg2" in val
@@ -197,8 +197,8 @@ class TestProcessPushNotifications:
 
         process_push_notifications(queue_prefixes=_current_queue_prefixes())
 
-        assert job1.py_env.push_log[0] == "for-job1"
-        assert job2.py_env.push_log[0] == "for-job2"
+        assert dict(job1.py_env.iter_push_log())[0] == "for-job1"
+        assert dict(job2.py_env.iter_push_log())[0] == "for-job2"
 
     def test_filters_notifications_to_requested_prefix_uuid(self, db0_fixture):
         prefix_a = db0.get_current_prefix()
@@ -215,8 +215,8 @@ class TestProcessPushNotifications:
 
         process_push_notifications(queue_prefixes=[prefix_a.name], job_prefix=prefix_a.uuid)
 
-        assert job_a.py_env.push_log[0] == "for-a"
-        assert job_b.py_env.push_log is None
+        assert dict(job_a.py_env.iter_push_log())[0] == "for-a"
+        assert not dict(job_b.py_env.iter_push_log())
         remaining = queue.pop_from_job_console(10, prefix=None)
         assert remaining == [(job_b_uuid, "for-b")]
 
@@ -275,4 +275,4 @@ class TestProcessPushNotifications:
         process_push_notifications(queue_prefixes=[queue_prefix])
 
         assert observed_prefixes == [queue_prefix]
-        assert job.py_env.push_log[0] == "hello"
+        assert dict(job.py_env.iter_push_log())[0] == "hello"

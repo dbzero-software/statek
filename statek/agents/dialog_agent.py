@@ -47,7 +47,8 @@ def record_response_delivery(job: Optional["Job"] = None) -> Iterator[None]:
     messages = [item for item in job.chat_log
                 if isinstance(item, UserLogItem) and item.message and item.wait_finished_at is None]
     yield
-    finish_message_waits(messages, datetime.now())
+    if finish_message_waits(messages, datetime.now()):
+        job.record_activity()
 
 
 def _validate_send_message(send_message: Callable) -> None:

@@ -4,7 +4,8 @@
 
 import pytest
 
-from tests.conftest import create_chat_log_item, set_warmup_positions
+
+from tests.conftest import create_chat_log_item, set_warmup_positions, seed_pyenv
 from statek.executors.example import Example, extract_example, format_example
 from statek.executors.job import Job, JobStatus, JobDef, TaskDifficulty
 from statek.agents.agent import Agent
@@ -113,7 +114,7 @@ class TestExtractWarmupItems:
         """console_pos of first chat item marks end of warmup console."""
         job_def = job_def_factory(warmup_code="x = 1")
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
-        job.py_env.console = ["warmup_out", "llm_out"]
+        job.py_env = seed_pyenv(job.py_env, console=["warmup_out", "llm_out"])
         # First LLM turn recorded after warmup_out (pos=1)
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="y = 2"))
         result = extract_example(job, "x")
@@ -124,7 +125,7 @@ class TestExtractWarmupItems:
         """Multiple console lines from a single warmup block are joined."""
         job_def = job_def_factory(warmup_code="print(1)\nprint(2)\nprint(3)")
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
-        job.py_env.console = ["1", "2", "3"]
+        job.py_env = seed_pyenv(job.py_env, console=["1", "2", "3"])
         result = extract_example(job, "x")
         assert result.warmup_items == ["print(1)\nprint(2)\nprint(3)", "1\n2\n3"]
 
@@ -145,7 +146,7 @@ class TestExtractWarmupItems:
         """When warmup end positions are derived, each block gets its own console slice."""
         job_def = job_def_factory(warmup_code=["print('a')", "print('b')", "print('c')"])
         job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
-        job.py_env.console = ["a", "b", "c"]
+        job.py_env = seed_pyenv(job.py_env, console=["a", "b", "c"])
         set_warmup_positions(job, [1, 2, 3])
         result = extract_example(job, "x")
         assert result.warmup_items == ["print('a')", "a", "print('b')", "b", "print('c')", "c"]
@@ -177,14 +178,14 @@ class TestExtractExampleItems:
 
     def test_no_chat_log_with_console_returns_empty(self, job_factory):
         job = job_factory()
-        job.py_env.console = ["out1", "out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["out1", "out2"])
         result = extract_example(job, "x")
         assert not result.example_items
 
     def test_single_turn_structure(self, job_factory):
         """Single LLM turn → [llm_resp, post_console]."""
         job = job_factory()
-        job.py_env.console = ["warmup_line", "exec_line"]
+        job.py_env = seed_pyenv(job.py_env, console=["warmup_line", "exec_line"])
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="y = 42"))
         result = extract_example(job, "x")
         assert len(result.example_items) == 2
@@ -194,7 +195,7 @@ class TestExtractExampleItems:
     def test_single_turn_multiple_post_console_lines(self, job_factory):
         """Multiple console lines produced after an LLM response are joined."""
         job = job_factory()
-        job.py_env.console = ["after1", "after2", "after3"]
+        job.py_env = seed_pyenv(job.py_env, console=["after1", "after2", "after3"])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="code"))
         result = extract_example(job, "x")
         assert result.example_items[1] == "after1\nafter2\nafter3"
@@ -202,7 +203,7 @@ class TestExtractExampleItems:
     def test_multiple_turns_console_correctly_segmented(self, job_factory):
         """Each turn's console slice is bounded by adjacent console_pos values."""
         job = job_factory()
-        job.py_env.console = ["w", "t1a", "t1b", "t2a", "t2b", "t2c"]
+        job.py_env = seed_pyenv(job.py_env, console=["w", "t1a", "t1b", "t2a", "t2b", "t2c"])
         #                       0    1      2      3      4      5
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp1"))
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp2"))
@@ -216,7 +217,7 @@ class TestExtractExampleItems:
     def test_three_turns_length(self, job_factory):
         """N LLM turns → 2*N items (N*(code+console))."""
         job = job_factory()
-        job.py_env.console = ["c0", "c1", "c2", "c3"]
+        job.py_env = seed_pyenv(job.py_env, console=["c0", "c1", "c2", "c3"])
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="r1"))
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="r2"))
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="r3"))
@@ -226,7 +227,7 @@ class TestExtractExampleItems:
     def test_empty_console_between_turns_is_empty_string(self, job_factory):
         """If no console output between turns, item is empty string not omitted."""
         job = job_factory()
-        job.py_env.console = ["c0"]
+        job.py_env = seed_pyenv(job.py_env, console=["c0"])
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="r1"))
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="r2"))
         result = extract_example(job, "x")
@@ -235,7 +236,7 @@ class TestExtractExampleItems:
     def test_last_turn_trailing_console_to_end(self, job_factory):
         """Last LLM response collects all console lines after its console_pos."""
         job = job_factory()
-        job.py_env.console = ["pre", "post1", "post2", "post3"]
+        job.py_env = seed_pyenv(job.py_env, console=["pre", "post1", "post2", "post3"])
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="code"))
         result = extract_example(job, "x")
         assert result.example_items[1] == "post1\npost2\npost3"
@@ -243,7 +244,7 @@ class TestExtractExampleItems:
     def test_example_items_no_formatting_characters(self, job_factory):
         """example_items must contain plain text without markdown or '> ' prefixes."""
         job = job_factory()
-        job.py_env.console = ["output line"]
+        job.py_env = seed_pyenv(job.py_env, console=["output line"])
         job.chat_log.append(create_chat_log_item(
             console_pos=1, llm_resp="print('hello')"
         ))
@@ -262,7 +263,7 @@ class TestExtractExampleItems:
     def test_example_items_even_length(self, job_factory):
         """example_items always has an even number of elements (pairs of code+console)."""
         job = job_factory()
-        job.py_env.console = ["a", "b", "c"]
+        job.py_env = seed_pyenv(job.py_env, console=["a", "b", "c"])
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="r1"))
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="r2"))
         result = extract_example(job, "x")
@@ -285,7 +286,7 @@ class TestFormatExample:
         else:
             job = job_factory()
         if console is not None:
-            job.py_env.console = console
+            job.py_env = seed_pyenv(job.py_env, console=console)
         for console_pos, llm_resp in turns:
             job.chat_log.append(create_chat_log_item(console_pos, llm_resp))
         return extract_example(job, "test")

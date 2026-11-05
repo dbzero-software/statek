@@ -981,6 +981,16 @@ def statek_ctx_get(*key_and_default) -> Any:
     return ctx.get(*key_and_default) if has_default else ctx[key_and_default[0]]
 
 
+def _get_or_create_perm_ctx(py_env):
+    """Fetch stored context after insertion so dbzero mutations affect its persistent copy."""
+    missing = object()
+    ctx = py_env.get_local("_PERM_CTX", missing)
+    if ctx is missing:
+        py_env.update_state(_PERM_CTX={})
+        ctx = py_env.get_local("_PERM_CTX")
+    return ctx
+
+
 def perm_ctx_set(**kwargs) -> None:
     """Set or update variables in the persistent execution context.
 
@@ -995,9 +1005,7 @@ def perm_ctx_set(**kwargs) -> None:
         RuntimeError: if no current Statek job context is active.
     """
     py_env = _require_statek_job_context().py_env
-    if py_env.local_state is None:
-        py_env.local_state = {}
-    ctx = py_env.local_state.setdefault("_PERM_CTX", {})
+    ctx = _get_or_create_perm_ctx(py_env)
     ctx.update(kwargs)
 
 
@@ -1038,9 +1046,7 @@ def perm_ctx_set_unique(key: str, value: Any) -> str:
     local_names = _collect_aggregated_locals(caller_frame).keys()
 
     py_env = _require_statek_job_context().py_env
-    if py_env.local_state is None:
-        py_env.local_state = {}
-    ctx = py_env.local_state.setdefault("_PERM_CTX", {})
+    ctx = _get_or_create_perm_ctx(py_env)
     assigned_key = _unique_perm_ctx_key(key, local_names, ctx)
     ctx[assigned_key] = value
     return assigned_key
@@ -1072,7 +1078,7 @@ def perm_ctx_get(*key_and_default) -> Any:
         raise RuntimeError("Statek job context not found")
 
     py_env = job.py_env
-    ctx = py_env.local_state.get("_PERM_CTX") if py_env.local_state else None
+    ctx = py_env.perm_ctx
 
     if ctx is None:
         if has_default:
