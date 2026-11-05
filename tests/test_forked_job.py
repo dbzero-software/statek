@@ -10,10 +10,52 @@ from statek.utils import CallSpec, CodeBlock
 from statek.executors.utils import run_job_step
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats
 from statek.executors.forked_job import ForkedJob
-from statek.executors.job import Job, JobStatus, JobCompactionResult, JobSummary
+from statek.executors.job import Job, JobStatus, JobCompactionResult, JobSummary, TaskDifficulty
 from statek.executors.chat_log_item import LLM_LogItem, UserLogItem, WarmupLogItem
 from statek.pyenv import Error, ErrorKind, PyEnv, PyEnvForked
 from tests.conftest import DB0_DIR, seed_pyenv
+
+
+@pytest.mark.parametrize('initial_difficulty', [None, TaskDifficulty.medium])
+def test_fork_initializes_difficulty_without_temporary_members(job_def_factory,
+                                                              initial_difficulty):
+    source = Job(job_def_factory(metadata={
+        'MODEL': 'L:small,M:medium,H:large', 'DEFAULT_DIFFICULTY': 'low',
+    }))
+    source._Job__last_difficulty = initial_difficulty
+    source.py_env.update_state(**{'default_example_id': 1})
+    with patch('statek.executors.job._get_example_difficulty_for_job',
+               return_value=TaskDifficulty.high):
+        fork = ForkedJob(source, 0)
+    assert fork.get_current_difficulty() == TaskDifficulty.high
+    assert len(fork.chat_log) == 1
+    assert fork.chat_log[0].previous_difficulty == (initial_difficulty or TaskDifficulty.low)
+    assert fork.chat_log[0].difficulty == TaskDifficulty.high
+    assert fork.chat_log[0].cumulative_token_usage == 0
+    assert fork.difficulty_token_extension == 0
+    assert not source.chat_log
+    assert source._Job__last_difficulty == initial_difficulty
+    assert not hasattr(fork, '_ForkedJob__initial_difficulty')
+    assert not hasattr(fork, '_ForkedJob__initializing')
+
+
+def test_fork_keeps_source_difficulty_after_reopen(job_def_factory):
+    source = Job(job_def_factory(metadata={
+        'MODEL': 'L:small,M:medium,H:large', 'DEFAULT_DIFFICULTY': 'low',
+    }))
+    source.panic()
+    fork = ForkedJob(source, len(source.chat_log))
+    assert fork.get_current_model() == 'medium'
+    assert not fork.chat_log.tail
+    identifier = db0.uuid(fork)
+    db0.close()
+    db0.init(DB0_DIR, read_write=True)
+    db0.open('test_prefix', 'rw')
+    restored = db0.fetch(identifier)
+    assert restored.get_current_model() == 'medium'
+    assert not restored.chat_log.tail
+    assert not hasattr(restored, '_ForkedJob__initial_difficulty')
+    assert not hasattr(restored, '_ForkedJob__initializing')
 
 
 def source_job(job_factory):

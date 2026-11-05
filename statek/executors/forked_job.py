@@ -117,26 +117,17 @@ class ForkedJob(Job):
         self.__forked_at = forked_at
         self.__inherited_console_len = console_end
         # Establish the model baseline before Job initializes usage pricing.
-        self.__initial_difficulty = (src_job._Job__last_difficulty
+        self._Job__last_difficulty = (src_job._Job__last_difficulty
                                      or _get_static_task_difficulty(src_job.job_def.metadata))
-        self.__initializing = True
         environment = fork_env(src_job.py_env)
         environment._bound_history(console_end, push_end)
         super().__init__(job_def=src_job.job_def, job_status=JobStatus.STARTED,
                          py_env=environment,
                          chat_log=_ForkedList(self.__src_job, 'chat_log', end))
-        self._Job__last_difficulty = self.__initial_difficulty
-        self.__initializing = False
         self._sync_usage_pricing()
         self._Job__job_summaries = selected_summaries
         if not any(isinstance(item, WarmupLogItem) for item in islice(src_job.chat_log, end, None)):
             self._Job__warmup_summary = src_job._Job__warmup_summary
-
-    def get_current_difficulty(self):
-        """Keep initialization on the source model without replaying escalation."""
-        if self.__initializing:
-            return self.__initial_difficulty
-        return super().get_current_difficulty()
 
     @property
     def forked_at(self) -> int:

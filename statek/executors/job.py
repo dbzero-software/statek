@@ -735,7 +735,7 @@ class Job:
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
         # The last dynamically-resolved difficulty level in this task.
-        self.__last_difficulty: Optional[TaskDifficulty] = None
+        self.__last_difficulty: Optional[TaskDifficulty] = getattr(self, "_Job__last_difficulty", None)
         self.usage = LLM_Usage(pricing=self._current_model_pricing())
         # Number of completed DONE transitions (None until first completion)
         self.num_completions: Optional[int] = None
