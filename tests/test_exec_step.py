@@ -53,7 +53,7 @@ class TestExecStepSharedContext:
     async def test_true_local_shadows_shared_variable(self, job_factory):
         job = job_factory()
         self._initialize(job)
-        job.py_env.update_locals(**{"tone": "local"})
+        job.py_env.update_state(**{"tone": "local"})
 
         await exec_step("result = tone\ntone = 'changed'", job)
 
@@ -416,7 +416,7 @@ print("This should not run")'''
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
 
-        simple_job.py_env.update_locals(future_val=future_not_ready, local_print=local_print)
+        simple_job.py_env.update_state(future_val=future_not_ready, local_print=local_print)
         code = 'print(future_val)'
 
         # First execution should raise FutureError with instr_num
@@ -432,7 +432,7 @@ print("This should not run")'''
         # Now create a FutureResult that's ready
         future_ready = create_future_ready()
 
-        simple_job.py_env.update_locals(future_val=future_ready, local_print=local_print)
+        simple_job.py_env.update_state(future_val=future_ready, local_print=local_print)
 
         # Second execution should print the value
         result = await exec_step(code, simple_job)
@@ -450,7 +450,7 @@ print("This should not run")'''
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
 
-        simple_job.py_env.update_locals(future_val=future_not_ready, local_print=local_print)
+        simple_job.py_env.update_state(future_val=future_not_ready, local_print=local_print)
         code = 'local_print(future_val)'
 
         # First execution should raise FutureError with instr_num
@@ -466,7 +466,7 @@ print("This should not run")'''
         # Now create a FutureResult that's ready
         future_ready = create_future_ready()
 
-        simple_job.py_env.update_locals(future_val=future_ready, local_print=local_print)
+        simple_job.py_env.update_state(future_val=future_ready, local_print=local_print)
 
         # Second execution should print the value
         result = await exec_step(code, simple_job)
@@ -494,7 +494,7 @@ print(result)'''
     async def test_exec_step_temporal_function_not_ready(self, job_factory):
         """Test exec_step with temporal function that's not ready."""
         simple_job = self.create_job(job_factory)
-        simple_job.py_env.update_locals(get_value_not_ready=get_value_not_ready)
+        simple_job.py_env.update_state(get_value_not_ready=get_value_not_ready)
 
         code = '''result = get_value_not_ready()
 print(result)'''
@@ -513,7 +513,7 @@ print(result)'''
     async def test_exec_step_temporal_function_unpacks_to_future_elements(self, job_factory):
         """Temporal FutureResult tuple unpacking stores FutureElement instances."""
         simple_job = self.create_job(job_factory)
-        simple_job.py_env.update_locals(get_two_values=get_two_values)
+        simple_job.py_env.update_state(get_two_values=get_two_values)
 
         code = '''left, right = get_two_values()\nprint(left.get_value(), right.get_value())'''
 
@@ -575,7 +575,7 @@ z = 3'''
 print(future_val)
 y = 2'''
 
-        simple_job.py_env.update_locals(future_val=future_not_ready)
+        simple_job.py_env.update_state(future_val=future_not_ready)
 
         # First execution should raise FutureError at instruction 1
         with pytest.raises(FutureError) as exc_info:
@@ -588,7 +588,7 @@ y = 2'''
 
         # Now make the future ready
         future_ready = create_future_ready()
-        simple_job.py_env.update_locals(**{'future_val': future_ready})
+        simple_job.py_env.update_state(**{'future_val': future_ready})
 
         # Continue from instruction 1 (where error occurred)
         result = await exec_step(code, simple_job, instr_num=1)
@@ -628,7 +628,7 @@ y = 2'''
 
         # Now make the future ready
         future_ready = create_future_ready(20)
-        simple_job.py_env.update_locals(**{'future_val': future_ready})
+        simple_job.py_env.update_state(**{'future_val': future_ready})
 
         # Continue from instruction 1 (the compute call)
         result = await exec_step(code, simple_job, instr_num=1)
@@ -645,7 +645,7 @@ y = 2'''
         # Create a FutureResult that initially raises FutureError
         future_not_ready = create_future_not_ready()
 
-        simple_job.py_env.update_locals(future_val=future_not_ready)
+        simple_job.py_env.update_state(future_val=future_not_ready)
 
         # Code with nested expression containing FutureResult
         code = '''a = 5
@@ -664,7 +664,7 @@ c = 3'''
 
         # Now make the future ready
         future_ready = create_future_ready(10)
-        simple_job.py_env.update_locals(**{'future_val': future_ready})
+        simple_job.py_env.update_state(**{'future_val': future_ready})
 
         # Continue from instruction 1
         result = await exec_step(code, simple_job, instr_num=1)
@@ -704,7 +704,7 @@ w = 4'''
 
         # Make first future ready but second still not ready
         future_ready_1 = create_future_ready()
-        simple_job.py_env.update_locals(**{'future_val_1': future_ready_1})
+        simple_job.py_env.update_state(**{'future_val_1': future_ready_1})
 
         # Continue from instruction 2, should now fail at instruction 4 (second print)
         with pytest.raises(FutureError) as exc_info:
@@ -720,7 +720,7 @@ w = 4'''
 
         # Make second future ready
         future_ready_2 = create_future_ready(99)
-        simple_job.py_env.update_locals(**{'future_val_2': future_ready_2})
+        simple_job.py_env.update_state(**{'future_val_2': future_ready_2})
 
         # Continue from instruction 4, should complete successfully
         result = await exec_step(code, simple_job, instr_num=4)
@@ -1293,7 +1293,7 @@ class TestExecStepStatekCtx:
         """Direct job local-state writes are not dropped by execution-local writeback."""
         job = job_factory()
         await exec_step(
-            '_STATEK_CTX["job"].py_env.update_locals(external="keep")\n'
+            '_STATEK_CTX["job"].py_env.update_state(external="keep")\n'
             'x = 1',
             job,
         )

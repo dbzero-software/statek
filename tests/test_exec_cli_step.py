@@ -77,7 +77,7 @@ class TestExecCliStep:
         """Expression output works when preceded by a function call from local_state."""
         job = self.create_job(job_factory)
 
-        job.py_env.update_locals(render_calendar_media=_render_calendar_media)
+        job.py_env.update_state(render_calendar_media=_render_calendar_media)
         outputs = []
         code = ('from datetime import date\n'
                 'media_path = render_calendar_media(date(2026, 4, 1))\n'
@@ -140,7 +140,7 @@ class TestExecCliStep:
     async def test_temporal_not_ready_blocks_on_access(self, job_factory):
         """Temporal function returning not-ready future raises FutureError on use."""
         job = self.create_job(job_factory)
-        job.py_env.update_locals(get_value_not_ready=get_value_not_ready)
+        job.py_env.update_state(get_value_not_ready=get_value_not_ready)
         code = 'result = get_value_not_ready()\nprint(result)'
 
         with pytest.raises(FutureError) as exc_info:
@@ -162,7 +162,7 @@ class TestExecCliStep:
         assert job.py_env.get_local('x') == 1
 
         # Replace with ready future and resume from instruction 1
-        job.py_env.update_locals(**{'future_val': create_future_ready(99)})
+        job.py_env.update_state(**{'future_val': create_future_ready(99)})
         outputs = []
         await exec_cli_step(code, job, outputs.append, instr_num=1)
         assert outputs == ["99"]

@@ -70,8 +70,8 @@ class TestWarmupWaitReadiness:
             ),
             job_status=JobStatus.READY,
         )
-        job.py_env.update_locals(**{"attempts": 0})
-        job.py_env.update_locals(**{"future_value": future})
+        job.py_env.update_state(**{"attempts": 0})
+        job.py_env.update_state(**{"future_value": future})
 
         assert await run_job_step(job) is False
         initial_history = list(job.chat_log)
@@ -101,8 +101,8 @@ class TestWarmupWaitReadiness:
             ),
             job_status=JobStatus.READY,
         )
-        blocked_job.py_env.update_locals(**{"attempts": 0})
-        blocked_job.py_env.update_locals(**{"future_value": future})
+        blocked_job.py_env.update_state(**{"attempts": 0})
+        blocked_job.py_env.update_state(**{"future_value": future})
         assert await run_job_step(blocked_job) is False
 
         ready_job = Job(

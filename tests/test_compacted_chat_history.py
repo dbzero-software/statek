@@ -165,6 +165,33 @@ def test_compacted_history_is_lazy_and_used_for_next_request(job_factory):
     assert list(job.get_next_request()["chat_history"])[0].content_src == ContentSource.SYSTEM
 
 
+def test_compacted_turn_slice_uses_raw_history_at_partial_overlap(job_factory):
+    job = job_factory()
+    job.chat_log = [
+        LLM_LogItem(console_pos=0, llm_resp="first()"),
+        LLM_LogItem(console_pos=0, llm_resp="second()"),
+        LLM_LogItem(console_pos=0, llm_resp="third()"),
+    ]
+    summary = _summary("first two")
+    job._Job__job_summaries = JobCompactionResult(0, 2, summary)  # pylint: disable=protected-access
+
+    assert [item.content for item in job.get_chat_history(
+        start_at=1, num_turns=1,
+    )] == ["second()"]
+    assert [item.content_src for item in job.get_chat_history(
+        start_at=0, num_turns=2,
+    )] == [ContentSource.SYSTEM]
+
+
+def test_compacted_turn_slice_uses_state_at_iteration_time(job_factory):
+    job = job_factory()
+    job.chat_log = [LLM_LogItem(console_pos=0, llm_resp="old()")]
+    history = job.get_chat_history(start_at=0, num_turns=1)
+    job._Job__job_summaries = JobCompactionResult(0, 1, _summary())  # pylint: disable=protected-access
+
+    assert list(history)[0].content_src == ContentSource.SYSTEM
+
+
 def test_historical_request_keeps_raw_history(job_factory):
     """A request snapshot for an old turn does not apply current summaries."""
     job = job_factory()

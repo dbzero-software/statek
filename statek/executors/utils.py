@@ -375,7 +375,7 @@ def _copy_modified_locals(current_locals: dict, py_env) -> None:
         if previous is missing or _value_changed(previous, value):
             updates[key] = value
     if updates:
-        py_env.update_locals(**updates)
+        py_env.update_state(**updates)
 
 
 def _hidden_registered_tool_names() -> set[str]:
@@ -1157,6 +1157,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                                 ToolError(err_message=error) if error else joined
                             )
                             job.record_activity()
+
+        # Capture the baseline before exit handling or the first LLM request.
+        if job.status == JobStatus.WARMING_UP and not job.has_more_warmup_blocks():
+            job._Job__init_warmup_summary()  # pylint: disable=protected-access
 
         # Step 9: If code has finished, transition to DONE and return True
         if job.py_env.exit_status is not None:

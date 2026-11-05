@@ -88,9 +88,10 @@ class LLM_Harness:
         nc = getattr(job, 'num_completions', None)
         eff_turns = self._effective_limit(self.max_turns, nc)
 
-        if eff_turns is not None and job.num_turns > eff_turns:
+        execution_turns = getattr(job, "num_execution_turns", job.num_turns)
+        if eff_turns is not None and execution_turns > eff_turns:
             raise LLM_HarnessError(
-                f"Maximum number of turns exceeded: {job.num_turns}/{eff_turns}")
+                f"Maximum number of turns exceeded: {execution_turns}/{eff_turns}")
         self._check_exception_limits(job, nc)
 
     def check_after_step(self, job):
