@@ -34,14 +34,14 @@ dependencies = [
 [project.optional-dependencies]
 dbzero = [
     "dbzero-modelkit[dbzero]>=1.2.0",
-    "dbzero>=0.7.0",
+    "dbzero>=0.7.1",
 ]
 dbzero-pro = [
     "dbzero-modelkit[dbzero-pro]>=1.2.0",
-    "dbzero-pro>=0.7.0",
+    "dbzero-pro>=0.7.1",
 ]
 dev = [
-    "dbzero>=0.6.1",
+    "dbzero>=0.7.1",
     "pytest>=7.0",
     "pytest-asyncio==1.3.0",
     "pylint>=3.0",
