@@ -96,6 +96,8 @@ class LLM_LogItem(ChatLogItem):
     request_difficulty: Optional[TaskDifficulty] = None
     # Cumulative approximate usage including this response; None for placeholders.
     cumulative_token_usage: Optional[int] = None
+    # Original provider text, before chat-style transformations.
+    raw_response_text: Optional[str] = None
 
 
 @db0.memo(no_default_tags=True)
@@ -113,6 +115,13 @@ class DifficultyChangeLogItem(ChatLogItem):
 class WarmupLogItem(ChatLogItem):
     # 0-based index into JobDef.warmup_code
     warmup_block_num: int = 0
+
+
+@db0.memo(no_default_tags=True)
+@dataclass(kw_only=True)
+class SystemLogItem(ChatLogItem):
+    """System instruction included in subsequent LLM requests."""
+    message: str
 
 
 @db0.memo(no_default_tags=True)

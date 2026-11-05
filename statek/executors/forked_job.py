@@ -20,8 +20,12 @@ def _copy_history(value):
     """Copy owned history data while preserving external application handles."""
     if isinstance(value, (ChatLogItem, UserLogItem, CodeBlock, CallSpec, ToolError,
                           Error, JobCompactionResult, JobSummary, StateSummary, PyHandleDesc)):
-        return type(value)(**{field.name: _copy_history(getattr(value, field.name))
-                              for field in fields(value)})
+        return type(value)(**{
+            field.name: _copy_history(
+                getattr(value, field.name, None) if field.name == 'raw_response_text'
+                else getattr(value, field.name))
+            for field in fields(value)
+        })
     if isinstance(value, (list, db0.types.List)):
         return [_copy_history(item) for item in value]
     if isinstance(value, (dict, db0.types.Dict)):
