@@ -121,8 +121,6 @@ class LLM_LogItem(ChatLogItem):
     request_difficulty: Optional[TaskDifficulty] = None
     # Cumulative approximate usage including this response; None for placeholders.
     cumulative_token_usage: Optional[int] = None
-    # Original provider text, before chat-style transformations.
-    raw_response_text: Optional[str] = None
 
 
 @db0.memo(no_default_tags=True)
@@ -196,8 +194,11 @@ class UserLogItem:
     wait_finished_at: Optional[datetime] = field(default=None, kw_only=True)
 
 
-def finish_message_waits(messages: Iterable[UserLogItem], timestamp: datetime) -> None:
-    """Close outstanding message waits without replacing an earlier completion."""
+def finish_message_waits(messages: Iterable[UserLogItem], timestamp: datetime) -> bool:
+    """Close outstanding waits and return whether any message changed."""
+    changed = False
     for message in messages:
         if message.message and message.wait_finished_at is None:
             message.wait_finished_at = timestamp
+            changed = True
+    return changed

@@ -33,7 +33,10 @@ def test_parse_actual_response_in_all_styles(job_factory, style, fence):
     if fence is not None:
         text = f'```{fence}\n{text}\n```'
     job.append_chat_log({}, LLM_Response(LLM_StepData(text, None), LLM_Stats(0, 0, None)))
-    assert job.chat_log[-1].raw_response_text == text
+    if style in ('MARKDOWN', 'MD_DIALOG') or (style == 'DIRECT' and fence is not None):
+        with pytest.raises(ValueError, match='JSON|empty'):
+            parse_summarization_result(job)
+        return
     result = parse_summarization_result(job)
     assert result.input_summary == 'User request'
     assert result.output_summary == 'Completed work'
@@ -92,15 +95,15 @@ def test_missing_fields_names_and_response(job_factory):
         parse_summarization_result(job)
 
 
-def test_tools_rejected_even_with_valid_raw_text(job_factory):
+def test_tools_rejected_even_with_valid_json(job_factory):
     job = job_factory()
-    job.chat_log.append(LLM_LogItem(0, llm_resp=CodeBlock(tool_calls=[CallSpec('1', 'tool')]),
-                                    raw_response_text=json.dumps(payload())))
+    job.chat_log.append(LLM_LogItem(0, llm_resp=CodeBlock(
+        code=json.dumps(payload()), tool_calls=[CallSpec('1', 'tool')])))
     with pytest.raises(ValueError, match='tool'):
         parse_summarization_result(job)
 
 
-def test_legacy_codeblock_and_prefix_persistence(job_factory):
+def test_codeblock_and_prefix_persistence(job_factory):
     job = job_factory()
     job.add_locals(handle=1)
     job.chat_log.append(LLM_LogItem(0, llm_resp=CodeBlock(code=json.dumps(payload(['handle'])))))
@@ -118,30 +121,38 @@ def test_legacy_codeblock_and_prefix_persistence(job_factory):
     assert db0.fetch(uuid).input_summary == 'User request'
 
 
-def test_raw_copy_and_database_errors(job_factory):
+def test_forked_response_and_database_errors(job_factory):
     job = job_factory()
-    job.chat_log.append(LLM_LogItem(0, llm_resp='processed',
-                                    raw_response_text=json.dumps(payload())))
+    job.chat_log.append(LLM_LogItem(0, llm_resp=json.dumps(payload())))
     fork = ForkedJob(job, len(job.chat_log))
-    assert fork.chat_log[-1].raw_response_text == job.chat_log[-1].raw_response_text
+    assert fork.chat_log[-1].llm_resp == job.chat_log[-1].llm_resp
     with patch('statek.executors.summarization.db0.get_prefix_of',
                side_effect=RuntimeError('database failure')):
         with pytest.raises(RuntimeError, match='database failure'):
             parse_summarization_result(job)
 
 
-def test_empty_summary_and_raw_text_precedence(job_factory):
+def test_empty_summary_and_response_updates(job_factory):
     job = job_factory()
     data = payload()
     data.update(input_summary='', output_summary='', system_summary='A notification')
-    job.chat_log.append(LLM_LogItem(0, llm_resp='not JSON', raw_response_text=json.dumps(data)))
-    before = list(job.chat_log), job.status, dict(job.py_env.local_state or {})
+    job.chat_log.append(LLM_LogItem(0, llm_resp=json.dumps(data)))
+    before = list(job.chat_log), job.status, dict(job.py_env.iter_locals())
     result = parse_summarization_result(job)
     assert result.input_summary == result.output_summary == ''
     assert result.system_summary == 'A notification'
     assert not result.state.locals
-    assert (list(job.chat_log), job.status, dict(job.py_env.local_state or {})) == before
-    job.chat_log[-1].llm_resp = json.dumps(data)
-    job.chat_log[-1].raw_response_text = ''
+    assert (list(job.chat_log), job.status, dict(job.py_env.iter_locals())) == before
+    job.chat_log[-1].llm_resp = ''
     with pytest.raises(ValueError, match='empty'):
         parse_summarization_result(job)
+
+
+@pytest.mark.parametrize('fence', [None, '', 'json'])
+def test_parse_stored_json_response(job_factory, fence):
+    job = job_factory()
+    text = json.dumps(payload())
+    if fence is not None:
+        text = f'```{fence}\n{text}\n```'
+    job.chat_log.append(LLM_LogItem(0, llm_resp=text))
+    assert parse_summarization_result(job).input_summary == 'User request'

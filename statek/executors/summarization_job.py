@@ -60,7 +60,7 @@ class SummarizationJob(ForkedJob):
             summary = parse_summarization_result(self)
         except ValueError as error:
             self._append_chat_log_item(SystemLogItem(
-                console_pos=len(self.py_env.console or []),
+                console_pos=self.py_env.console_len,
                 message=(f'{type(error).__name__}: {error}\n'
                          'Return a corrected summarization response following the '
                          'original JSON instructions.'),

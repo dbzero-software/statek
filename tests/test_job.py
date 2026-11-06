@@ -9,7 +9,8 @@ from decimal import Decimal
 from unittest.mock import patch, MagicMock
 import dbzero as db0
 import pytest
-from tests.conftest import DB0_DIR, create_chat_log_item, set_warmup_positions
+
+from tests.conftest import DB0_DIR, create_chat_log_item, set_warmup_positions, seed_pyenv
 from statek.executors.job import (
     DialogItem,
     Job,
@@ -185,20 +186,20 @@ class TestJobAddLocals:
     def test_add_locals_merges_values(self, job_factory):
         """add_locals adds and overwrites values in py_env.local_state."""
         job = job_factory()
-        job.py_env.local_state = {"existing": 1}
+        job.py_env = seed_pyenv(job.py_env, local_state={"existing": 1})
 
         job.add_locals(existing=2, added=3)
 
-        assert job.py_env.local_state == {"existing": 2, "added": 3}
+        assert dict(job.py_env.iter_locals()) == {"existing": 2, "added": 3}
 
     def test_add_locals_initializes_missing_local_state(self, job_factory):
         """add_locals creates local_state when it is missing."""
         job = job_factory()
-        job.py_env.local_state = None
+        job.py_env = seed_pyenv(job.py_env, local_state=None)
 
         job.add_locals(answer=42)
 
-        assert job.py_env.local_state == {"answer": 42}
+        assert dict(job.py_env.iter_locals()) == {"answer": 42}
 
 
 class TestJobDef:
@@ -406,9 +407,9 @@ class TestJobLoggingAndExternalRefs:
 
         job.console_append("Failure", error=Error(ErrorKind.EXECUTION, "error"))
 
-        assert list(job.py_env.exceptions) == [0]
-        assert job.py_env.exceptions[0].message == "error"
-        assert job.py_env.exceptions[0].kind == ErrorKind.EXECUTION
+        assert list(dict(job.py_env.iter_exceptions())) == [0]
+        assert job.py_env.get_exception(0).message == "error"
+        assert job.py_env.get_exception(0).kind == ErrorKind.EXECUTION
 
     def test_contains_ext_ref_false_before_add(self, job_factory):
         """Job does not report unrelated memo objects as external refs."""
@@ -509,7 +510,7 @@ class TestJobNextPrompt:
         job = job_factory()
 
         # Setup console with multiple outputs
-        job.py_env.console = ["Out1", "Out2", "Out3", "Out4", "Out5"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2", "Out3", "Out4", "Out5"])
 
         # Add multiple chat log items
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp1"))
@@ -549,7 +550,7 @@ class TestJobNextPrompt:
     def test_get_next_prompt_subsequent_prompt_push_log_at_from_pos(self, job_factory):
         """Subsequent prompt: push_log entry at from_pos is included."""
         job = job_factory()
-        job.py_env.console = ["c1", "c2"]
+        job.py_env = seed_pyenv(job.py_env, console=["c1", "c2"])
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp"))
         job.push_user_message("pushed msg")  # key=2 (console len=2)
         result = job.get_next_prompt()
@@ -558,9 +559,9 @@ class TestJobNextPrompt:
     def test_get_next_prompt_subsequent_prompt_push_log_before_from_pos_excluded(self, job_factory):
         """Subsequent prompt: push_log entry with key < from_pos is excluded."""
         job = job_factory()
-        job.py_env.console = ["c1", "c2"]
+        job.py_env = seed_pyenv(job.py_env, console=["c1", "c2"])
         job.push_user_message("early msg")     # key=2 (console len=2 at push time)
-        job.py_env.console.append("c3")      # console grows to 3
+        job.py_env.console_append("c3")      # console grows to 3
         job.chat_log.append(create_chat_log_item(console_pos=3, llm_resp="resp"))
         result = job.get_next_prompt()
         assert "early msg" not in result
@@ -662,7 +663,7 @@ class TestJobGetChatHistory:
         job = job_factory()
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="LLM response 1"))
         # Console output produced AFTER the LLM responded.
-        job.py_env.console = ["Output 1", "Output 2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Output 1", "Output 2"])
 
         history = list(job.get_chat_history())
 
@@ -678,7 +679,7 @@ class TestJobGetChatHistory:
     def test_get_chat_history_multiple_chat_items(self, job_factory):
         """Multiple LLM turns each followed by their own console slice."""
         job = job_factory()
-        job.py_env.console = ["Out1", "Out2", "Out3", "Out4", "Out5"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2", "Out3", "Out4", "Out5"])
         # First turn at console_pos 0 (no prior output) — its execution
         # produced Out1, Out2. Second turn starts at 2, produces Out3, Out4.
         # Third turn starts at 4, produces Out5.
@@ -700,8 +701,8 @@ class TestJobGetChatHistory:
 
     def test_get_chat_history_turn_slice_keeps_prelude_and_complete_turns(self, job_factory):
         job = job_factory(warmup_code="setup()")
-        job.py_env.push_log = {0: "initial"}
-        job.py_env.console = ["warmup out", "out1", "out2"]
+        job.py_env = seed_pyenv(job.py_env, push_log={0: "initial"},
+                                   console=["warmup out", "out1", "out2"])
         set_warmup_positions(job, [1])
         job.chat_log.extend([
             create_chat_log_item(console_pos=1, llm_resp="resp1"),
@@ -717,8 +718,8 @@ class TestJobGetChatHistory:
 
     def test_get_chat_history_slice_assigns_messages_to_following_turn(self, job_factory):
         job = job_factory()
-        job.py_env.console = ["out1", "out2"]
-        job.py_env.push_log = {1: "pushed follow-up"}
+        job.py_env = seed_pyenv(job.py_env, console=["out1", "out2"],
+                                   push_log={1: "pushed follow-up"})
         job.chat_log.extend([
             create_chat_log_item(console_pos=0, llm_resp="resp1"),
             UserLogItem(message="logged follow-up"),
@@ -769,8 +770,8 @@ class TestJobGetChatHistory:
             create_chat_log_item(console_pos=0, llm_resp="resp"),
             UserLogItem(message="next request"),
         ])
-        job.py_env.push_log = {1: "pushed next request"}
-        job.py_env.console = ["out"]
+        job.py_env = seed_pyenv(job.py_env, push_log={1: "pushed next request"},
+                                   console=["out"])
 
         assert [item.content for item in job.get_chat_history(
             start_at=0, num_turns=10,
@@ -780,7 +781,7 @@ class TestJobGetChatHistory:
     def test_get_chat_history_initial_user_message_from_push_log(self, job_factory):
         """A push_log entry at console position 0 becomes the initial USER item."""
         job = job_factory()
-        job.py_env.push_log = {0: "Hello, please do X"}
+        job.py_env = seed_pyenv(job.py_env, push_log={0: "Hello, please do X"})
 
         history = list(job.get_chat_history())
 
@@ -800,7 +801,7 @@ class TestJobGetChatHistory:
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
         )
-        job.py_env.push_log = {0: "Podaj grafik"}
+        job.py_env = seed_pyenv(job.py_env, push_log={0: "Podaj grafik"})
 
         history = list(job.get_chat_history())
         assert len(history) == 1
@@ -817,9 +818,9 @@ class TestJobGetChatHistory:
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
         )
-        job.py_env.console = ["c1", "c2"]
+        job.py_env = seed_pyenv(job.py_env, console=["c1", "c2"])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="resp"))
-        job.py_env.push_log = {1: "Follow-up question"}
+        job.py_env = seed_pyenv(job.py_env, push_log={1: "Follow-up question"})
 
         history = list(job.get_chat_history())
         push_items = [h for h in history if h.content_src == ContentSource.USER]
@@ -839,7 +840,7 @@ class TestJobGetChatHistory:
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
         )
-        job.py_env.push_log = {0: "Podaj grafik"}
+        job.py_env = seed_pyenv(job.py_env, push_log={0: "Podaj grafik"})
 
         history = list(job.get_chat_history())
         assert history[0].content == "Podaj grafik"
@@ -934,7 +935,7 @@ def test_get_current_difficulty_uses_example_difficulty(job_def_factory):
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 3}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 3}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -955,10 +956,10 @@ def test_get_current_difficulty_uses_source_aware_donor_example(
         job_def=job_def_factory(extra_resources=(["donor"], None, None)),
         job_status=JobStatus.READY,  # pylint: disable=no-member
     )
-    job.py_env.local_state["_PERM_CTX"] = {
+    job.py_env.update_state(**{"_PERM_CTX": {
         "last_example_id": 7,
         "last_example_source": {"agent_name": "donor", "example_id": 1},
-    }
+    }})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -973,10 +974,10 @@ def test_get_current_difficulty_uses_source_aware_donor_example(
 def test_get_current_difficulty_malformed_source_uses_legacy_receiver_id(job_def_factory):
     """Malformed persisted source data falls back to the legacy receiver-local ID."""
     job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {
+    job.py_env.update_state(**{"_PERM_CTX": {
         "last_example_id": 3,
         "last_example_source": {"agent_name": "donor", "example_id": "invalid"},
-    }
+    }})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -990,10 +991,10 @@ def test_get_current_difficulty_malformed_source_uses_legacy_receiver_id(job_def
 def test_get_current_difficulty_unconfigured_source_uses_legacy_receiver_id(job_def_factory):
     """A forged source outside configured resources cannot influence job difficulty."""
     job = Job(job_def=job_def_factory(), job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {
+    job.py_env.update_state(**{"_PERM_CTX": {
         "last_example_id": 3,
         "last_example_source": {"agent_name": "../foreign", "example_id": 0},
-    }
+    }})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -1013,7 +1014,7 @@ def test_get_current_difficulty_uses_registered_job_perm_ctx_example_id(job_def_
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 8}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 8}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -1036,7 +1037,7 @@ def test_get_current_difficulty_example_does_not_downgrade_last_dynamic(
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 4}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 4}})
     job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
     with patch(
@@ -1059,7 +1060,7 @@ def test_get_current_difficulty_example_can_upgrade_last_dynamic(
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 5}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 5}})
     job._Job__last_difficulty = TaskDifficulty.low  # pylint: disable=protected-access
 
     with patch(
@@ -1082,7 +1083,7 @@ def test_get_current_difficulty_missing_example_difficulty_falls_back_to_metadat
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 6}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 6}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -1163,7 +1164,7 @@ def test_example_escalation_extends_budget_once(job_def_factory, starting_diffic
     ))
     job._Job__last_difficulty = starting_difficulty  # pylint: disable=protected-access
     job.usage.total_bytes_sent = 40000
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=TaskDifficulty.medium):
         assert job.get_current_difficulty() == TaskDifficulty.medium
@@ -1183,7 +1184,7 @@ def test_direct_example_jump_is_one_bonus(job_def_factory) -> None:
         metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
     ))
     job.usage.total_bytes_sent = 40000
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=TaskDifficulty.high):
         assert job.get_current_difficulty() == TaskDifficulty.high
@@ -1197,7 +1198,7 @@ def test_non_increasing_example_grants_no_bonus(job_def_factory, example_difficu
         metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "medium"},
     ))
     job.usage.total_bytes_sent = 40000
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=example_difficulty):
         assert job.get_current_difficulty() == example_difficulty
@@ -1217,7 +1218,7 @@ def test_panic_with_zero_usage_grants_no_bonus(job_def_factory) -> None:
 def test_example_difficulty_during_initialization_has_zero_usage(job_def_factory) -> None:
     """Pricing may resolve a default example before the usage object exists."""
     env = PyEnv()
-    env.local_state["default_example_id"] = 1
+    env.update_state(**{"default_example_id": 1})
     with patch("statek.executors.job._get_example_difficulty_for_job",
                return_value=TaskDifficulty.medium):
         job = Job(job_def=job_def_factory(metadata={
@@ -1236,13 +1237,13 @@ def test_difficulty_metadata_preserves_console_and_notification_history(job_def_
     }), job_status=JobStatus.STARTED)
     response = LLM_LogItem(console_pos=0, llm_resp="pass")
     job.chat_log.append(response)
-    job.py_env.console = ["before"]
+    job.py_env = seed_pyenv(job.py_env, console=["before"])
     job.panic()
     assert job.last_response == "pass"
     assert job.get_next_code_block() == "pass"
     assert job.num_turns == 1
     assert job.exception_count == 0
-    job.py_env.console.append("after")
+    job.py_env.console_append("after")
     history = list(job.get_chat_history())
     assert any(item.content == "before\nafter" for item in history)
     assert len(history) == 2
@@ -1283,9 +1284,9 @@ def test_budget_metadata_preserves_warmup_console_boundary(job_def_factory) -> N
         metadata={"MODEL": "test-model", "DEFAULT_DIFFICULTY": "low"},
     ))
     job.chat_log.append(WarmupLogItem(console_pos=0, warmup_block_num=0))
-    job.py_env.console = ["before"]
+    job.py_env = seed_pyenv(job.py_env, console=["before"])
     job.panic()
-    job.py_env.console.append("after")
+    job.py_env.console_append("after")
     assert job._warmup_end_positions() == [2]  # pylint: disable=protected-access
     history = list(job.get_chat_history())
     assert any(item.content == "before\nafter" for item in history)
@@ -1383,7 +1384,7 @@ def test_get_current_model_uses_example_dynamic_difficulty(job_def_factory):
         }
     )
     job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 1}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 1}})
 
     with patch(
         "statek.executors.job._get_example_difficulty_for_job",
@@ -1470,7 +1471,7 @@ def test_get_next_request_uses_last_dynamic_difficulty(
         job_def=job_def,
         job_status=JobStatus.STARTED,  # pylint: disable=no-member
     )
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 2}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 2}})
     job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
     with patch(
@@ -1563,7 +1564,7 @@ class TestJobGetNextRequest:
     def test_get_next_request_with_chat_history(self, job_factory):
         """chat_history contains ChatHistoryItems for SYSTEM + each turn."""
         job = job_factory()
-        job.py_env.console = ["Out1", "Out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2"])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="Response 1"))
         job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="Response 2"))
 
@@ -1978,7 +1979,7 @@ class TestJobGetRequestData:
             job.chat_log.append(item)
         job.chat_log.append(UserLogItem(message="i jeszcze na maj"))
         job.chat_log.append(create_chat_log_item(console_pos=6, llm_resp="dummy second turn"))
-        job.py_env.console = [result for _, _, result in turns]
+        job.py_env = seed_pyenv(job.py_env, console=[result for _, _, result in turns])
 
         historical = job.get_request_data(6)
         history = list(historical["chat_history"])
@@ -2030,7 +2031,7 @@ class TestJobGetRequestData:
             }
         )
         job = Job(job_def=job_def, job_status=JobStatus.READY)  # pylint: disable=no-member
-        job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 7}
+        job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 7}})
         job._Job__last_difficulty = TaskDifficulty.high  # pylint: disable=protected-access
 
         with patch(
@@ -2138,7 +2139,7 @@ class TestJobGetNextPromptWithWarmup:
     def test_no_warmup_behavior_unchanged(self, job_factory):
         """Without warmup_code the prompt is unchanged."""
         job = job_factory()
-        job.py_env.console = ["line1", "line2"]
+        job.py_env = seed_pyenv(job.py_env, console=["line1", "line2"])
 
         result = job.get_next_prompt()
 
@@ -2147,7 +2148,7 @@ class TestJobGetNextPromptWithWarmup:
     def test_warmup_prompt_is_last_block_console_output(self, job_factory):
         """With warmup, prompt is the console output OF the last warmup block."""
         job = job_factory(warmup_code="x = 1")
-        job.py_env.console = ["last block output"]
+        job.py_env = seed_pyenv(job.py_env, console=["last block output"])
         set_warmup_positions(job, [1])  # block 0 produced 1 line
 
         result = job.get_next_prompt()
@@ -2157,7 +2158,7 @@ class TestJobGetNextPromptWithWarmup:
     def test_warmup_prompt_excludes_template_and_warmup_code(self, job_factory):
         """With warmup, template and code are NOT in the prompt (they're in chat_history)."""
         job = job_factory(warmup_code="x = 1")
-        job.py_env.console = ["last block output"]
+        job.py_env = seed_pyenv(job.py_env, console=["last block output"])
         set_warmup_positions(job, [1])
 
         result = job.get_next_prompt()
@@ -2168,7 +2169,7 @@ class TestJobGetNextPromptWithWarmup:
     def test_warmup_multi_block_prompt_is_last_block_output(self, job_factory):
         """With multiple warmup blocks, prompt is ONLY the last block's console output."""
         job = job_factory(warmup_code=["block1", "block2"])
-        job.py_env.console = ["out1", "out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["out1", "out2"])
         set_warmup_positions(job, [1, 2])  # block0->1 line, block1->1 line
 
         result = job.get_next_prompt()
@@ -2178,7 +2179,7 @@ class TestJobGetNextPromptWithWarmup:
     def test_warmup_multi_block_prompt_excludes_earlier_blocks(self, job_factory):
         """Earlier warmup block outputs are NOT in the prompt (they're in chat_history)."""
         job = job_factory(warmup_code=["block1", "block2"])
-        job.py_env.console = ["out1", "out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["out1", "out2"])
         set_warmup_positions(job, [1, 2])
 
         result = job.get_next_prompt()
@@ -2194,7 +2195,7 @@ class TestJobGetChatHistoryWithWarmup:
     def test_warmup_no_chat_log_single_block(self, job_factory):
         """One warmup block, no LLM turns: [asst(code), user(console)]."""
         job = job_factory(warmup_code="x = 1")
-        job.py_env.console = ["warmup output"]
+        job.py_env = seed_pyenv(job.py_env, console=["warmup output"])
         set_warmup_positions(job, [1])
 
         history = list(job.get_chat_history())
@@ -2210,7 +2211,7 @@ class TestJobGetChatHistoryWithWarmup:
     def test_warmup_no_chat_log_two_blocks(self, job_factory):
         """Two warmup blocks: [asst1, user1, asst2, user2]."""
         job = job_factory(warmup_code=["block1", "block2"])
-        job.py_env.console = ["out1", "out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["out1", "out2"])
         set_warmup_positions(job, [1, 2])
 
         history = list(job.get_chat_history())
@@ -2226,7 +2227,7 @@ class TestJobGetChatHistoryWithWarmup:
     def test_warmup_with_chat_log(self, job_factory):
         """Warmup followed by an LLM turn: [asst_w, user_w, asst_llm, user_llm]."""
         job = job_factory(warmup_code="x = 1")
-        job.py_env.console = ["warmup out", "post-warmup out"]
+        job.py_env = seed_pyenv(job.py_env, console=["warmup out", "post-warmup out"])
         set_warmup_positions(job, [1])
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp1"))
 
@@ -2270,7 +2271,7 @@ class TestJobGetChatHistoryWithWarmup:
         )
         item.tool_log = ["private/calendar.svg"]
         job.chat_log.append(item)
-        job.py_env.console = ["private/calendar.svg"]
+        job.py_env = seed_pyenv(job.py_env, console=["private/calendar.svg"])
 
         history = list(job.get_chat_history())
 
@@ -2281,7 +2282,7 @@ class TestJobGetChatHistoryWithWarmup:
     def test_warmup_not_in_subsequent_messages(self, job_factory):
         """Warmup code does not appear in console items after the first LLM turn."""
         job = job_factory(warmup_code="x = 1")
-        job.py_env.console = ["warmup out", "after-first-llm"]
+        job.py_env = seed_pyenv(job.py_env, console=["warmup out", "after-first-llm"])
         set_warmup_positions(job, [1])
         job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp1"))
 
@@ -2297,7 +2298,7 @@ class TestJobGetChatHistoryWithWarmup:
         """Hidden warmup code and console output are excluded from LLM-facing history."""
         hidden = CodeBlock(code="hidden_setup()", metadata={"hidden": True})
         job = job_factory(warmup_code=[hidden, "visible_setup()"])
-        job.py_env.console = ["hidden output", "visible output"]
+        job.py_env = seed_pyenv(job.py_env, console=["hidden output", "visible output"])
         set_warmup_positions(job, [1, 2])
 
         history = list(job.get_next_request()["chat_history"])
@@ -2344,7 +2345,7 @@ class TestJobGetChatHistoryWithWarmup:
         """Provider preview payloads do not contain hidden warmup content."""
         hidden = CodeBlock(code="hidden_setup()", metadata={"hidden": True})
         job = job_factory(warmup_code=[hidden, "visible_setup()"])
-        job.py_env.console = ["hidden output", "visible output"]
+        job.py_env = seed_pyenv(job.py_env, console=["hidden output", "visible output"])
         set_warmup_positions(job, [1, 2])
         request = job.get_next_request()
         history = list(request["chat_history"])
@@ -3140,13 +3141,13 @@ class TestJobHandleReminder:
     def test_recurring_reminder_is_processed(self, job_factory):
         """RecurringReminder appends console text and records a ReminderLogItem."""
         job = job_factory()
-        job.py_env.console = ["existing"]
+        job.py_env = seed_pyenv(job.py_env, console=["existing"])
         reminder = RecurringReminder(text="Use report_outcome.")
 
         processed = job.handle_reminder(reminder)
 
         assert processed is True
-        assert job.py_env.console == ["existing", "Use report_outcome."]
+        assert list(job.py_env.iter_console()) == ["existing", "Use report_outcome."]
         assert len(job.chat_log) == 1
         assert isinstance(job.chat_log[0], ReminderLogItem)
         assert job.chat_log[0].console_pos == 1
@@ -3160,7 +3161,7 @@ class TestJobHandleReminder:
         processed = job.handle_reminder(reminder)
 
         assert processed is False
-        assert job.py_env.console is None
+        assert not list(job.py_env.iter_console())
         assert job.chat_log == []
 
 
@@ -3446,7 +3447,7 @@ class TestTextNotificationHistory:
         job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="print('after send')"))
         notification = NotificationLogItem(console_pos=0, message="hello", tool_log="hello")
         job._pending_notifications().append(notification)
-        job.py_env.console = ["after send"]
+        job.py_env = seed_pyenv(job.py_env, console=["after send"])
 
         assert job._process_pending_notifications() is True
         assert notification.console_pos == 1
@@ -3479,7 +3480,7 @@ class TestSendNotification:
         job = job_factory()
         job.set_status(status)
         job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp=None))
-        job.py_env.console = ["previous output"]
+        job.py_env = seed_pyenv(job.py_env, console=["previous output"])
         job.py_env.exit_status = None
         job.next_instr_num = 3
         future = FutureResult(deps=job, state_num=0)
@@ -3492,7 +3493,7 @@ class TestSendNotification:
         assert job.next_instr_num == 3
         assert job.py_env.exit_status is None
         assert len(job.chat_log) == 1
-        assert list(job.py_env.console) == ["previous output"]
+        assert list(list(job.py_env.iter_console())) == ["previous output"]
         item = job._pending_notifications()[0]
         assert isinstance(item, NotificationLogItem)
         assert item.message == "Żółw\nexit('not code')"
@@ -3505,7 +3506,7 @@ class TestSendNotification:
         """A completed job resumes without stale exit status or an extra user turn."""
         job = job_factory()
         job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="pass"))
-        job.py_env.console = ["old output"]
+        job.py_env = seed_pyenv(job.py_env, console=["old output"])
         job.set_status(JobStatus.DONE)
         job.py_env.exit_status = "finished"
 
@@ -3581,7 +3582,7 @@ class TestGetNextRequestUserMessages:
     def test_str_in_chat_log_yields_initial_user_item(self, job_factory):
         """A leading str entry in chat_log becomes the initial USER item."""
         job = job_factory()
-        job.py_env.console = ["Out1", "Out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2"])
         job.chat_log.append("initial user message")
         job.chat_log.append(
             create_chat_log_item(console_pos=0, llm_resp="Response 1"))
@@ -3604,7 +3605,7 @@ class TestGetNextRequestUserMessages:
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
         )
-        job.py_env.console = ["Out1", "Out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2"])
         job.chat_log.append("initial user message")
         job.chat_log.append(
             create_chat_log_item(console_pos=0, llm_resp="Response 1"))
@@ -3617,7 +3618,7 @@ class TestGetNextRequestUserMessages:
     def test_user_log_item_in_chat_log_yields_user_item(self, job_factory):
         """A UserLogItem in chat_log is yielded as a USER ChatHistoryItem."""
         job = job_factory()
-        job.py_env.console = ["Out1", "Out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2"])
         job.chat_log.append(
             create_chat_log_item(console_pos=0, llm_resp="Response 1"))
         job.chat_log.append(UserLogItem(message="user follow-up"))
@@ -3667,7 +3668,7 @@ class TestGetNextRequestUserMessages:
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
         )
-        job.py_env.console = ["Out1", "Out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2"])
         job.chat_log.append(
             create_chat_log_item(console_pos=0, llm_resp="Response 1"))
         job.chat_log.append(UserLogItem(message="user follow-up"))
@@ -3681,7 +3682,7 @@ class TestGetNextRequestUserMessages:
     def test_multiple_user_log_items_after_llm(self, job_factory):
         """Multiple UserLogItem follow-ups after LLM turns are all yielded."""
         job = job_factory()
-        job.py_env.console = ["Out1"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1"])
         job.chat_log.append(
             create_chat_log_item(console_pos=0, llm_resp="R1"))
         job.chat_log.append(UserLogItem(message="msg1"))
@@ -3700,7 +3701,7 @@ class TestGetNextRequestUserMessages:
     def test_user_messages_preserve_normal_history(self, job_factory):
         """Assistant history is preserved when user messages exist."""
         job = job_factory()
-        job.py_env.console = ["Out1", "Out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2"])
         job.chat_log.append(
             create_chat_log_item(console_pos=0, llm_resp="Response 1"))
         job.chat_log.append(UserLogItem(message="user msg"))
@@ -3722,7 +3723,7 @@ class TestGetNextRequestUserMessages:
             job_def=job_def, model_family="test",
             model="test-model", job_status=JobStatus.READY,  # pylint: disable=no-member
         )
-        job.py_env.console = ["Out1", "Out2"]
+        job.py_env = seed_pyenv(job.py_env, console=["Out1", "Out2"])
         job.chat_log.append(
             create_chat_log_item(console_pos=0, llm_resp="Response 1"))
         job.chat_log.append(UserLogItem(message="user follow-up"))
@@ -3775,7 +3776,7 @@ class TestGetResponseTimes:
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)
         job.push_user_message("initial")
-        job.py_env.push_log = {0: ["context", "more context"]}
+        job.py_env = seed_pyenv(job.py_env, push_log={0: ["context", "more context"]})
         before = [(item.role, item.content) for item in job.get_chat_history()]
         with record_response_delivery(job):
             pass
@@ -4019,9 +4020,9 @@ class TestGetChatResponses:
     def test_answer_tool_log_console_output_is_yielded(self, job_factory):
         """Console answer tool logs expose only their message body."""
         job = job_factory()
-        job.py_env.console = [
+        job.py_env = seed_pyenv(job.py_env, console=[
             "log: answer(body='Brak dyzurow w przyszlym tygodniu.', media=None)",
-        ]
+        ])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="answer(...)"))
 
         assert list(job.get_chat_responses()) == [
@@ -4033,11 +4034,11 @@ class TestGetChatResponses:
         """Answer logs are yielded at their console position between LLM turns."""
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)
-        job.py_env.console = [
+        job.py_env = seed_pyenv(job.py_env, console=[
             "log: answer(body='from first turn', media=None)",
             "ordinary console output",
             "log: answer(body='from second turn', media=None)",
-        ]
+        ])
         job.chat_log.append(create_chat_log_item(
             console_pos=0,
             llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
@@ -4053,10 +4054,10 @@ class TestGetChatResponses:
     def test_non_answer_tool_log_console_output_is_not_yielded(self, job_factory):
         """Only answer tool logs are treated as chat responses."""
         job = job_factory()
-        job.py_env.console = [
+        job.py_env = seed_pyenv(job.py_env, console=[
             "log: search('alice', limit=5)",
             "log: answer(body='done', media=None)",
-        ]
+        ])
         job.chat_log.append(create_chat_log_item(console_pos=0, llm_resp="internal"))
 
         assert list(job.get_chat_responses()) == ["internal", "done"]
@@ -4085,10 +4086,10 @@ class TestGetDialog:
         job = job_factory()
         job.job_def.set_chat_style(ChatStyle.DIRECT)
         job.chat_log.append("question")
-        job.py_env.console = [
+        job.py_env = seed_pyenv(job.py_env, console=[
             "log: search('alice')",
             "log: answer(body='tool answer', media=None)",
-        ]
+        ])
         job.chat_log.append(create_chat_log_item(
             console_pos=0,
             llm_resp=CodeBlock(tool_calls=[CallSpec(id="c1", func_name="python_cli")]),
@@ -4268,7 +4269,7 @@ class TestGetLlmStepSizes:
     def test_console_and_user_message_counted_in_next_step_input(self, job_factory):
         """Console output and user messages between steps count in next step's input."""
         job = job_factory()
-        job.py_env.console = ["console_line"]
+        job.py_env = seed_pyenv(job.py_env, console=["console_line"])
         msg = "follow-up"
         item1 = create_chat_log_item(console_pos=0, llm_resp="resp1")
         user_item = UserLogItem(message=msg, timestamp=datetime.now())

@@ -4,6 +4,7 @@
 
 import pytest
 
+
 from statek.executors.example import (
     Example, extract_example, format_example, parse_example, _WARMUP_SEPARATOR,
 )
@@ -11,7 +12,7 @@ from statek.executors.job import Job, JobDef, JobStatus, TaskDifficulty
 from statek.agents.agent import Agent
 from statek.prompt_config import make_system_prompt
 from statek.settings import ChatStyle
-from tests.conftest import create_chat_log_item
+from tests.conftest import create_chat_log_item, seed_pyenv
 
 
 def _example(warmup_items, example_items, metadata=None) -> Example:
@@ -31,7 +32,7 @@ def _job_with_warmup():
                   _metadata={'MODEL': 'test-model'}, _tools=[])
     job_def = JobDef(agent=agent, warmup_code="setup = True")
     job = Job(job_def=job_def, model_family="t", model="t", job_status=JobStatus.READY)
-    job.py_env.console = ["True", "after_llm"]
+    job.py_env = seed_pyenv(job.py_env, console=["True", "after_llm"])
     job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="result = 42"))
     return job
 
@@ -110,7 +111,7 @@ def test_roundtrip_markdown_with_warmup_and_metadata():
 def test_roundtrip_from_real_job(job_factory):
     """Round-trip starting from an actual extracted job example."""
     job = job_factory()
-    job.py_env.console = ["warmup_line", "exec_line", "result_line"]
+    job.py_env = seed_pyenv(job.py_env, console=["warmup_line", "exec_line", "result_line"])
     job.chat_log.append(create_chat_log_item(console_pos=1, llm_resp="resp1 = 1"))
     job.chat_log.append(create_chat_log_item(console_pos=2, llm_resp="resp2 = 2"))
 

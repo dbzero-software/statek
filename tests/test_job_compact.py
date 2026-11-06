@@ -6,19 +6,19 @@ import pytest
 from statek.executors.chat_log_item import LLM_LogItem, UserLogItem, WarmupLogItem
 from statek.executors.forked_job import ForkedJob
 from statek.executors.job import JobCompactionResult, JobSummary, StateSummary, PyHandleDesc
-from tests.conftest import DB0_DIR
+from tests.conftest import DB0_DIR, seed_pyenv
 
 
 def test_register_summary_preserves_raw_history_and_state(job_factory):
     job = job_factory(warmup_code='setup()')
     job.chat_log = [UserLogItem('request'), WarmupLogItem(0),
                     LLM_LogItem(1, llm_resp='old()'), LLM_LogItem(2, llm_resp='recent()')]
-    job.py_env.console = ['ready', 'old output', 'recent output']
+    job.py_env = seed_pyenv(job.py_env, console=['ready', 'old output', 'recent output'])
     job.add_locals(handle=42, new=1)
     summary = JobSummary('request', 'old action', state=StateSummary({PyHandleDesc('handle')}))
     raw = list(job.get_chat_history(compacted=False))
     status = job.status
-    console = list(job.py_env.console)
+    console = list(job.py_env.iter_console())
     history = job.get_chat_history()
     assert job.compact(2, 1, summary) is None
     record = job._Job__job_summaries
@@ -30,8 +30,8 @@ def test_register_summary_preserves_raw_history_and_state(job_factory):
     assert 'old action' in contents[3]
     assert contents[-2:] == ['recent()', 'recent output']
     assert list(job.get_chat_history(compacted=False)) == raw
-    assert list(job.py_env.console) == console
-    assert dict(job.py_env.local_state) == {'handle': 42, 'new': 1}
+    assert list(job.py_env.iter_console()) == console
+    assert dict(job.py_env.iter_locals()) == {'handle': 42, 'new': 1}
     assert job.status == status
     assert job.get_diff_locals() == {'new'}
 

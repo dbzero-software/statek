@@ -113,7 +113,7 @@ async def test_hook_failure_is_critical(job_factory, llm_turn, worker):
             await job_worker(asyncio.Semaphore(1), job)
             assert job.status == JobStatus.DONE
             assert job.error is not None
-            assert any('hook failure' in line for line in job.py_env.console)
+            assert any('hook failure' in line for line in job.py_env.iter_console())
             notify.assert_called_once_with(error)
         else:
             with pytest.raises(ValueError, match='hook failure'):

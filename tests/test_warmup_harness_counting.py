@@ -6,11 +6,12 @@ from typing import Callable
 import dbzero as db0
 import pytest
 
+
 from statek.executors.job import Job, JobStatus
 from statek.executors.chat_log_item import LLM_LogItem, ToolError, WarmupLogItem
 from statek.llm_harness import LLM_Harness
 from statek.pyenv import Error, ErrorKind
-from tests.conftest import DB0_DIR
+from tests.conftest import DB0_DIR, seed_pyenv
 
 
 @pytest.fixture
@@ -27,9 +28,9 @@ def make_job(job_def_factory):
         for item in chat_log_items:
             job.chat_log.append(item)
         if exceptions:
-            job.py_env.exceptions = {
+            job.py_env = seed_pyenv(job.py_env, exceptions={
                 key: Error(ErrorKind.EXECUTION, message) for key, message in exceptions.items()
-            }
+            })
         return job
     return _make
 
@@ -96,8 +97,8 @@ class TestExceptionCountExcludesWarmup:
 
         job.console_append(message, error=Error(ErrorKind.HARNESS, message))
 
-        assert job.py_env.exceptions[3].message == message
-        assert job.py_env.exceptions[3].kind == ErrorKind.HARNESS
+        assert job.py_env.get_exception(3).message == message
+        assert job.py_env.get_exception(3).kind == ErrorKind.HARNESS
         assert job.exception_count == 3
         assert job.max_consecutive_exceptions == 2
 
@@ -120,8 +121,8 @@ class TestExceptionCountExcludesWarmup:
             expected[len(expected)] = message
             job.console_append(message, error=Error(ErrorKind.HARNESS, message))
 
-        assert {key: error.message for key, error in job.py_env.exceptions.items()} == expected
-        assert list(job.py_env.console) == list(expected.values())
+        assert {key: error.message for key, error in job.py_env.iter_exceptions()} == expected
+        assert list(list(job.py_env.iter_console())) == list(expected.values())
         assert job.exception_count == int(with_execution_error)
         assert job.max_consecutive_exceptions == int(with_execution_error)
 
@@ -150,7 +151,7 @@ class TestExceptionCountExcludesWarmup:
         job.console_append("output")
         job.console_append("first", error=Error(ErrorKind.EXECUTION, "same error"))
         job.console_append("second", error=Error(ErrorKind.EXECUTION, "same error"))
-        assert {key: error.message for key, error in job.py_env.exceptions.items()} == {
+        assert {key: error.message for key, error in job.py_env.iter_exceptions()} == {
             1: "same error", 2: "same error",
         }
         assert job.exception_count == 2
@@ -184,10 +185,10 @@ class TestExceptionCountExcludesWarmup:
         db0.init(DB0_DIR, read_write=True)
         db0.open("test_prefix", "rw")
         restored = db0.fetch(job_id)
-        assert list(restored.py_env.console) == [message, message]
-        assert restored.py_env.exceptions[0].kind == ErrorKind.HARNESS
-        assert restored.py_env.exceptions[1].kind == ErrorKind.EXECUTION
-        assert [error.message for error in restored.py_env.exceptions.values()] == [
+        assert list(list(restored.py_env.iter_console())) == [message, message]
+        assert restored.py_env.get_exception(0).kind == ErrorKind.HARNESS
+        assert restored.py_env.get_exception(1).kind == ErrorKind.EXECUTION
+        assert [error.message for error in dict(restored.py_env.iter_exceptions()).values()] == [
             message, message,
         ]
         assert restored.exception_count == 1

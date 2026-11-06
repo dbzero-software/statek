@@ -18,6 +18,7 @@ from statek.llm_api import Claude_API, OpenAI_API, OpenRouter_API, VertexAI_API
 from statek.prompt_config import make_system_prompt
 from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 from statek.settings import LLM_API_Settings
+from statek.pyenv import PyEnv
 from statek.utils import _statek_ctx_scope
 
 TEST_FILES_DIR_ROOT = os.path.join(os.getcwd(), "__test_files")
@@ -294,11 +295,20 @@ class StatekContextJob:
 
     class _PyEnv:
         def __init__(self):
-            self.local_state = {}
+            self._local_state = {}
+
+        def get_local(self, name, default=None):
+            return self._local_state.get(name, default)
+
+        def update_state(self, **kwargs):
+            self._local_state.update(kwargs)
+
+        def iter_locals(self):
+            yield from self._local_state.items()
 
         @property
         def perm_ctx(self):
-            return self.local_state.get("_PERM_CTX")
+            return self.get_local("_PERM_CTX")
 
     def __init__(self):
         self.py_env = self._PyEnv()
@@ -353,3 +363,20 @@ def mock_tools():
         'docstr': docstr,
         'exit_tool': exit_tool
     }
+
+
+def seed_pyenv(env, **collections):
+    """Build fixture state through constructor inputs while retaining other fields."""
+    values = {
+        "global_state": dict(env.iter_globals()) if env.has_global_state else None,
+        "local_state": dict(env.iter_locals()),
+        "console": list(env.iter_console()),
+        "exceptions": dict(env.iter_exceptions()),
+        "push_log": dict(env.iter_push_log()),
+        "next_instr_id": env.next_instr_id,
+        "warmup_block_num": env.warmup_block_num,
+        "exit_status": env.exit_status,
+        "future_result": env.future_result,
+    }
+    values.update(collections)
+    return PyEnv(**values)

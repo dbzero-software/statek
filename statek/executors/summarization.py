@@ -107,7 +107,7 @@ def push_summarization_instr(job: Job) -> None:
     """
     names = json.dumps(sorted(job.get_diff_locals()))
     job._append_chat_log_item(SystemLogItem(  # pylint: disable=protected-access
-        console_pos=len(job.py_env.console or []),
+        console_pos=job.py_env.console_len,
         message=_SUMMARIZATION_INSTRUCTION + names,
     ))
 
@@ -177,9 +177,7 @@ def parse_summarization_result(job: Job) -> JobSummary:
     response = item.llm_resp
     if isinstance(response, CodeBlock) and response.tool_calls:
         raise ValueError('Summarization response must not contain tool calls')
-    text = getattr(item, 'raw_response_text', None)
-    if text is None:
-        text = response.code if isinstance(response, CodeBlock) else response
+    text = response.code if isinstance(response, CodeBlock) else response
     if not isinstance(text, str) or not text.strip():
         raise ValueError('Missing or empty summarization response text')
     text = text.strip()

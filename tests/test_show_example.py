@@ -267,7 +267,7 @@ def test_show_example_sets_last_example_id(capsys, examples_dir):
         _show_example_with_job(job, agent_name="myagent", example_id=0)
 
     capsys.readouterr()
-    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 0
+    assert job.py_env.get_local("_PERM_CTX")["last_example_id"] == 0
 
 
 def test_show_example_default_id_sets_last_example_id(capsys, examples_dir):
@@ -282,7 +282,7 @@ def test_show_example_default_id_sets_last_example_id(capsys, examples_dir):
         _show_example_with_job(job, agent_name="myagent", example_id=None)
 
     capsys.readouterr()
-    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 0
+    assert job.py_env.get_local("_PERM_CTX")["last_example_id"] == 0
 
 
 def test_show_example_syncs_last_example_id_to_current_job(
@@ -298,13 +298,13 @@ def test_show_example_syncs_last_example_id_to_current_job(
         run_with_statek_job(job, lambda: show_example(agent_name="myagent", example_id=0))
 
     capsys.readouterr()
-    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 0
+    assert job.py_env.get_local("_PERM_CTX")["last_example_id"] == 0
 
 
 def test_show_example_missing_id_does_not_overwrite_last_example_id(capsys, examples_dir):
     """Failed lookups do not replace the previous successful example trace."""
     job = StatekContextJob()
-    job.py_env.local_state["_PERM_CTX"] = {"last_example_id": 7}
+    job.py_env.update_state(**{"_PERM_CTX": {"last_example_id": 7}})
     settings = _settings(
         examples_dir=examples_dir,
         chat_style=ChatStyle.CONSOLE,  # pylint: disable=no-member
@@ -313,7 +313,7 @@ def test_show_example_missing_id_does_not_overwrite_last_example_id(capsys, exam
         _show_example_with_job(job, agent_name="myagent", example_id=99)
 
     capsys.readouterr()
-    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 7
+    assert job.py_env.get_local("_PERM_CTX")["last_example_id"] == 7
 
 
 # --- Agent.get_examples ---
@@ -485,8 +485,8 @@ def test_show_example_records_donor_source_and_raises_job_difficulty(
         )
 
     capsys.readouterr()
-    assert job.py_env.local_state["_PERM_CTX"]["last_example_id"] == 2
-    assert job.py_env.local_state["_PERM_CTX"]["last_example_source"] == {
+    assert job.py_env.get_local("_PERM_CTX")["last_example_id"] == 2
+    assert job.py_env.get_local("_PERM_CTX")["last_example_source"] == {
         "agent_name": "preferences_assistant", "example_id": 0,
     }
     with patch("statek.agents.list_of_examples.get_statek_settings", return_value=settings):

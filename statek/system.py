@@ -398,7 +398,7 @@ def _wrap_subtask_result(result: Any, task_id: Optional[Any]) -> Any:
     if isinstance(result, SubTaskHandler):
         if result.id is None and task_id is not None:
             result.id = task_id
-        if result.job.py_env.local_state.get("sub_task_handler") is not result:
+        if result.job.py_env.get_local("sub_task_handler") is not result:
             result.job.add_locals(sub_task_handler=result)
         return result
     if isinstance(result, Job):

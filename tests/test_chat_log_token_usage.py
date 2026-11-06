@@ -123,7 +123,7 @@ async def test_missing_card_prevents_tool_side_effects(job_factory):
     job = job_factory(model="openai//missing-estimate", warmup_code="side_effect = 1")
     with pytest.raises(ValueError, match="missing-estimate"):
         await run_job_step(job)
-    assert "side_effect" not in job.py_env.local_state
+    assert "side_effect" not in dict(job.py_env.iter_locals())
     assert not job.chat_log
 
 
@@ -132,11 +132,17 @@ def test_fork_preserves_estimate_and_card(estimated_job):
     item = LLM_LogItem(0, llm_resp="x" * 400)
     job._append_chat_log_item(item)
     fork = ForkedJob(job, 1)
-    copied = fork.chat_log[0]
-    assert copied.est_token_usage == item.est_token_usage == 105
-    copied.push_tool_result("y" * 400)
-    assert copied.est_token_usage == card.est_token_count(copied)[1] == 210
-    assert item.est_token_usage == 105
+    inherited = fork.chat_log[0]
+    assert db0.uuid(inherited) == db0.uuid(item)
+    assert inherited.est_token_usage == item.est_token_usage == 105
+    item.push_tool_result("y" * 400)
+    assert inherited.est_token_usage == card.est_token_count(inherited)[1] == 210
+    local = LLM_LogItem(0, llm_resp="z" * 400)
+    fork._append_chat_log_item(local)
+    local.push_tool_result("w" * 800)
+    assert local.est_token_usage == card.est_token_count(local)[1] == 315
+    assert item.est_token_usage == 210
+    assert len(job.chat_log) == 1
 
 
 def test_warmup_estimate_excludes_job_source(estimated_job):
@@ -161,7 +167,7 @@ async def test_cli_estimate_survives_suspension_and_reopen(estimated_job):
     job.set_status(JobStatus.STARTED)
     future = FutureResult(db0.dict({"ready": False, "value": "resumed" * 100}), 0)
     future.set_complement_functions(complement=_future_value, condition=_future_ready)
-    job.py_env.local_state["pending"] = future
+    job.py_env.update_state(pending=future)
     item = LLM_LogItem(0, llm_resp=CodeBlock(tool_calls=[CallSpec(
         "cli", "python_cli", kwargs={
             "code": "print('partial' * 100)\nprint(pending)\nexit('done')",
@@ -178,7 +184,7 @@ async def test_cli_estimate_survives_suspension_and_reopen(estimated_job):
     db0.open("test_prefix", "rw")
     job = db0.fetch(identifier)
     item = job.chat_log[-1]
-    job.py_env.local_state["pending"].deps["ready"] = True
+    job.py_env.get_local("pending").deps["ready"] = True
     assert await run_job_step(job)
     assert "resumed" * 100 in item.tool_log[0]
     assert item.est_token_usage == item._token_estimation_card.est_token_count(item)[1]

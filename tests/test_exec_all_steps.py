@@ -2,6 +2,7 @@
 
 import pytest
 
+
 from statek.executors.utils import exec_all_steps
 from statek.exceptions import FutureError
 from statek.utils import CodeBlock, CallSpec
@@ -9,6 +10,7 @@ from tests.test_exec_step import (
     create_future_not_ready, create_future_ready,
     get_value, get_value_not_ready,
 )
+from tests.conftest import seed_pyenv
 
 
 DEFAULT_JOB_PARAMS = {"goal": "Test goal"}
@@ -27,7 +29,7 @@ class TestExecAllSteps:
         job = self.create_job(job_factory)
         result = await exec_all_steps('x = 42', job, lambda idx, s: None)
         assert result is False
-        assert job.py_env.local_state.get('x') == 42
+        assert job.py_env.get_local('x') == 42
 
     @pytest.mark.asyncio
     async def test_code_block_code_runs_via_exec_step(self, job_factory):
@@ -36,7 +38,7 @@ class TestExecAllSteps:
         block = CodeBlock(code='print("hello")', tool_calls=[])
         result = await exec_all_steps(block, job, lambda idx, s: None)
         assert result is False
-        assert job.py_env.console == ["hello"]
+        assert list(job.py_env.iter_console()) == ["hello"]
 
     @pytest.mark.asyncio
     async def test_cli_tool_calls_routed_to_callback(self, job_factory):
@@ -56,7 +58,7 @@ class TestExecAllSteps:
         block = CodeBlock(code='exit("done")', tool_calls=[cs])
         result = await exec_all_steps(block, job, lambda idx, s: None)
         assert result is True
-        assert job.py_env.local_state.get('y') is None
+        assert job.py_env.get_local('y') is None
 
     @pytest.mark.asyncio
     async def test_exit_in_cli_step(self, job_factory):
@@ -71,7 +73,7 @@ class TestExecAllSteps:
     async def test_future_error_in_cli_step_has_tuple_instr_num(self, job_factory):
         """FutureError from a CLI step carries (cli_step_index, instr_num) tuple."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
+        job.py_env.update_state(get_value_not_ready=get_value_not_ready)
         cs = CallSpec(id="1", func_name="python_cli",
                       kwargs={"code": "result = get_value_not_ready()\nprint(result)"})
         block = CodeBlock(code=None, tool_calls=[cs])
@@ -88,7 +90,7 @@ class TestExecAllSteps:
         cs_cli = CallSpec(id="2", func_name="python_cli", kwargs={"code": 'x = 1'})
         block = CodeBlock(code=None, tool_calls=[cs_regular, cs_cli])
         await exec_all_steps(block, job, lambda idx, s: None)
-        assert job.py_env.local_state.get('x') == 1
+        assert job.py_env.get_local('x') == 1
 
     @pytest.mark.asyncio
     async def test_continuation_with_int_instr_num(self, job_factory):
@@ -97,7 +99,7 @@ class TestExecAllSteps:
         block = CodeBlock(code='x = 1\nx = 2', tool_calls=[])
         await exec_all_steps(block, job, lambda idx, s: None, instr_num=1)
         # Skipped x=1, only ran x=2
-        assert job.py_env.local_state.get('x') == 2
+        assert job.py_env.get_local('x') == 2
 
     @pytest.mark.asyncio
     async def test_continuation_with_tuple_instr_num(self, job_factory):
@@ -107,8 +109,8 @@ class TestExecAllSteps:
         block = CodeBlock(code='x = 99', tool_calls=[cs])
         # Continue from cli step 0, instruction 1 (skip b=2, run b=3)
         await exec_all_steps(block, job, lambda idx, s: None, instr_num=(0, 1))
-        assert job.py_env.local_state.get('x') is None  # regular code skipped
-        assert job.py_env.local_state.get('b') == 3      # resumed at instr 1
+        assert job.py_env.get_local('x') is None  # regular code skipped
+        assert job.py_env.get_local('b') == 3      # resumed at instr 1
 
     @pytest.mark.asyncio
     async def test_cli_expression_output_routed_to_callback(self, job_factory):
@@ -127,7 +129,7 @@ class TestExecAllSteps:
     async def test_future_error_in_cli_step(self, job_factory):
         """FutureError in a CLI step carries a (cli_step_index, instr_num) tuple."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'get_value_not_ready': get_value_not_ready}
+        job.py_env.update_state(get_value_not_ready=get_value_not_ready)
         cs = CallSpec(id="a", func_name="python_cli",
                       kwargs={"code": "result = get_value_not_ready()\nprint(result)"})
         block = CodeBlock(code=None, tool_calls=[cs])
@@ -141,7 +143,7 @@ class TestExecAllSteps:
     async def test_continuation_resumes_blocked_cli_step(self, job_factory):
         """Tuple instr_num resumes at the correct instruction within a CLI step."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'future_val': create_future_not_ready()}
+        job.py_env = seed_pyenv(job.py_env, local_state={'future_val': create_future_not_ready()})
         cs = CallSpec(id="a", func_name="python_cli",
                       kwargs={"code": "b = 2\nprint(future_val)"})
         block = CodeBlock(code=None, tool_calls=[cs])
@@ -150,10 +152,10 @@ class TestExecAllSteps:
         with pytest.raises(FutureError) as exc_info:
             await exec_all_steps(block, job, lambda idx, s: None)
         assert exc_info.value.instr_num == (0, 1)
-        assert job.py_env.local_state.get('b') == 2
+        assert job.py_env.get_local('b') == 2
 
         # Replace with ready future and resume
-        job.py_env.local_state['future_val'] = create_future_ready(77)
+        job.py_env.update_state(**{'future_val': create_future_ready(77)})
         outputs = []
         await exec_all_steps(block, job,
                              lambda idx, s: outputs.append((idx, s)),
@@ -164,7 +166,7 @@ class TestExecAllSteps:
     async def test_ready_temporal_in_cli_step(self, job_factory):
         """A ready temporal function in a CLI step produces output normally."""
         job = self.create_job(job_factory)
-        job.py_env.local_state = {'get_value': get_value}
+        job.py_env = seed_pyenv(job.py_env, local_state={'get_value': get_value})
         cs = CallSpec(id="1", func_name="python_cli",
                       kwargs={"code": "result = get_value()\nresult"})
         block = CodeBlock(code=None, tool_calls=[cs])
@@ -211,7 +213,7 @@ class TestSingleCliCallLimit:
 
         await exec_all_steps(block, job, lambda idx, s: None)
 
-        assert job.py_env.local_state.get('x') == 42
+        assert job.py_env.get_local('x') == 42
 
     @pytest.mark.asyncio
     async def test_no_code_executed_on_violation(self, job_factory):
@@ -224,5 +226,5 @@ class TestSingleCliCallLimit:
         with pytest.raises(ValueError):
             await exec_all_steps(block, job, lambda idx, s: None)
 
-        assert job.py_env.local_state.get('x') is None
-        assert job.py_env.local_state.get('y') is None
+        assert job.py_env.get_local('x') is None
+        assert job.py_env.get_local('y') is None

@@ -29,7 +29,7 @@ def result_text():
 
 
 def append_result(job, text):
-    job.chat_log.append(LLM_LogItem(len(job.py_env.console or []), llm_resp=text))
+    job.chat_log.append(LLM_LogItem(job.py_env.console_len, llm_resp=text))
 
 
 @pytest.mark.parametrize('separate_source', [False, True])
@@ -44,8 +44,7 @@ def test_success_preserves_previous_summary_and_target_state(job_factory, separa
     assert job in list(db0.find(SummarizationJob, db0.as_tag(target)))
     assert job in list(db0.find(SummarizationJob, db0.as_tag(source)))
     assert list(job.chat_log) == list(source.chat_log[:2])
-    job.chat_log[1].llm_resp = 'independent'
-    assert source.chat_log[1].llm_resp == 'old action'
+    assert db0.uuid(job.chat_log[1]) == db0.uuid(source.chat_log[1])
     append_result(job, result_text())
     assert job.post_turn_hook() is None
     assert job.status == JobStatus.DONE
@@ -86,7 +85,7 @@ def test_invalid_result_can_be_corrected(job_factory):
     assert target._Job__job_summaries is None
     assert isinstance(job.chat_log[-1], SystemLogItem)
     assert 'ValueError: state.locals is missing' in job.chat_log[-1].message
-    assert job.chat_log[-1].console_pos == len(job.py_env.console or [])
+    assert job.chat_log[-1].console_pos == job.py_env.console_len
     assert list(job.get_next_request()['chat_history'])[-1].content == job.chat_log[-1].message
     assert job.get_next_code_block() is None
     append_result(job, result_text())
@@ -162,10 +161,14 @@ async def test_execution_engine_retries_without_executing_json(job_factory, styl
     target.set_status(JobStatus.SUSPENDED)
     job = SummarizationJob(target, 2, target_job=target, chat_log_pos=1, chat_log_len=1)
     push_summarization_instr(job)
+    summary_response = result_text()
+    if style in ('MARKDOWN', 'MD_DIALOG'):
+        # These styles retain only Python-fenced text as plain llm_resp.
+        summary_response = f'```python\n{summary_response}\n```'
     api = MagicMock()
     api.process_request = AsyncMock(side_effect=[
         LLM_Response(LLM_StepData(text, None), LLM_Stats(0, 0, None))
-        for text in ('invalid', result_text())])
+        for text in ('invalid', summary_response)])
     with patch('statek.executors.utils.LLM_API.get', return_value=api), \
          patch('statek.executors.utils.get_llm_harness', return_value=MagicMock()), \
          patch('statek.executors.utils.handle_dialog', new_callable=AsyncMock), \

@@ -88,7 +88,7 @@ def _extract_warmup_items(job: Job) -> List[str]:
 
     blocks = [warmup_code] if isinstance(warmup_code, str) else list(warmup_code)
 
-    console = job.py_env.console or []
+    console = list(job.py_env.iter_console())
     first_llm = next((item for item in job.chat_log if isinstance(item, LLM_LogItem)), None)
     warmup_console_end = first_llm.console_pos if first_llm else len(console)
     positions = job._warmup_end_positions()
@@ -373,7 +373,7 @@ def _parse_console_items(content: str) -> List[str]:
 
 
 def _extract_example_items(job: Job) -> List[str]:
-    console = job.py_env.console or []
+    console = list(job.py_env.iter_console())
 
     if not job.chat_log:
         return []

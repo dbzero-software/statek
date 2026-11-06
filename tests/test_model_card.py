@@ -135,7 +135,7 @@ def test_est_token_count_all_log_types(db0_fixture, job_factory):
                                  tool_log="ignored"), ""),
         (UserLogItem(message="hello"), "hello"),
         (LLM_LogItem(0, llm_resp="response", tool_log="result",
-                     raw_response_text="duplicate", cumulative_token_usage=999),
+                     cumulative_token_usage=999),
          "responseresult"),
         (LLM_LogItem(0), ""),
         (WarmupLogItem(0), ""),

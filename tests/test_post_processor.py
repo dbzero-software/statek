@@ -5,6 +5,7 @@
 import dbzero as db0
 import pytest
 
+
 from statek.chat_history import ChatRole, ContentSource, format_chat_history_item
 from statek.agents.agent import SupervisedAgent
 from statek.agents.dialog_agent import DialogAgent
@@ -23,6 +24,7 @@ from statek.llm_api import CallParams, LLM_StepData
 from statek.prompt_config import make_system_prompt
 from statek.settings import ChatStyle
 from statek.task import create_new_job
+from tests.conftest import seed_pyenv
 
 
 pytestmark = pytest.mark.usefixtures("test_model_cards")
@@ -486,7 +488,7 @@ def test_post_processed_item_delimits_previous_console_output(db0_fixture):
         job_def=JobDef(agent=agent, metadata={"MODEL": "test-model"}),
         job_status=JobStatus.READY,
     )
-    job.py_env.console = ["Out 1", "Out 2", "Out 3"]
+    job.py_env = seed_pyenv(job.py_env, console=["Out 1", "Out 2", "Out 3"])
     job.chat_log.append(LLM_LogItem(console_pos=0, llm_resp="First response"))
     job.chat_log.append(PostProcessedItem(
         console_pos=2,
@@ -546,7 +548,7 @@ def test_handle_post_processor_value_equal_replacement_activates(db0_fixture):
 def test_handle_post_processor_message_only_suppresses_llm_step(db0_fixture):
     """A string result records a system message and drops the current LLM step."""
     job = _job()
-    job.py_env.console = ["existing output"]
+    job.py_env = seed_pyenv(job.py_env, console=["existing output"])
     processor = StaticReturnPostProcessor("Review the draft answer.")
 
     result = job.handle_post_processor(
