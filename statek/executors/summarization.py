@@ -20,6 +20,7 @@ import re
 
 import dbzero as db0
 
+from statek.executors.token_estimation import get_token_estimation_card
 from statek.executors.chat_log_item import LLM_LogItem, SystemLogItem, UserLogItem
 from statek.executors.job import Job, JobSummary, StateSummary, PyHandleDesc
 from statek.utils import CodeBlock
@@ -54,7 +55,7 @@ def get_compaction_scope(job: Job, split_rate: float = 0.9) -> int:
         if isinstance(item, str):
             if item:
                 if card is None:
-                    card = job._get_token_estimation_card()  # pylint: disable=protected-access
+                    card = get_token_estimation_card(job)
                 total += card.est_token_count(item)[1]
         else:
             total += getattr(item, "est_token_usage", 0)

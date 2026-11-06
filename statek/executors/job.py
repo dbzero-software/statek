@@ -81,7 +81,7 @@ from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.model_pricing import get_model_pricing
-from statek.model_card import get_model_card
+from statek.executors.token_estimation import refresh_token_usage
 from statek.compaction_threshold import DEFAULT_COMPACTION_THRESHOLD, parse_compaction_threshold
 from statek.settings import get_statek_settings, ChatStyle
 from statek.executors.post_processor import (
@@ -780,7 +780,7 @@ class Job:
         if (self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG)
                 and self.chat_log and isinstance(self.chat_log[0], str)):
             initial_message = UserLogItem(self.chat_log[0], self.created_at)
-            self._refresh_token_usage(initial_message)
+            refresh_token_usage(self, initial_message)
             self.chat_log[0] = initial_message
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
@@ -988,7 +988,7 @@ class Job:
             item.console_pos = console_pos
             if isinstance(item, NotificationLogItem) and item.tool_log is None:
                 item.tool_log = format_default_llm_repr([item])
-            self._refresh_token_usage(item)
+            refresh_token_usage(self, item)
         self.chat_log.extend(pending)
         self.record_activity()
         self.__pending_chat_log = []
@@ -2201,49 +2201,11 @@ class Job:
         propagate to the worker, which terminates the job with an error.
         """
 
-    def _get_token_estimation_card(
-        self, item: Optional[Union[ChatLogItem, UserLogItem]] = None, model=None, provider=None,
-    ):
-        """Resolve a card without creating one or changing the job's difficulty."""
-        card = getattr(item, "_token_estimation_card", None)
-        if card is None:
-            metadata = self.job_def.metadata or {}
-            if model is None:
-                difficulty = None
-                if _is_model_mapping(metadata.get("MODEL")):
-                    difficulty = (getattr(self, "_Job__last_difficulty", None)
-                                  or _get_static_task_difficulty(metadata))
-                    if isinstance(item, LLM_LogItem) and item.llm_resp is not None:
-                        difficulty = (item.request_difficulty
-                                      or _get_static_task_difficulty(metadata))
-                model = self.get_current_model(difficulty=difficulty)
-            if model is None:
-                raise ValueError("Cannot estimate chat-log tokens: model is not configured")
-            provider, model_id, family = self._model_identity(model, provider=provider)
-            card = get_model_card(provider, model_id, family, no_create=True)
-            if card is None:
-                raise ValueError(f"Missing model card for {provider or 'UNKNOWN'}/{model_id}")
-        return card
-
-    def _refresh_token_usage(
-        self, item: Union[ChatLogItem, UserLogItem], model=None, provider=None,
-    ) -> None:
-        """Store the high estimate, retaining originating cards for tool-result updates."""
-        if isinstance(item, DifficultyChangeLogItem):
-            item.est_token_usage = 0
-            return
-        card = self._get_token_estimation_card(item, model=model, provider=provider)
-        # Validate before binding or appending, so failure leaves the log unchanged.
-        estimate = card.est_token_count(item)[1]
-        if isinstance(item, ChatLogItem):
-            item._token_estimation_card = card  # pylint: disable=protected-access
-        item.est_token_usage = estimate
-
     def _append_chat_log_item(
         self, item: Union[ChatLogItem, UserLogItem], model=None, provider=None,
     ) -> None:
         """Append a new item only after its stored token estimate is available."""
-        self._refresh_token_usage(item, model=model, provider=provider)
+        refresh_token_usage(self, item, model=model, provider=provider)
         self.chat_log.append(item)
 
     def append_chat_log(

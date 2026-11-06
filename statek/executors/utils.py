@@ -34,6 +34,7 @@ from statek.future import FutureResult
 
 from statek.exceptions import FutureError
 from statek.future import FutureResult
+from statek.executors.token_estimation import get_token_estimation_card
 from statek.executors.job import (
     Job,
     JobStatus,
@@ -1085,8 +1086,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
         last_chat_log_item = job.last_chat_log_item
+        card = None
         if isinstance(last_chat_log_item, ChatLogItem):
-            job._refresh_token_usage(last_chat_log_item)  # pylint: disable=protected-access
+            card = get_token_estimation_card(job, last_chat_log_item)
+            last_chat_log_item.refresh_token_usage(card)
 
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
             # Pre-allocate tool_log slots aligned 1-to-1 with the full
@@ -1103,7 +1106,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 result, error = await exec_tool(call_spec, job, local_context=dict(local_context))
                 if last_chat_log_item is not None:
                     last_chat_log_item.set_tool_result(j,
-                        ToolError(err_message=error) if error is not None else result
+                        ToolError(err_message=error) if error is not None else result, card=card
                     )
                     job.record_activity()
                 job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
@@ -1164,7 +1167,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                         j = cli_tool_log_positions[cli_idx]
                         if j < len(last_chat_log_item.tool_log):
                             last_chat_log_item.set_tool_result(j,
-                                ToolError(err_message=error) if error else joined
+                                ToolError(err_message=error) if error else joined, card=card
                             )
                             job.record_activity()
 

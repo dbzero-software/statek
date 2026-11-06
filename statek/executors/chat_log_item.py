@@ -46,45 +46,46 @@ class ChatLogItem:
     timestamp: datetime = field(default_factory=datetime.now)
     # Conservative estimate of this item's currently stored LLM-facing content.
     est_token_usage: int = field(default=0, kw_only=True)
-    # Retain the originating model across tool execution and persisted continuations.
-    _token_estimation_card: Optional["ModelCard"] = field(
-        default=None, kw_only=True, repr=False, compare=False,
-    )
 
-    def refresh_token_usage(self) -> None:
-        """Refresh configured items; legacy standalone items remain usable."""
-        card = getattr(self, "_token_estimation_card", None)
+    def refresh_token_usage(self, card: Optional["ModelCard"] = None) -> None:
+        """Refresh the stored estimate only when a card is explicitly provided."""
         if card is not None:
             self.est_token_usage = card.est_token_count(self)[1]
 
-    def set_tool_result(self, tool_call_id: int, tool_result: Union[str, ToolError]) -> None:
-        """Replace an existing result while keeping its token estimate current."""
+    def set_tool_result(
+        self, tool_call_id: int, tool_result: Union[str, ToolError],
+        card: Optional["ModelCard"] = None,
+    ) -> None:
+        """Replace a result and refresh its estimate if a card is provided."""
         self.get_tool_result(tool_call_id)
         if isinstance(self.tool_log, (str, ToolError)):
             self.tool_log = tool_result
         else:
             self.tool_log[tool_call_id] = tool_result
-        self.refresh_token_usage()
+        self.refresh_token_usage(card)
 
-    def push_tool_result(self, tool_result: Union[str, ToolError]) -> int:
+    def push_tool_result(
+        self, tool_result: Union[str, ToolError], card: Optional["ModelCard"] = None,
+    ) -> int:
         """Append a tool result or error to tool_log and return its index.
 
         Args:
             tool_result: the tool-generated result string, or ToolError on failure
+            card: optional model card used only to refresh this result's estimate
 
         Returns:
             The index of the appended result within tool_log.
         """
         if self.tool_log is None:
             self.tool_log = tool_result
-            self.refresh_token_usage()
+            self.refresh_token_usage(card)
             return 0
         if isinstance(self.tool_log, str) or isinstance(self.tool_log, ToolError):
             self.tool_log = [self.tool_log, tool_result]
-            self.refresh_token_usage()
+            self.refresh_token_usage(card)
             return 1
         self.tool_log.append(tool_result)
-        self.refresh_token_usage()
+        self.refresh_token_usage(card)
         return len(self.tool_log) - 1
 
     def get_tool_result(self, tool_call_id: int) -> Union[str, ToolError]:

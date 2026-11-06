@@ -1,6 +1,7 @@
 """Stored conservative estimates follow appends and tool-result updates."""
 # pylint: disable=no-member,protected-access,unused-argument,redefined-outer-name
 
+from dataclasses import fields
 from unittest.mock import AsyncMock, patch
 
 import dbzero as db0
@@ -16,6 +17,7 @@ from statek.executors.job import Job, JobStatus
 from statek.executors.post_processor import FinalCheck
 from statek.executors.summarization import push_summarization_instr
 from statek.executors.utils import run_job_step
+from statek.executors.token_estimation import get_token_estimation_card, refresh_token_usage
 from statek.llm_api import LLM_Response, LLM_StepData, LLM_Stats
 from statek.model_card import get_model_card, set_model_card
 from statek.future import FutureResult
@@ -46,6 +48,8 @@ def estimated_job(job_factory):
 
 def test_field_preserves_positional_constructors(db0_fixture):
     item = LLM_LogItem(12, "result", llm_resp="response")
+    assert "_token_estimation_card" not in {field.name for field in fields(ChatLogItem)}
+    assert not hasattr(item, "_token_estimation_card")
     assert item.est_token_usage == 0
     assert item.llm_resp == "response"
 
@@ -55,9 +59,9 @@ def test_append_and_update_use_high_bound(estimated_job):
     item = LLM_LogItem(0, llm_resp="x" * 400)
     job._append_chat_log_item(item)
     assert item.est_token_usage == 105
-    item.push_tool_result("y" * 400)
+    item.push_tool_result("y" * 400, card=card)
     assert item.est_token_usage == 210
-    item.set_tool_result(0, ToolError("z" * 800))
+    item.set_tool_result(0, ToolError("z" * 800), card=card)
     assert item.est_token_usage == card.est_token_count(item)[1] == 315
 
 
@@ -77,15 +81,42 @@ def test_invalid_card_fails_before_append(estimated_job):
     assert not job.chat_log
 
 
-def test_llm_request_model_is_retained_for_refresh(estimated_job):
-    job, _ = estimated_job
-    card = set_model_card("openrouter", "family/model", "family", token_to_bytes=2)
+def test_llm_request_model_only_used_for_initial_estimate(estimated_job):
+    job, card = estimated_job
+    request_card = set_model_card("openrouter", "family/model", "family", token_to_bytes=2)
     response = LLM_Response(LLM_StepData(text="x" * 400, call_requests=[]), LLM_Stats(0, 0, None))
     job.append_chat_log({"model": "openrouter/family/model"}, response)
     item = job.chat_log[-1]
     assert item.est_token_usage == 210
-    item.push_tool_result("y" * 400)
-    assert item.est_token_usage == card.est_token_count(item)[1] == 420
+    # Simulate the obsolete field on an existing persisted record.
+    item._token_estimation_card = request_card
+    refresh_token_usage(job, item)
+    assert item.est_token_usage == card.est_token_count(item)[1] == 105
+    replacement = set_model_card("openai", "replacement", token_to_bytes=8)
+    job.job_def.metadata["MODEL"] = "openai//replacement"
+    refresh_token_usage(job, item)
+    assert item.est_token_usage == replacement.est_token_count(item)[1] == 53
+
+
+def test_refresh_uses_request_difficulty_after_escalation(estimated_job):
+    job, low_card = estimated_job
+    high_card = set_model_card("openai", "high-estimate", token_to_bytes=2)
+    job.job_def.metadata["MODEL"] = {
+        TaskDifficulty.low: "openai//estimate-test",
+        TaskDifficulty.medium: "openai//high-estimate",
+        TaskDifficulty.high: "openai//high-estimate",
+    }
+    job.job_def.metadata["DEFAULT_DIFFICULTY"] = "low"
+    default_item = LLM_LogItem(0, llm_resp="x" * 400)
+    high_item = LLM_LogItem(0, llm_resp="x" * 400, request_difficulty=TaskDifficulty.high)
+    job._append_chat_log_item(default_item)
+    job._append_chat_log_item(high_item)
+    job.panic()
+    refresh_token_usage(job, default_item)
+    refresh_token_usage(job, high_item)
+    assert default_item.est_token_usage == low_card.est_token_count(default_item)[1] == 105
+    assert high_item.est_token_usage == high_card.est_token_count(high_item)[1] == 210
+    assert get_token_estimation_card(job) == high_card
 
 
 def test_notification_reminder_postprocessor_and_summary(estimated_job):
@@ -102,7 +133,8 @@ def test_notification_reminder_postprocessor_and_summary(estimated_job):
 
 
 @pytest.mark.asyncio
-async def test_regular_and_cli_results_refresh_estimate(estimated_job):
+@pytest.mark.parametrize("error", [None, "lookup failed" * 100])
+async def test_regular_and_cli_results_refresh_estimate(estimated_job, error):
     job, card = estimated_job
     job.set_status(JobStatus.STARTED)
     item = LLM_LogItem(0, llm_resp=CodeBlock(tool_calls=[
@@ -111,9 +143,17 @@ async def test_regular_and_cli_results_refresh_estimate(estimated_job):
     ]))
     job._append_chat_log_item(item)
     before = item.est_token_usage
-    with patch("statek.executors.utils.exec_tool", new=AsyncMock(return_value=("y" * 400, None))):
+    with patch("statek.executors.utils.exec_tool",
+               new=AsyncMock(return_value=("y" * 400, error))), patch(
+        "statek.executors.token_estimation.get_model_card", wraps=get_model_card,
+    ) as resolve_card:
         assert await run_job_step(job)
-    assert item.tool_log[0] == "y" * 400
+    resolve_card.assert_called_once()
+    if error is None:
+        assert item.tool_log[0] == "y" * 400
+    else:
+        assert isinstance(item.tool_log[0], ToolError)
+        assert item.tool_log[0].err_message == error
     assert "x" * 400 in item.tool_log[1]
     assert item.est_token_usage == card.est_token_count(item)[1] > before
 
@@ -127,7 +167,24 @@ async def test_missing_card_prevents_tool_side_effects(job_factory):
     assert not job.chat_log
 
 
-def test_fork_preserves_estimate_and_card(estimated_job):
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [False, True])
+async def test_dynamic_card_validation_prevents_tool_side_effects(estimated_job, invalid):
+    job, _ = estimated_job
+    job.set_status(JobStatus.STARTED)
+    item = LLM_LogItem(0, llm_resp=CodeBlock(tool_calls=[CallSpec("regular", "lookup")]))
+    job._append_chat_log_item(item)
+    job.job_def.metadata["MODEL"] = "openai//unusable"
+    if invalid:
+        set_model_card("openai", "unusable", token_to_bytes=0)
+    with patch("statek.executors.utils.exec_tool", new=AsyncMock()) as execute:
+        with pytest.raises(ValueError, match="token_to_bytes" if invalid else "unusable"):
+            await run_job_step(job)
+    execute.assert_not_awaited()
+    assert item.tool_log is None
+
+
+def test_fork_preserves_estimate_with_explicit_card(estimated_job):
     job, card = estimated_job
     item = LLM_LogItem(0, llm_resp="x" * 400)
     job._append_chat_log_item(item)
@@ -135,30 +192,34 @@ def test_fork_preserves_estimate_and_card(estimated_job):
     inherited = fork.chat_log[0]
     assert db0.uuid(inherited) == db0.uuid(item)
     assert inherited.est_token_usage == item.est_token_usage == 105
-    item.push_tool_result("y" * 400)
+    item.push_tool_result("y" * 400, card=card)
     assert inherited.est_token_usage == card.est_token_count(inherited)[1] == 210
     local = LLM_LogItem(0, llm_resp="z" * 400)
     fork._append_chat_log_item(local)
-    local.push_tool_result("w" * 800)
+    local.push_tool_result("w" * 800, card=card)
     assert local.est_token_usage == card.est_token_count(local)[1] == 315
     assert item.est_token_usage == 210
     assert len(job.chat_log) == 1
 
 
 def test_warmup_estimate_excludes_job_source(estimated_job):
-    job, _ = estimated_job
+    job, card = estimated_job
     item = WarmupLogItem(0)
     job._append_chat_log_item(item)
     assert item.est_token_usage == 0
-    item.push_tool_result("x" * 400)
+    item.push_tool_result("x" * 400, card=card)
     assert item.est_token_usage == 105
 
 
 def test_legacy_item_tool_results_remain_usable(db0_fixture):
-    item = ChatLogItem(0)
+    item = ChatLogItem(0, est_token_usage=123)
+    item._token_estimation_card = set_model_card("openai", "legacy", token_to_bytes=0)
     item.push_tool_result("legacy result")
     assert item.get_tool_result(0) == "legacy result"
-    assert item.est_token_usage == 0
+    item.set_tool_result(0, ToolError("legacy error"))
+    item.push_tool_result("second result")
+    item.refresh_token_usage()
+    assert item.est_token_usage == 123
 
 
 @pytest.mark.asyncio
@@ -184,10 +245,12 @@ async def test_cli_estimate_survives_suspension_and_reopen(estimated_job):
     db0.open("test_prefix", "rw")
     job = db0.fetch(identifier)
     item = job.chat_log[-1]
+    card = set_model_card("openai", "resumed-estimate", token_to_bytes=8)
+    job.job_def.metadata["MODEL"] = "openai//resumed-estimate"
     job.py_env.get_local("pending").deps["ready"] = True
     assert await run_job_step(job)
     assert "resumed" * 100 in item.tool_log[0]
-    assert item.est_token_usage == item._token_estimation_card.est_token_count(item)[1]
+    assert item.est_token_usage == card.est_token_count(item)[1]
 
 
 def test_subtask_notification_estimates(estimated_job, job_factory):
