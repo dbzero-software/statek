@@ -1126,6 +1126,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Step 7: Handle FutureError and suspend the job
             job.awaited_result = e.future_result
             job.next_instr_num = e.instr_num
+            db0.tags(job).add("TEMPORAL")
             # Change status STARTED -> SUSPENDED (no change for WARMING_UP)
             if job.status == JobStatus.STARTED:
                 job.set_status(JobStatus.SUSPENDED)
@@ -1393,9 +1394,9 @@ def process_agent_events(
                 processed += 1
 
 
-def unsuspend_jobs():
+def unsuspend_temporal_jobs():
     """
-    Review waiting jobs and release continuations whose criteria are satisfied.
+    Review TEMPORAL-tagged waiting jobs and release satisfied continuations.
     
     Ordinary suspended jobs transition to STARTED when released. Warmup jobs retain
     WARMING_UP so execution can continue in the active warmup block.
@@ -1403,7 +1404,7 @@ def unsuspend_jobs():
     Note: This implementation might be slow for a large number of waiting jobs.
     Future versions will introduce a more robust Notifier engine and job expiration conditions.
     """
-    waiting_jobs = db0.find(Job, [JobStatus.SUSPENDED, JobStatus.WARMING_UP])
+    waiting_jobs = db0.find(Job, [JobStatus.SUSPENDED, JobStatus.WARMING_UP], "TEMPORAL")
     for job in waiting_jobs:
         _release_ready_continuation(job)
 
@@ -1481,7 +1482,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     pending_tasks = {}  # Dict[Job, asyncio.Task]
     semaphore = asyncio.Semaphore(max_concurrency)
     while True:
-        unsuspend_jobs()
+        unsuspend_temporal_jobs()
 
         process_push_notifications(queue_prefixes=queue_prefixes)
 

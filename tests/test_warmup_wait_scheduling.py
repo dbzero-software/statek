@@ -9,9 +9,9 @@ import dbzero as db0
 import pytest
 
 from statek.exceptions import FutureError
-from statek.executors.chat_log_item import WarmupLogItem
+from statek.executors.chat_log_item import LLM_LogItem, WarmupLogItem
 from statek.executors.job import Job, JobStatus
-from statek.executors.utils import run_job_step, run_jobs_loop, unsuspend_jobs
+from statek.executors.utils import run_job_step, run_jobs_loop, unsuspend_temporal_jobs
 from statek.future import FutureResult
 
 
@@ -161,10 +161,83 @@ class TestWarmupWaitReadiness:
         )
         job.awaited_result = future
         job.next_instr_num = 0
+        db0.tags(job).add("TEMPORAL")
 
-        unsuspend_jobs()
+        unsuspend_temporal_jobs()
 
         assert job.status == JobStatus.STARTED
         assert job.awaited_result is None
         assert job.next_instr_num == 0
         assert wait_state.condition_checks == 1
+
+
+@pytest.mark.parametrize("status", [JobStatus.SUSPENDED, JobStatus.WARMING_UP])
+def test_untagged_wait_is_not_checked(job_factory, status):
+    """Non-temporal waits must remain owned by the mechanism that suspended them."""
+    job = job_factory()
+    job.set_status(status)
+    state = WaitState(ready=True)
+    future = _controlled_future(state)
+    job.awaited_result = future
+    job.next_instr_num = 3
+
+    unsuspend_temporal_jobs()
+
+    assert job.status == status
+    assert job.awaited_result is future
+    assert job.next_instr_num == 3
+    assert state.condition_checks == 0
+
+
+@pytest.mark.parametrize("status", [JobStatus.SUSPENDED, JobStatus.WARMING_UP])
+def test_tagged_unready_wait_is_checked_but_not_released(job_factory, status):
+    job = job_factory()
+    job.set_status(status)
+    state = WaitState()
+    future = _controlled_future(state)
+    job.awaited_result = future
+    db0.tags(job).add("TEMPORAL")
+
+    unsuspend_temporal_jobs()
+
+    assert job.status == status
+    assert job.awaited_result is future
+    assert state.condition_checks == 1
+
+
+@pytest.mark.parametrize("status", [JobStatus.READY, JobStatus.STARTED, JobStatus.DONE])
+def test_temporal_jobs_outside_waiting_states_are_not_checked(job_factory, status):
+    job = job_factory()
+    job.set_status(status)
+    state = WaitState(ready=True)
+    future = _controlled_future(state)
+    job.awaited_result = future
+    db0.tags(job).add("TEMPORAL")
+
+    unsuspend_temporal_jobs()
+
+    assert job.status == status
+    assert job.awaited_result is future
+    assert state.condition_checks == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_status", [JobStatus.READY, JobStatus.STARTED])
+async def test_temporal_suspension_adds_a_persistent_tag(job_def_factory, initial_status):
+    state = WaitState()
+    job = Job(job_def=job_def_factory(warmup_code="result = future_value"),
+              job_status=initial_status)
+    job.py_env.local_state["future_value"] = _controlled_future(state)
+    if initial_status == JobStatus.STARTED:
+        job.chat_log.append(LLM_LogItem(0, llm_resp="result = future_value"))
+
+    assert await run_job_step(job) is False
+    assert job in list(db0.find(Job, "TEMPORAL"))
+    waiting_status = job.status
+    state.ready = True
+    unsuspend_temporal_jobs()
+
+    assert job.awaited_result is None
+    assert job.status == (JobStatus.STARTED if waiting_status == JobStatus.SUSPENDED
+                          else JobStatus.WARMING_UP)
+    assert job in list(db0.find(Job, "TEMPORAL"))
