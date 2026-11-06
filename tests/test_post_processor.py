@@ -27,6 +27,9 @@ from statek.task import create_new_job
 from tests.conftest import seed_pyenv
 
 
+pytestmark = pytest.mark.usefixtures("test_model_cards")
+
+
 @db0.memo
 class IdentityPostProcessor(PostProcessor):
     """Minimal concrete post-processor for identity tests."""

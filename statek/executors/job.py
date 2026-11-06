@@ -81,6 +81,8 @@ from statek.future import FutureResult
 from statek.locale import get_language_rule, get_language_hint
 from statek.model_name import ensure_model_name, format_model_for_provider, select_model_provider
 from statek.model_pricing import get_model_pricing
+from statek.executors.token_estimation import refresh_token_usage
+from statek.compaction_threshold import DEFAULT_COMPACTION_THRESHOLD, parse_compaction_threshold
 from statek.settings import get_statek_settings, ChatStyle
 from statek.executors.post_processor import (
     PostProcessor,
@@ -477,6 +479,7 @@ def _job_def_identity_hash(
     post_processing,
     provider_config=None,
     extra_resources=None,
+    compaction_threshold=DEFAULT_COMPACTION_THRESHOLD,
 ) -> str:
     payload = (
         warmup_code,
@@ -489,6 +492,9 @@ def _job_def_identity_hash(
         provider_config_identity(provider_config),
         extra_resources_identity(extra_resources),
     )
+    # Keep legacy identity tags valid for definitions using the default threshold.
+    if compaction_threshold != DEFAULT_COMPACTION_THRESHOLD:
+        payload += (compaction_threshold,)
     encoded = str(payload).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:4]
 
@@ -503,11 +509,13 @@ def _job_def_identity_tag(
     post_processing=None,
     provider_config=None,
     extra_resources=None,
+    compaction_threshold=DEFAULT_COMPACTION_THRESHOLD,
 ) -> str:
-    return (
-        f"{_JOBDEF_HASH_TAG_PREFIX}"
-        f"{_job_def_identity_hash(warmup_code, model_family, model, job_params, locale, chat_style, post_processing, provider_config, extra_resources)}"
+    identity_hash = _job_def_identity_hash(
+        warmup_code, model_family, model, job_params, locale, chat_style,
+        post_processing, provider_config, extra_resources, compaction_threshold,
     )
+    return f"{_JOBDEF_HASH_TAG_PREFIX}{identity_hash}"
 
 
 def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
@@ -522,6 +530,7 @@ def job_def_identity_tag_for_job_def(job_def: "JobDef") -> str:
         job_def.post_processing,
         job_def.provider_config,
         job_def.extra_resources,
+        getattr(job_def, "compaction_threshold", DEFAULT_COMPACTION_THRESHOLD),
     )
 
 
@@ -550,6 +559,8 @@ class JobDef:
     provider_config: Optional[ProviderConfig] = None
     # Incremental prompt resource additions at L/M/H, kept out of LLM metadata.
     extra_resources: Optional[ExtraResources] = None
+    # Fraction of the model context window; None disables automatic compaction.
+    compaction_threshold: Optional[float] = DEFAULT_COMPACTION_THRESHOLD
 
     def __post_init__(self):
         if self.metadata is None:
@@ -559,6 +570,9 @@ class JobDef:
                 else {}
             )
 
+        self.compaction_threshold = parse_compaction_threshold(
+            self.metadata.get("COMPACTION_THRESHOLD", self.compaction_threshold)
+        )
         resources = self.extra_resources
         if resources is None:
             resources = extra_resources_from_metadata(self.metadata)
@@ -676,6 +690,14 @@ class JobDef:
             self.post_processing = stored_post_processing(post_processing)
             self._sync_identity_hash_tag(old_tag)
 
+    def set_compaction_threshold(self, compaction_threshold: Optional[float]) -> None:
+        """Validate a new threshold and update the definition's lookup identity."""
+        threshold = parse_compaction_threshold(compaction_threshold)
+        if getattr(self, "compaction_threshold", DEFAULT_COMPACTION_THRESHOLD) != threshold:
+            old_tag = job_def_identity_tag_for_job_def(self)
+            self.compaction_threshold = threshold
+            self._sync_identity_hash_tag(old_tag)
+
     @property
     def chat_style(self) -> Optional[ChatStyle]:
         """Return the job-level chat style, or fall back to the system default from StatekSettings."""
@@ -757,7 +779,9 @@ class Job:
         self.created_at = created_at or datetime.now()
         if (self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG)
                 and self.chat_log and isinstance(self.chat_log[0], str)):
-            self.chat_log[0] = UserLogItem(self.chat_log[0], self.created_at)
+            initial_message = UserLogItem(self.chat_log[0], self.created_at)
+            refresh_token_usage(self, initial_message)
+            self.chat_log[0] = initial_message
         # Registered error handlers (ErrorHandler instances)
         self.error_handlers: List[ErrorHandler] = []
         # The last dynamically-resolved difficulty level in this task.
@@ -964,6 +988,7 @@ class Job:
             item.console_pos = console_pos
             if isinstance(item, NotificationLogItem) and item.tool_log is None:
                 item.tool_log = format_default_llm_repr([item])
+            refresh_token_usage(self, item)
         self.chat_log.extend(pending)
         self.record_activity()
         self.__pending_chat_log = []
@@ -982,7 +1007,7 @@ class Job:
             item.tool_log = str(handler)
 
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
-            self.chat_log.append(item)
+            self._append_chat_log_item(item)
             self.record_activity()
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
             self.py_env.exit_status = None
@@ -1002,7 +1027,7 @@ class Job:
         )
         item.tool_log = format_default_llm_repr([item])
         if self.status == JobStatus.DONE:  # pylint: disable=no-member
-            self.chat_log.append(item)
+            self._append_chat_log_item(item)
             self.record_activity()
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
             self.py_env.exit_status = None
@@ -1012,12 +1037,15 @@ class Job:
 
     def _current_model_pricing(self):
         """Return pricing for the concrete model used by the current LLM request."""
+        return get_model_pricing(*self._model_identity(self.get_current_model()))
+
+    def _model_identity(self, raw_model, provider=None):
+        """Resolve one shared provider/model/family identity for pricing and cards."""
         metadata = self.job_def.metadata or {}
-        raw_model = self.get_current_model()
         provider = select_model_provider(
             raw_model,
             default_provider=(
-                metadata.get("PROVIDER")
+                provider or metadata.get("PROVIDER")
                 or get_statek_settings().default_llm_api_provider
             ),
         )
@@ -1025,7 +1053,7 @@ class Job:
         model = format_model_for_provider(raw_model, provider) if provider else model_name.model
         provider_key = provider.upper() if provider else None
         model_family = model_name.model_family if provider_key == "OPENROUTER" else None
-        return get_model_pricing(provider or "UNKNOWN", model or "", model_family)
+        return provider or "UNKNOWN", model or "", model_family
 
     def _sync_usage_pricing(self) -> None:
         """Keep persisted usage objects priced against the current concrete model."""
@@ -2173,6 +2201,13 @@ class Job:
         propagate to the worker, which terminates the job with an error.
         """
 
+    def _append_chat_log_item(
+        self, item: Union[ChatLogItem, UserLogItem], model=None, provider=None,
+    ) -> None:
+        """Append a new item only after its stored token estimate is available."""
+        refresh_token_usage(self, item, model=model, provider=provider)
+        self.chat_log.append(item)
+
     def append_chat_log(
         self,
         request: Dict,
@@ -2247,7 +2282,10 @@ class Job:
             cumulative_token_usage=(self.approx_token_usage if cumulative_token_usage is None
                                     else cumulative_token_usage),
         )
-        self.chat_log.append(chat_item)
+        self._append_chat_log_item(
+            chat_item, model=request.get("model"),
+            provider=(request.get("metadata") or {}).get("PROVIDER"),
+        )
         self.record_activity()
 
         # Log the LLM response in the same format sent back as history
@@ -2266,7 +2304,7 @@ class Job:
             return False
 
         console_pos = self.py_env.console_len
-        self.chat_log.append(ReminderLogItem(
+        self._append_chat_log_item(ReminderLogItem(
             console_pos=console_pos,
             reminder=reminder,
         ))
@@ -2299,7 +2337,7 @@ class Job:
             return result, result is not llm_step
 
         if isinstance(result, str):
-            self.chat_log.append(PostProcessedItem(
+            self._append_chat_log_item(PostProcessedItem(
                 console_pos=self.py_env.console_len,
                 post_processor=post_processor,
                 message=result,
@@ -2321,7 +2359,7 @@ class Job:
                 continue
 
             if isinstance(item, str):
-                self.chat_log.append(PostProcessedItem(
+                self._append_chat_log_item(PostProcessedItem(
                     console_pos=self.py_env.console_len,
                     post_processor=post_processor,
                     message=item,
@@ -2897,9 +2935,9 @@ class Job:
 
         if self.job_def.chat_style in (ChatStyle.MD_DIALOG, ChatStyle.DIRECT):  # pylint: disable=no-member
             if not self.chat_log:
-                self.chat_log.append(UserLogItem(message=message, timestamp=self.created_at))
+                self._append_chat_log_item(UserLogItem(message=message, timestamp=self.created_at))
             else:
-                self.chat_log.append(UserLogItem(message=message))
+                self._append_chat_log_item(UserLogItem(message=message))
         else:
             self.py_env.push_append(message)
         self.record_activity()
@@ -2909,7 +2947,7 @@ class Job:
             self.num_completions = 1 if self.num_completions is None else self.num_completions + 1
             self.set_status(JobStatus.STARTED)  # pylint: disable=no-member
             self.py_env.exit_status = None
-            self.chat_log.append(LLM_LogItem(
+            self._append_chat_log_item(LLM_LogItem(
                 console_pos=self.py_env.console_len,
                 llm_resp=None
             ))

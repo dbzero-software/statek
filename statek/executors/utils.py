@@ -27,12 +27,14 @@ from contextlib import contextmanager
 import dbzero as db0
 
 from statek.exceptions import FutureError, LLM_HarnessError
+from statek.compaction_threshold import DEFAULT_COMPACTION_THRESHOLD, parse_compaction_threshold
 from statek.extra_resources import extra_resources_from_metadata, extra_resources_identity
 from statek.future import FutureResult
 
 
 from statek.exceptions import FutureError
 from statek.future import FutureResult
+from statek.executors.token_estimation import get_token_estimation_card
 from statek.executors.job import (
     Job,
     JobStatus,
@@ -1063,7 +1065,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                 console_pos=job.py_env.console_len,
                 warmup_block_num=block_num
             )
-            job.chat_log.append(warmup_log_item)
+            job._append_chat_log_item(warmup_log_item)  # pylint: disable=protected-access
             job.record_activity()
 
         # Log warmup block before execution
@@ -1084,6 +1086,10 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
         # Step 5: Execute regular tool calls (not python_cli) if present and not a continuation
         last_chat_log_item = job.last_chat_log_item
+        card = None
+        if isinstance(last_chat_log_item, ChatLogItem):
+            card = get_token_estimation_card(job, last_chat_log_item)
+            last_chat_log_item.refresh_token_usage(card)
 
         if isinstance(code, CodeBlock) and code.tool_calls and job.next_instr_num is None:
             # Pre-allocate tool_log slots aligned 1-to-1 with the full
@@ -1099,8 +1105,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                     continue  # CLI calls are executed and logged in Step 6
                 result, error = await exec_tool(call_spec, job, local_context=dict(local_context))
                 if last_chat_log_item is not None:
-                    last_chat_log_item.tool_log[j] = (
-                        ToolError(err_message=error) if error is not None else result
+                    last_chat_log_item.set_tool_result(j,
+                        ToolError(err_message=error) if error is not None else result, card=card
                     )
                     job.record_activity()
                 job._log_tool_call_result(call_spec, result)  # pylint: disable=protected-access
@@ -1127,6 +1133,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
             # Step 7: Handle FutureError and suspend the job
             job.awaited_result = e.future_result
             job.next_instr_num = e.instr_num
+            db0.tags(job).add("TEMPORAL")
             # Change status STARTED -> SUSPENDED (no change for WARMING_UP)
             if job.status == JobStatus.STARTED:
                 job.set_status(JobStatus.SUSPENDED)
@@ -1159,8 +1166,8 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
                             and cli_idx < len(cli_tool_log_positions)):
                         j = cli_tool_log_positions[cli_idx]
                         if j < len(last_chat_log_item.tool_log):
-                            last_chat_log_item.tool_log[j] = (
-                                ToolError(err_message=error) if error else joined
+                            last_chat_log_item.set_tool_result(j,
+                                ToolError(err_message=error) if error else joined, card=card
                             )
                             job.record_activity()
 
@@ -1395,9 +1402,9 @@ def process_agent_events(
                 processed += 1
 
 
-def unsuspend_jobs():
+def unsuspend_temporal_jobs():
     """
-    Review waiting jobs and release continuations whose criteria are satisfied.
+    Review TEMPORAL-tagged waiting jobs and release satisfied continuations.
     
     Ordinary suspended jobs transition to STARTED when released. Warmup jobs retain
     WARMING_UP so execution can continue in the active warmup block.
@@ -1405,7 +1412,7 @@ def unsuspend_jobs():
     Note: This implementation might be slow for a large number of waiting jobs.
     Future versions will introduce a more robust Notifier engine and job expiration conditions.
     """
-    waiting_jobs = db0.find(Job, [JobStatus.SUSPENDED, JobStatus.WARMING_UP])
+    waiting_jobs = db0.find(Job, [JobStatus.SUSPENDED, JobStatus.WARMING_UP], "TEMPORAL")
     for job in waiting_jobs:
         _release_ready_continuation(job)
 
@@ -1484,7 +1491,7 @@ async def run_jobs_loop(max_concurrency: int = 100, provider: str = None,
     pending_tasks = {}  # Dict[Job, asyncio.Task]
     semaphore = asyncio.Semaphore(max_concurrency)
     while True:
-        unsuspend_jobs()
+        unsuspend_temporal_jobs()
 
         process_push_notifications(queue_prefixes=queue_prefixes)
 
@@ -1555,6 +1562,7 @@ def find_existing_job_def(
     post_processing: object = None,
     provider_config: Optional[ProviderConfig] = None,
     extra_resources: object = _MATCH_UNSET,
+    compaction_threshold: object = _MATCH_UNSET,
 ) -> Optional[JobDef]:
     """Find an existing JobDef matching the given agent and warmup_code.
 
@@ -1563,6 +1571,7 @@ def find_existing_job_def(
         warmup_code: the warmup code to match (compared after parsing)
         extra_resources: parsed resource criterion; omitted means no filter,
             while None or an empty triple matches no additional resources
+        compaction_threshold: omitted means no filter; None matches disabled compaction
 
     Returns:
         The first matching JobDef, or None if not found
@@ -1589,9 +1598,14 @@ def find_existing_job_def(
             return False
         if extra_resources is not _MATCH_UNSET and extra_resources_identity(job_def.extra_resources) != resource_identity:
             return False
+        if (threshold is not _MATCH_UNSET
+                and getattr(job_def, "compaction_threshold", DEFAULT_COMPACTION_THRESHOLD) != threshold):
+            return False
         return True
 
     parsed = parse_warmup_code(warmup_code)
+    threshold = (parse_compaction_threshold(compaction_threshold)
+                 if compaction_threshold is not _MATCH_UNSET else _MATCH_UNSET)
     resource_identity = extra_resources_identity(extra_resources) if extra_resources is not _MATCH_UNSET else None
     agent_tag = db0.as_tag(agent)
     if (
@@ -1612,6 +1626,7 @@ def find_existing_job_def(
             post_processing,
             provider_config,
             extra_resources,
+            threshold if threshold is not _MATCH_UNSET else DEFAULT_COMPACTION_THRESHOLD,
         )
         for job_def in db0.find(JobDef, agent_tag, lookup_tag):
             if _matches(job_def):

@@ -15,6 +15,9 @@ from statek.executors.job import Job
 from statek.executors.utils import job_worker
 
 
+pytestmark = pytest.mark.usefixtures("test_model_cards")
+
+
 @pytest.mark.usefixtures("db0_fixture")
 def test_first_wait_completion_wins() -> None:
     """Later completions cannot replace the first, even with a reversed clock."""

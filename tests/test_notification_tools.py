@@ -21,6 +21,9 @@ from statek.task import SubTaskHandler
 from statek.utils import CallSpec, _statek_ctx_scope, format_tool_spec
 
 
+pytestmark = pytest.mark.usefixtures("test_model_cards")
+
+
 def test_pending_notifications_empty_and_repeatable(job_factory):
     """Reading an empty pending queue never changes the job."""
     job = job_factory()
