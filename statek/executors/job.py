@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from contextlib import contextmanager
-from datetime import datetime
 from collections import namedtuple
+from dataclasses import dataclass
+from datetime import datetime
 import hashlib
-import json
 import re
 import traceback as _traceback_module
 from typing import (
@@ -37,9 +35,13 @@ from typing import (
 )
 import dbzero as db0
 from dbzero import memo, enum
-from statek.pyenv import Error, ErrorKind, PyEnv
+from statek.pyenv import Error, PyEnv
 from statek.extra_resources import (
     ExtraResources, extra_resources_from_metadata, extra_resources_identity, normalize_extra_resources,
+)
+from statek.executors.job_history import (
+    JobHistory, HistoryStep,
+    format_job_summary as format_job_summary,
 )
 from statek.executors.llm_usage import LLM_Usage
 from statek.executors.chat_log_item import (
@@ -50,17 +52,15 @@ from statek.executors.chat_log_item import (
     PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
-    ToolError,
     WarmupLogItem,
     UserLogItem,
 )
 from statek.llm_api import LLM_API, LLM_Response, LLM_StepData
 from statek.provider_config import ProviderConfig, provider_config_identity
-from statek.chat_history import ChatHistoryItem, ChatRole, ContentSource
+from statek.chat_history import ChatHistoryItem
 from statek.utils import (
     _STATEK_TOOL_MARKER,
     CallSpec,
-    CallSpecWrapper,
     CodeBlock,
     ParsedWarmupBlock,
     _is_empty_code,
@@ -70,7 +70,6 @@ from statek.utils import (
     extract_dialog,
     get_current_job,
     format_default_llm_repr,
-    parse_tool_log,
     parse_warmup_block,
     perm_ctx_get,
     prompt_append_console,
@@ -142,50 +141,6 @@ class JobCompactionResult:
     chat_log_len: int
     job_summary: JobSummary
 
-
-def format_job_summary(job_summary: JobSummary, py_env: PyEnv,
-                       chat_style: ChatStyle) -> str:
-    """Format a compact job summary, showing only handles still in py_env."""
-    # pylint: disable=no-member
-    preamble = (
-        "Below is a summary of past communication and actions in this session. "
-        "It includes Input Summary, Output Summary, System Summary, and State "
-        "(available Python CLI handles)."
-    )
-    if chat_style in (ChatStyle.MARKDOWN, ChatStyle.DIRECT):
-        heading_prefix = "# "
-    elif chat_style in (ChatStyle.CONSOLE, ChatStyle.MD_DIALOG):
-        heading_prefix = ""
-    else:
-        raise ValueError(f"Unsupported chat style: {chat_style!r}")
-
-    descriptions = sorted(
-        job_summary.state.locals if job_summary.state else (),
-        key=lambda handle: (handle.var_name, handle.desc or ""),
-    )
-    types_by_name = py_env.resolve_locals(handle.var_name for handle in descriptions)
-    variable_lines = []
-    for handle in descriptions:
-        resolved_type = types_by_name.get(handle.var_name)
-        if resolved_type is None:
-            continue
-        line = f"    {handle.var_name} ({resolved_type.__name__})"
-        if handle.desc:
-            line += f": {handle.desc}"
-        variable_lines.append(line)
-
-    sections = [
-        f"{heading_prefix}Input Summary\n{job_summary.input_summary}",
-        f"{heading_prefix}Output Summary\n{job_summary.output_summary}",
-        f"{heading_prefix}System Summary"
-        + (f"\n{job_summary.system_summary}" if job_summary.system_summary else ""),
-        f"{heading_prefix}State\nVariables:"
-        + ("\n" + "\n".join(variable_lines) if variable_lines else ""),
-    ]
-    result = "\n\n".join([preamble, *sections])
-    if chat_style == ChatStyle.MD_DIALOG:
-        return f"<job_summary>\n{result}\n</job_summary>"
-    return result
 
 """
 READY: a fresh job instance ready for execution
@@ -378,47 +333,6 @@ def _next_task_difficulty(difficulty: TaskDifficulty) -> TaskDifficulty:
     if index >= len(values) - 1:
         raise RuntimeError(f"Job is already at high difficulty: {difficulty}")
     return values[index + 1]
-
-
-def _warmup_code_text(warmup) -> str:
-    """Return concatenated LLM-facing text of non-hidden warmup code blocks."""
-    if warmup is None:
-        return ""
-    if _is_hidden_warmup_block(warmup):
-        return ""
-    if isinstance(warmup, str):
-        return warmup
-    if isinstance(warmup, CodeBlock):
-        return warmup.code or ""
-    return "".join(
-        w if isinstance(w, str) else (w.code or "")
-        for w in warmup
-        if not _is_hidden_warmup_block(w)
-    )
-
-
-def _tool_log_text(item: Optional["LLM_LogItem"]) -> str:
-    """Return all tool log text from an LLM_LogItem as a single string."""
-    if item is None or item.tool_log is None:
-        return ""
-    tool_log = item.tool_log
-    if isinstance(tool_log, str):
-        return tool_log
-    if isinstance(tool_log, ToolError):
-        return tool_log.err_message
-    return "\n".join(tl if isinstance(tl, str) else tl.err_message for tl in tool_log)
-
-
-def _llm_resp_output_tokens(llm_resp) -> int:
-    """Approximate output token count for an LLM response."""
-    if isinstance(llm_resp, str):
-        return len(llm_resp) // 4
-    code = (llm_resp.code or "") if llm_resp else ""
-    tool_calls = list(llm_resp.tool_calls) if llm_resp and llm_resp.tool_calls else []
-    if not tool_calls:
-        return len(code) // 4
-    tool_json = json.dumps([{"name": cs.func_name, "arguments": dict(cs.kwargs or {})} for cs in tool_calls])
-    return (len(code) + len(tool_json)) // 4
 
 
 @memo
@@ -756,6 +670,11 @@ class Job:
             self._log(self.system_prompt())
 
     @property
+    def history(self) -> JobHistory:
+        """Return a non-persistent history view over this job's current state."""
+        return JobHistory(self)
+
+    @property
     def last_activity(self) -> Optional[datetime]:
         """Last conversation mutation or status transition, if recorded."""
         return getattr(self, "_Job__last_activity", None)
@@ -805,29 +724,7 @@ class Job:
         self,
     ) -> Iterable[Union[str, ChatLogItem, UserLogItem, JobSummary]]:
         """Yield committed chat history with summarized slices replaced."""
-        summaries = getattr(self, "_Job__job_summaries", None)
-        if summaries is None:
-            yield from self.chat_log
-            return
-        if isinstance(summaries, JobCompactionResult):
-            summaries = [summaries]
-        summaries = sorted(summaries, key=lambda result: result.chat_log_pos)
-
-        previous_end = 0
-        for result in summaries:
-            start = result.chat_log_pos
-            end = start + result.chat_log_len
-            if (start < previous_end or start < 0 or result.chat_log_len <= 0
-                    or end > len(self.chat_log)):
-                raise ValueError("Invalid or overlapping job summary chat-log range")
-            previous_end = end
-
-        position = 0
-        for result in summaries:
-            yield from self.chat_log[position:result.chat_log_pos]
-            yield result.job_summary
-            position = result.chat_log_pos + result.chat_log_len
-        yield from self.chat_log[position:]
+        return self.history.get_compacted_chat_log()
 
     def _pending_notifications(self) -> List[Union[SubTaskLogItem, NotificationLogItem]]:
         """Return pending chat-log notifications, initializing old jobs lazily."""
@@ -1203,32 +1100,6 @@ class Job:
                     parts.append(f"{value}{hint_suffix}")
         return "\n".join(parts)
 
-    @staticmethod
-    def _subtask_lookup_code(handler: "SubTaskHandler") -> str:
-        """Return the synthetic lookup code shown for a completed subtask."""
-        if handler.id is None:
-            return "print(find_sub_task_handler())"
-        return f"print(find_sub_task_handler(id={handler.id!r}))"
-
-    @staticmethod
-    def _subtask_tool_call(idx: int, handler: "SubTaskHandler") -> CallSpecWrapper:
-        """Return the synthetic python_cli call representing subtask result lookup."""
-        return CallSpecWrapper(
-            id=f"STATEK-SUBTASK-{idx:03d}",
-            func_name="python_cli",
-            args=None,
-            kwargs={"code": Job._subtask_lookup_code(handler)},
-        )
-
-    @staticmethod
-    def _notification_tool_call(idx: int) -> CallSpecWrapper:
-        """Return the synthetic python_cli call for one delivered text message."""
-        return CallSpecWrapper(
-            id=f"STATEK-NOTIFICATION-{idx:03d}",
-            func_name="python_cli",
-            args=None,
-            kwargs={"code": "print(get_pending_notifications())"},
-        )
 
     def iter_notification_log_items(self) -> Iterable[Tuple[str, NotificationLogItem]]:
         """Yield logged notifications paired with their synthetic history call IDs.
@@ -1236,9 +1107,7 @@ class Job:
         IDs are scoped to this job's append-only chat log. Pending notifications
         are excluded; reading this iterator does not deliver or consume them.
         """
-        for index, item in enumerate(self.chat_log):
-            if isinstance(item, NotificationLogItem):
-                yield self._notification_tool_call(index).id, item
+        return self.history.iter_notification_log_items()
 
     def get_next_prompt(self) -> str:
         """
@@ -1316,388 +1185,20 @@ class Job:
             parts = [p for p in [console_part, push_part] if p]
             return "\n".join(parts)
 
-    def _iter_chat_history(
-        self,
-        chat_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem]]] = None,
-        console: Optional[Sequence[str]] = None,
-        push_log: Optional[Dict[int, Union[str, List[str]]]] = None,
-        compacted: bool = False,
-    ) -> Iterable[ChatHistoryItem]:
-        """Yield LLM-facing chat history for the provided append-only state."""
-        compacted_log = (
-            list(self.get_compacted_chat_log())
-            if compacted and chat_log is None else None
-        )
-        chat_log = self.chat_log if chat_log is None else chat_log
-        push_log = dict(self.py_env.iter_push_log()) if push_log is None else push_log
-        console = list(self.py_env.iter_console()) if console is None else console
 
-        yield from self._build_chat_history(
-            chat_log=chat_log,
-            console=console,
-            push_log=push_log,
-            compacted_log=compacted_log,
-        )
+    def iter_history_steps(self, compacted: bool = True) -> Iterator["HistoryStep"]:
+        """Read history progressively, with source identity and bounded console slices.
 
-    def _build_chat_history(
-        self,
-        chat_log: Sequence[Union[str, ChatLogItem, UserLogItem]],
-        console: Optional[Sequence[str]],
-        push_log: Optional[Dict[int, Union[str, List[str]]]],
-        compacted_log: Optional[Sequence[Union[str, ChatLogItem, UserLogItem, JobSummary]]] = None,
-    ) -> Iterable[ChatHistoryItem]:
-        """Yield the full LLM-facing chat history as ``ChatHistoryItem`` objects.
-
-        Lazy generator producing a normalised, provider-agnostic timeline:
-
-          1. Optional USER item with the initial user message — sourced from
-             ``chat_log[0]`` (UserLogItem, set by ``push_user_message`` in
-             MD_DIALOG/DIRECT) and/or ``dict(py_env.iter_push_log())[0]``.  When neither
-             exists this slot is omitted.
-          2. Warmup blocks as alternating ASSISTANT (code or tool-call request)
-             + USER/TOOL (console output / tool result) pairs, in
-             ``warmup_block_num`` order.
-          3. The same alternating pattern for LLM turns: ASSISTANT (LLM
-             response) + USER/TOOL (console / tool result), woven together
-             with any USER messages from ``UserLogItem`` entries, SYSTEM
-             post-processor/reminder messages, and USER messages from
-             ``dict(py_env.iter_push_log())`` keyed by console position.
-
-        ``CodeBlock`` responses with ``tool_calls`` produce an ASSISTANT item
-        with ``tool_calls`` set, followed by one TOOL item per call carrying
-        its captured result.  Plain code (no tool calls) becomes an
-        ASSISTANT item with ``content`` set.  Pending LLM turns (e.g.
-        ``llm_resp=None`` after a DONE→STARTED transition) emit no assistant
-        item but still surface any preceding push_log user messages.
-
-        Yields:
-            ChatHistoryItem instances ready for ``format_chat_history_item``.
+        Captures append boundaries at call time. Existing entries are not deep-copied;
+        this is an append-bounded view, not transaction isolation from edits to entries.
+        Unlike get_chat_history, it never materializes the entire console or log.
+        Empty steps retain source identity (including hidden warmups and pending turns).
         """
-        push_log = push_log or {}
-        console = console or []
-        console_len = len(console)
-        is_direct = self.job_def.chat_style == ChatStyle.DIRECT  # pylint: disable=no-member
-        warmup = self.job_def.warmup_code
-        warmup_blocks: List[Union[str, CodeBlock]] = (
-            [warmup] if isinstance(warmup, (str, CodeBlock)) else list(warmup)
-        ) if warmup else []
-
-        summary_by_index = {}
-        covered_indices = set()
-        if compacted_log is not None:
-            results = getattr(self, "_Job__job_summaries", None)
-            if isinstance(results, JobCompactionResult):
-                results = [results]
-            results = sorted(results or [], key=lambda result: result.chat_log_pos)
-            summaries = (item for item in compacted_log if isinstance(item, JobSummary))
-            for result, summary in zip(results, summaries):
-                summary_by_index[result.chat_log_pos] = summary
-                covered_indices.update(range(
-                    result.chat_log_pos, result.chat_log_pos + result.chat_log_len
-                ))
-            last_warmup_index = max(
-                (idx for idx, item in enumerate(chat_log) if isinstance(item, WarmupLogItem)),
-                default=-1,
-            )
-            if any(isinstance(chat_log[idx], WarmupLogItem) for idx in covered_indices):
-                raise ValueError("Job summary range cannot cover warmup chat-log items")
-        else:
-            last_warmup_index = -1
-        deferred_summaries = [
-            summary for start, summary in sorted(summary_by_index.items())
-            if start <= last_warmup_index
-        ]
-
-        def _summary_item(summary: JobSummary) -> ChatHistoryItem:
-            return ChatHistoryItem(
-                role=ChatRole.USER,
-                content=format_job_summary(
-                    summary, self.py_env,
-                    self.job_def.chat_style or ChatStyle.CONSOLE,  # pylint: disable=no-member
-                ),
-                content_src=ContentSource.SYSTEM,
-            )
-
-        # 1) Initial user message and/or push_log[0].
-        initial_parts: List[str] = []
-        initial = chat_log[0] if chat_log else None
-        initial_message = initial.message if isinstance(initial, UserLogItem) else initial
-        if isinstance(initial_message, str) and initial_message:
-            initial_parts.append(self._with_language_hint(initial_message))
-        if 0 in push_log:
-            v = push_log[0]
-            if isinstance(v, list):
-                initial_parts.extend(
-                    self._with_language_hint(s) for s in v if s
-                )
-            elif v:
-                initial_parts.append(self._with_language_hint(v))
-        if initial_parts:
-            yield ChatHistoryItem(
-                role=ChatRole.USER,
-                content="\n".join(initial_parts),
-                content_src=ContentSource.USER,
-            )
-        if (0 in summary_by_index and last_warmup_index < 0
-                and isinstance(initial, (str, UserLogItem))):
-            yield _summary_item(summary_by_index[0])
-
-        # 2) Walk chat_log items in chronological order.
-        items = [
-            (index, item) for index, item in enumerate(chat_log)
-            if (not isinstance(item, str)
-                and not (index == 0 and isinstance(item, UserLogItem)))
-            or (index != 0 and index in summary_by_index)
-        ]
-
-        # Pre-compute the console end position for each ChatLogItem (the
-        # console_pos of the next ChatLogItem, or console_len for the last).
-        end_positions: Dict[int, int] = {}
-        for i, (_raw_index, item) in enumerate(items):
-            if isinstance(item, UserLogItem):
-                continue
-            next_pos = console_len
-            for j in range(i + 1, len(items)):
-                if isinstance(items[j][1], (
-                    WarmupLogItem,
-                    LLM_LogItem,
-                    PostProcessedItem,
-                    ReminderLogItem,
-                    SubTaskLogItem,
-                    NotificationLogItem,
-                )):
-                    next_pos = items[j][1].console_pos
-                    break
-            end_positions[i] = next_pos
-
-        # Push log keys (excluding 0, already consumed as the initial user msg).
-        sorted_push_keys = sorted(k for k in push_log.keys() if k != 0)
-
-        def _yield_pushes(lo: int, hi: int) -> Iterable[ChatHistoryItem]:
-            """Yield USER items for push_log entries in (lo, hi]."""
-            for k in sorted_push_keys:
-                if lo < k <= hi:
-                    v = push_log[k]
-                    msgs = v if isinstance(v, list) else [v]
-                    for msg in msgs:
-                        yield ChatHistoryItem(
-                            role=ChatRole.USER,
-                            content=self._with_language_hint(msg),
-                            content_src=ContentSource.USER,
-                        )
-
-        deferred_emitted = False
-        for idx, (raw_index, item) in enumerate(items):
-            if raw_index > last_warmup_index and not deferred_emitted:
-                for summary in deferred_summaries:
-                    yield _summary_item(summary)
-                deferred_emitted = True
-            if raw_index in summary_by_index and raw_index > last_warmup_index:
-                yield _summary_item(summary_by_index[raw_index])
-            if raw_index in covered_indices:
-                continue
-            if isinstance(item, UserLogItem):
-                if item.message:
-                    yield ChatHistoryItem(
-                        role=ChatRole.USER,
-                        content=self._with_language_hint(item.message),
-                        content_src=ContentSource.USER,
-                    )
-                continue
-
-            if isinstance(item, PostProcessedItem):
-                if item.message:
-                    yield ChatHistoryItem(
-                        role=ChatRole.SYSTEM,
-                        content=item.message,
-                        content_src=ContentSource.SYSTEM,
-                    )
-                continue
-
-            if isinstance(item, ReminderLogItem):
-                if item.reminder.text:
-                    yield ChatHistoryItem(
-                        role=ChatRole.SYSTEM,
-                        content=item.reminder.text,
-                        content_src=ContentSource.SYSTEM,
-                    )
-                continue
-
-            if isinstance(item, SubTaskLogItem):
-                try:
-                    notification = item.handler.get_log_message()
-                except Exception:  # pylint: disable=broad-except
-                    task_id = f" id={item.handler.id}" if item.handler.id is not None else ""
-                    if item.handler.error is not None:
-                        notification = f"[Error] sub-task{task_id} failed."
-                    else:
-                        notification = f"[Notification] sub-task{task_id} completed successfully."
-                yield ChatHistoryItem(
-                    role=ChatRole.SYSTEM,
-                    content=notification,
-                    content_src=ContentSource.SYSTEM,
-                )
-                if item.tool_log is not None:
-                    call = self._subtask_tool_call(idx, item.handler)
-                    yield ChatHistoryItem(
-                        role=ChatRole.ASSISTANT,
-                        content=None,
-                        content_src=ContentSource.SYSTEM,
-                        tool_calls=[call],
-                    )
-                    result = item.get_tool_result(0)
-                    if isinstance(result, ToolError):
-                        result = result.err_message
-                    yield ChatHistoryItem(
-                        role=ChatRole.TOOL,
-                        content=result,
-                        content_src=ContentSource.CONSOLE,
-                        tool_calls=[call],
-                    )
-                continue
-
-            if isinstance(item, NotificationLogItem):
-                call = self._notification_tool_call(idx)
-                yield ChatHistoryItem(
-                    role=ChatRole.ASSISTANT,
-                    content=None,
-                    content_src=ContentSource.SYSTEM,
-                    tool_calls=[call],
-                )
-                result = item.tool_log if item.tool_log is not None else format_default_llm_repr([item])
-                if isinstance(result, ToolError):
-                    result = result.err_message
-                yield ChatHistoryItem(
-                    role=ChatRole.TOOL,
-                    content=result,
-                    content_src=ContentSource.CONSOLE,
-                    tool_calls=[call],
-                )
-                continue
-
-            # Determine the source content of the assistant turn.
-            if isinstance(item, WarmupLogItem):
-                block_num = item.warmup_block_num
-                block = (
-                    warmup_blocks[block_num]
-                    if block_num < len(warmup_blocks) else None
-                )
-                if _is_hidden_warmup_block(block):
-                    continue
-                asst_src = ContentSource.SYSTEM
-            elif isinstance(item, LLM_LogItem):
-                block = item.llm_resp
-                asst_src = ContentSource.ASSISTANT
-            else:
-                continue
-
-            # Yield the assistant turn (and any tool results).
-            if block is not None:
-                tool_calls = (
-                    list(block.tool_calls)
-                    if isinstance(block, CodeBlock) and block.tool_calls
-                    else None
-                )
-                block_code = block.code if isinstance(block, CodeBlock) else block
-
-                # DIRECT style: wrap plain warmup code as python_cli tool calls
-                # so the LLM sees them as tool use, not confusing text/console.
-                if is_direct and isinstance(item, WarmupLogItem) and not tool_calls and block_code:
-                    warmup_call = CallSpecWrapper(
-                        id=f"STATEK-WARMUP-{item.warmup_block_num:03d}",
-                        func_name="python_cli",
-                        args=None,
-                        kwargs={"code": block_code},
-                    )
-                    yield ChatHistoryItem(
-                        role=ChatRole.ASSISTANT,
-                        content=None,
-                        content_src=asst_src,
-                        tool_calls=[warmup_call],
-                    )
-                    # Console output as TOOL result instead of USER message
-                    from_pos = item.console_pos
-                    to_pos = end_positions[idx]
-                    console_text = "\n".join(console[from_pos:to_pos]) if to_pos > from_pos and console else ""
-                    yield ChatHistoryItem(
-                        role=ChatRole.TOOL,
-                        content=console_text,
-                        content_src=ContentSource.CONSOLE,
-                        tool_calls=[warmup_call],
-                    )
-                    yield from _yield_pushes(from_pos, to_pos)
-                    continue
-
-                if tool_calls:
-                    yield ChatHistoryItem(
-                        role=ChatRole.ASSISTANT,
-                        content=block_code if block_code else None,
-                        content_src=asst_src,
-                        tool_calls=tool_calls,
-                        provider_reasoning_payload=(
-                            getattr(item, "llm_reasoning_payload", None)
-                            if isinstance(item, LLM_LogItem) else None
-                        ),
-                    )
-                    for j, cs in enumerate(tool_calls):
-                        try:
-                            result = item.get_tool_result(j)
-                        except (KeyError, IndexError):
-                            result = ""
-                        if isinstance(result, ToolError):
-                            result = result.err_message
-                        yield ChatHistoryItem(
-                            role=ChatRole.TOOL,
-                            content=result,
-                            content_src=ContentSource.CONSOLE,
-                            tool_calls=cs,
-                        )
-                    # python_cli output already travelled via tool_log /
-                    # TOOL items above — the console slice that also
-                    # received it (for console_pos advancement) would only
-                    # duplicate it as a USER message.  Skip that dump and
-                    # any push_log yielding for this block.
-                    from_pos = item.console_pos
-                    to_pos = end_positions[idx]
-                    yield from _yield_pushes(from_pos, to_pos)
-                    continue
-                elif block_code:
-                    yield ChatHistoryItem(
-                        role=ChatRole.ASSISTANT,
-                        content=block_code,
-                        content_src=asst_src,
-                        provider_reasoning_payload=(
-                            getattr(item, "llm_reasoning_payload", None)
-                            if isinstance(item, LLM_LogItem) else None
-                        ),
-                    )
-                elif isinstance(item, LLM_LogItem) and item.llm_reasoning_payload is not None:
-                    yield ChatHistoryItem(
-                        role=ChatRole.ASSISTANT,
-                        provider_reasoning_payload=item.llm_reasoning_payload,
-                    )
-
-            # Console output produced by this block (USER + CONSOLE).
-            from_pos = item.console_pos
-            to_pos = end_positions[idx]
-            if to_pos > from_pos and console:
-                console_text = "\n".join(console[from_pos:to_pos])
-                yield ChatHistoryItem(
-                    role=ChatRole.USER,
-                    content=console_text,
-                    content_src=ContentSource.CONSOLE,
-                )
-
-            # Any push_log messages emitted while this block was running.
-            yield from _yield_pushes(from_pos, to_pos)
-
-        if not deferred_emitted:
-            for summary in deferred_summaries:
-                yield _summary_item(summary)
+        return self.history.iter_history_steps(compacted)
 
     def get_chat_history(self, compacted: bool = True) -> Iterable[ChatHistoryItem]:
         """Yield LLM-facing chat history, using available summaries by default."""
-        yield from self._iter_chat_history(compacted=compacted)
+        return self.history.get_chat_history(compacted)
 
     def _build_request_data(
         self,
@@ -1726,7 +1227,9 @@ class Job:
         chat_history = (
             self.get_chat_history()
             if chat_log is None and console is None and push_log is None
-            else self._iter_chat_history(chat_log=chat_log, console=console, push_log=push_log)
+            else self.history._iter_chat_history(  # pylint: disable=protected-access
+                chat_log=chat_log, console=console, push_log=push_log
+            )
         )
         request_params: Dict[str, Any] = {
             "chat_history": chat_history,
@@ -1767,43 +1270,7 @@ class Job:
 
     def get_request_data(self, turn_num: int) -> Dict[str, Any]:
         """Reconstruct the request params used for a historical LLM turn."""
-        if turn_num < 0:
-            raise IndexError(f"turn_num out of range: {turn_num}")
-
-        target_idx = None
-        target_item = None
-        console_limit = 0
-        llm_turn_num = 0
-        for idx, item in enumerate(self.chat_log):
-            if not isinstance(item, LLM_LogItem) or item.llm_resp is None:
-                continue
-            if llm_turn_num == turn_num:
-                target_idx = idx
-                target_item = item
-                console_limit = item.console_pos
-                break
-            llm_turn_num += 1
-
-        if target_idx is None:
-            raise IndexError(f"turn_num out of range: {turn_num}")
-
-        console = list(self.py_env.iter_console())
-        push_log = dict(self.py_env.iter_push_log())
-        history_chat_log = self.chat_log[:target_idx]
-        history_console = console[:console_limit]
-        history_push_log = {
-            key: value for key, value in push_log.items()
-            if key <= console_limit
-        }
-        request_difficulty = getattr(target_item, "request_difficulty", None)
-        if request_difficulty is None:
-            request_difficulty = _get_static_task_difficulty(self.job_def.metadata)
-        return self._build_request_data(
-            chat_log=history_chat_log,
-            console=history_console,
-            push_log=history_push_log,
-            difficulty=request_difficulty,
-        )
+        return self.history.get_request_data(turn_num)
 
     def get_resource_agents(
         self,
@@ -1991,8 +1458,7 @@ class Job:
     @property
     def last_chat_log_item(self) -> Optional[Union[str, ChatLogItem, UserLogItem]]:
         """Return the current conversation/execution item, ignoring budget metadata."""
-        return next((item for item in reversed(self.chat_log)
-                     if not isinstance(item, DifficultyChangeLogItem)), None)
+        return self.history.last_chat_log_item
 
     def panic(self) -> None:
         """Escalate difficulty and extend this job's token budget by usage so far."""
@@ -2167,137 +1633,16 @@ class Job:
         Retrieves the last response received from the LLM (i.e. the Python code to be executed,
         or a CodeBlock when the LLM requested tool calls) or None if chat_log is empty.
         """
-        if not self.chat_log:
-            return None
-        last = self.last_chat_log_item
-        if isinstance(last, LLM_LogItem):
-            return last.llm_resp
-        return None
+        return self.history.last_response
 
-    def _is_user_facing_llm_response(self, item: LLM_LogItem) -> bool:
-        """Return True when the LLM log item corresponds to a visible reply.
-
-        ``get_response_times()`` tracks user-visible latency, so internal
-        execution turns in dialog styles should not count as the first reply.
-        """
-        response = item.llm_resp
-        if response is None:
-            return False
-
-        chat_style = self.job_def.chat_style
-        if chat_style == ChatStyle.DIRECT:  # pylint: disable=no-member
-            return isinstance(response, str) and bool(response.strip())
-
-        if chat_style == ChatStyle.MD_DIALOG:  # pylint: disable=no-member
-            if isinstance(response, CodeBlock):
-                return False
-            if not isinstance(response, str):
-                return False
-            return any(line.startswith("# ") for line in response.splitlines())
-
-        return True
-
-    @staticmethod
-    def _chat_response_from_tool_log(line: str) -> Optional[str]:
-        """Extract a user-facing answer body from a console tool-log line."""
-        call_params = parse_tool_log(line)
-        if call_params is None or call_params.name != "answer":
-            return None
-
-        body = None
-        if call_params.args:
-            body = call_params.args[0]
-        if call_params.kwargs:
-            body = call_params.kwargs.get("body", body)
-            body = call_params.kwargs.get("content", body)
-        if not isinstance(body, str) or not body:
-            return None
-        return body
-
-    def _iter_chat_response_tool_logs(self, from_pos: int, to_pos: int) -> Iterable[str]:
-        """Yield answer bodies from console output in ``[from_pos, to_pos)``."""
-        for output in self.py_env.iter_console(from_pos, to_pos):
-            for line in output.splitlines():
-                body = self._chat_response_from_tool_log(line)
-                if body is not None:
-                    yield body
-
-    @staticmethod
-    def _dialog_from_code_block(resp: CodeBlock) -> Optional[str]:
-        """Extract dialog from a raw MD_DIALOG response stored as a CodeBlock."""
-        return extract_dialog(resp.code or "")
 
     def get_chat_responses(self) -> Iterable[str]:
         """Yield user-facing chat responses from the chat log, oldest first."""
-        console_len = self.py_env.console_len
-        items = [
-            item for item in self.chat_log
-            if isinstance(item, (WarmupLogItem, LLM_LogItem))
-        ]
-        end_positions = [
-            items[idx + 1].console_pos if idx + 1 < len(items) else console_len
-            for idx in range(len(items))
-        ]
-
-        for idx, item in enumerate(items):
-            if isinstance(item, LLM_LogItem) and self._is_user_facing_llm_response(item):
-                resp = item.llm_resp
-                if isinstance(resp, str):
-                    yield resp
-                elif isinstance(resp, CodeBlock) and resp.code:
-                    yield resp.code
-            yield from self._iter_chat_response_tool_logs(
-                item.console_pos,
-                end_positions[idx],
-            )
+        return self.history.get_chat_responses()
 
     def get_dialog(self) -> Iterable[DialogItem]:
         """Yield user/assistant dialog messages in chronological order."""
-        console_len = self.py_env.console_len
-        turn_items = [
-            item for item in self.chat_log
-            if isinstance(item, (WarmupLogItem, LLM_LogItem))
-        ]
-        end_positions = {
-            id(item): (
-                turn_items[idx + 1].console_pos
-                if idx + 1 < len(turn_items) else console_len
-            )
-            for idx, item in enumerate(turn_items)
-        }
-
-        for item in self.chat_log:
-            if isinstance(item, str):
-                if item:
-                    yield DialogItem("user", item)
-                continue
-
-            if isinstance(item, UserLogItem):
-                if item.message:
-                    yield DialogItem("user", item.message)
-                continue
-
-            if not isinstance(item, (WarmupLogItem, LLM_LogItem)):
-                continue
-
-            if isinstance(item, LLM_LogItem) and self._is_user_facing_llm_response(item):
-                resp = item.llm_resp
-                if isinstance(resp, str):
-                    yield DialogItem("assistant", resp)
-            elif (
-                isinstance(item, LLM_LogItem)
-                and self.job_def.chat_style == ChatStyle.MD_DIALOG  # pylint: disable=no-member
-                and isinstance(item.llm_resp, CodeBlock)
-            ):
-                dialog = self._dialog_from_code_block(item.llm_resp)
-                if dialog:
-                    yield DialogItem("assistant", dialog)
-
-            for body in self._iter_chat_response_tool_logs(
-                item.console_pos,
-                end_positions[id(item)],
-            ):
-                yield DialogItem("assistant", body)
+        return self.history.get_dialog()
 
     def get_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
         """Return user-message timestamps paired with time until their wait ended.
@@ -2307,43 +1652,7 @@ class Job:
         Dialog timing reads each message's ``wait_finished_at``; an unset value
         means its wait is still pending. Non-dialog jobs retain their LLM-log timing.
         """
-        response_times: List[tuple[datetime, Optional[float]]] = []
-        pending_indices: List[int] = []
-        if self.job_def.chat_style in (ChatStyle.DIRECT, ChatStyle.MD_DIALOG):
-            for item in self.chat_log:
-                if isinstance(item, UserLogItem) and item.message:
-                    response_times.append((
-                        item.timestamp,
-                        (item.wait_finished_at - item.timestamp).total_seconds()
-                        if item.wait_finished_at is not None else None,
-                    ))
-            return response_times
-
-        for item in self.chat_log:
-            if isinstance(item, str):
-                if item and self.created_at is not None:
-                    pending_indices.append(len(response_times))
-                    response_times.append((self.created_at, None))
-                continue
-
-            if isinstance(item, UserLogItem):
-                if item.message:
-                    pending_indices.append(len(response_times))
-                    response_times.append((item.timestamp, None))
-                continue
-
-            if isinstance(item, LLM_LogItem):
-                if not pending_indices or not self._is_user_facing_llm_response(item):
-                    continue
-                for idx in pending_indices:
-                    message_time, _ = response_times[idx]
-                    response_times[idx] = (
-                        message_time,
-                        (item.timestamp - message_time).total_seconds(),
-                    )
-                pending_indices = []
-
-        return response_times
+        return self.history.get_response_times()
 
     def get_llm_response_times(self) -> Iterable[tuple[datetime, Optional[float]]]:
         """Return per-request LLM timings from the chat log.
@@ -2359,41 +1668,7 @@ class Job:
         Non-LLM entries are ignored. A trailing pending marker with no later
         response is returned with ``None`` as its duration.
         """
-        response_times: List[tuple[datetime, Optional[float]]] = []
-        pending_request_time: Optional[datetime] = None
-        previous_response_time: Optional[datetime] = None
-
-        for item in self.chat_log:
-            if not isinstance(item, LLM_LogItem):
-                continue
-
-            if item.llm_resp is None:
-                pending_request_time = item.timestamp
-                continue
-
-            if pending_request_time is not None:
-                response_times.append((
-                    pending_request_time,
-                    (item.timestamp - pending_request_time).total_seconds(),
-                ))
-                pending_request_time = None
-            elif previous_response_time is not None:
-                response_times.append((
-                    previous_response_time,
-                    (item.timestamp - previous_response_time).total_seconds(),
-                ))
-            elif self.created_at is not None and self.created_at <= item.timestamp:
-                response_times.append((
-                    self.created_at,
-                    (item.timestamp - self.created_at).total_seconds(),
-                ))
-
-            previous_response_time = item.timestamp
-
-        if pending_request_time is not None:
-            response_times.append((pending_request_time, None))
-
-        return response_times
+        return self.history.get_llm_response_times()
 
     def get_llm_initial_step_size(self) -> tuple[int, int]:
         """Return (input_tokens, output_tokens) for the constant initial portion.
@@ -2402,9 +1677,7 @@ class Job:
         sent with every first LLM request. Token counts use the ``len // 4``
         approximation. Output tokens are always zero (no LLM output at this stage).
         """
-        system_prompt = self.system_prompt()
-        warmup_text = _warmup_code_text(self.job_def.warmup_code if self.job_def else None)
-        return (len(system_prompt) + len(warmup_text)) // 4, 0
+        return self.history.get_llm_initial_step_size()
 
     def get_llm_step_sizes(self) -> Iterable[tuple[int, int]]:
         """Return (input_tokens, output_tokens) per LLM step, ordered as get_llm_response_times.
@@ -2421,39 +1694,7 @@ class Job:
         Output tokens cover the LLM response text plus the JSON encoding of any
         tool call requests.
         """
-        console = list(self.py_env.iter_console())
-        is_first = True
-        prev_console_pos = 0
-        prev_item = None
-        accumulated_text = ""
-        trailing_pending = None
-
-        for item in self.chat_log:
-            if isinstance(item, str):
-                accumulated_text += item
-                continue
-            if isinstance(item, UserLogItem):
-                accumulated_text += item.message or ""
-                continue
-            if not isinstance(item, LLM_LogItem):
-                continue
-            console_text = "\n".join(console[prev_console_pos:item.console_pos])
-            tool_text = _tool_log_text(prev_item)
-            input_tokens = (len(console_text) + len(tool_text) + len(accumulated_text)) // 4
-            if is_first:
-                input_tokens += self.get_llm_initial_step_size()[0]
-            if item.llm_resp is None:
-                trailing_pending = input_tokens
-                continue
-            is_first = False
-            trailing_pending = None
-            yield (input_tokens, _llm_resp_output_tokens(item.llm_resp))
-            accumulated_text = ""
-            prev_console_pos = item.console_pos
-            prev_item = item
-
-        if trailing_pending is not None:
-            yield (trailing_pending, 0)
+        return self.history.get_llm_step_sizes()
 
     def tokens_per_sec(self) -> float:
         """Return total tokens divided by total LLM processing time in seconds.
@@ -2463,18 +1704,7 @@ class Job:
         (``None``) are excluded from both totals. Returns ``0.0`` when no
         step has a known duration.
         """
-        total_tokens = 0
-        total_seconds = 0.0
-        for (_, duration), (input_tok, output_tok) in zip(
-            self.get_llm_response_times(), self.get_llm_step_sizes()
-        ):
-            if duration is None:
-                continue
-            total_tokens += input_tok + output_tok
-            total_seconds += duration
-        if total_seconds == 0.0:
-            return 0.0
-        return total_tokens / total_seconds
+        return self.history.tokens_per_sec()
 
     def _get_warmup_block_count(self) -> int:
         """
@@ -2561,7 +1791,7 @@ class Job:
     @property
     def num_turns(self) -> int:
         """Returns the number of LLM turns (excludes warmup code blocks)."""
-        return sum(1 for item in self.chat_log if isinstance(item, LLM_LogItem))
+        return self.history.num_turns
 
     def count_llm_actions(self) -> int:
         """Return the number of LLM actions recorded in chat_log.
@@ -2576,23 +1806,7 @@ class Job:
         Returns:
             The total number of recorded LLM actions.
         """
-        action_count = 0
-        for item in self.chat_log:
-            if not isinstance(item, LLM_LogItem):
-                continue
-
-            response = item.llm_resp
-            if isinstance(response, CodeBlock):
-                if response.code and response.code.strip():
-                    action_count += 1
-                if response.tool_calls:
-                    action_count += len(response.tool_calls)
-                continue
-
-            if isinstance(response, str) and self._is_user_facing_llm_response(item):
-                action_count += 1
-
-        return action_count
+        return self.history.count_llm_actions()
 
     def is_step_final(self, llm_step: LLM_StepData) -> bool:
         """Return whether accepting an LLM step would naturally finish the job.
@@ -2616,34 +1830,6 @@ class Job:
 
         return False
 
-    @property
-    def _warmup_console_positions(self) -> set:
-        """Returns console_pos values that correspond to warmup blocks."""
-        return {item.console_pos for item in self.chat_log if isinstance(item, WarmupLogItem)}
-
-    def _exception_messages_by_turn(self) -> Iterable[Tuple[ChatLogItem, List[str]]]:
-        """Resolve console events once; latest equal execution boundary wins.
-
-        Error console entries belong to half-open execution ranges.
-        """
-        items = [item for item in self.chat_log
-                 if isinstance(item, (LLM_LogItem, WarmupLogItem))]
-        errors = list(self.py_env.iter_exceptions())
-        position = 0
-        for index, item in enumerate(items):
-            end = items[index + 1].console_pos if index + 1 < len(items) else None
-            messages = []
-            while position < len(errors) and (end is None or errors[position][0] < end):
-                key, error = errors[position]
-                position += 1
-                if key >= item.console_pos and error.kind == ErrorKind.EXECUTION:
-                    messages.append(error.message)
-            tool_log = item.tool_log
-            if isinstance(tool_log, ToolError):
-                messages.append(tool_log.err_message)
-            elif tool_log is not None and not isinstance(tool_log, str):
-                messages.extend(entry.err_message for entry in tool_log if isinstance(entry, ToolError))
-            yield item, messages
 
     @property
     def exception_count(self) -> int:
@@ -2652,8 +1838,7 @@ class Job:
         Counts both code-execution exceptions (py_env.exceptions) and
         tool-call exceptions (ToolError entries in tool_log).
         """
-        return sum(len(messages) for item, messages in self._exception_messages_by_turn()
-                   if isinstance(item, LLM_LogItem))
+        return self.history.exception_count
 
     @property
     def max_consecutive_exceptions(self) -> int:
@@ -2661,24 +1846,12 @@ class Job:
 
         Considers both code-execution exceptions and tool-call exceptions.
         """
-        if not self.chat_log:
-            return 0
-        max_streak = 0
-        streak = 0
-        for item, messages in self._exception_messages_by_turn():
-            if not isinstance(item, LLM_LogItem):
-                continue
-            if messages:
-                streak += 1
-                max_streak = max(max_streak, streak)
-            else:
-                streak = 0
-        return max_streak
+        return self.history.max_consecutive_exceptions
 
     @property
     def approx_token_usage(self) -> int:
         """Calculates approximate token usage based on total bytes sent and received."""
-        return (self.usage.total_bytes_sent + self.usage.total_bytes_received) // 4
+        return self.history.approx_token_usage
 
     def _resolve_user_message(self, message: Any) -> str:
         """Resolve a pushed message object to the string stored in job logs."""

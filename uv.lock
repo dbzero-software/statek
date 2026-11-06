@@ -996,7 +996,7 @@ wheels = [
 
 [[package]]
 name = "statek"
-version = "1.4.2"
+version = "1.4.4"
 source = { editable = "." }
 dependencies = [
     { name = "dbzero-modelkit" },
