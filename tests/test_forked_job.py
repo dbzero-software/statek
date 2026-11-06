@@ -331,3 +331,22 @@ def test_partial_environment_view_keeps_local_errors_at_cutoff(job_factory):
     assert dict(fork.py_env.iter_push_log())[2] == 'fork push'
     assert source.py_env.get_exception(2).message == 'excluded'
     assert dict(source.py_env.iter_push_log())[2] == 'pushed follow-up'
+
+
+def test_legacy_fork_reports_raw_boundary_after_reopen(job_factory):
+    source = source_job(job_factory)
+    fork = ForkedJob(source, 3)
+    # Older forks stored an LLM count alongside the raw inherited-log boundary.
+    fork._ForkedJob__forked_at = 1
+    fork._ForkedJob__inherited_log_len = 3
+    fork.chat_log.append(LLM_LogItem(2, llm_resp='new', tool_log=ToolError('local error')))
+    assert fork.forked_at == 3
+    assert fork.num_execution_turns == 1
+    identifier = db0.uuid(fork)
+    db0.close()
+    db0.init(DB0_DIR, read_write=True)
+    db0.open('test_prefix', 'rw')
+    restored = db0.fetch(identifier)
+    assert restored.forked_at == 3
+    assert restored.exception_count == 1
+    assert restored.num_execution_turns == 1

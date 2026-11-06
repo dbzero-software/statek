@@ -50,6 +50,7 @@ from statek.executors.chat_log_item import (
     PostProcessedItem,
     ReminderLogItem,
     SubTaskLogItem,
+    SystemLogItem,
     ToolError,
     WarmupLogItem,
     UserLogItem,
@@ -106,24 +107,33 @@ ParsedWarmupCode = Optional[Union[str, "CodeBlock", List[Union[str, "CodeBlock"]
 
 
 @db0.memo
-@dataclass
+@dataclass(init=False)
 class PyHandleDesc:
     """Description of a Python handle referenced by a job summary."""
 
     var_name: str
     desc: Optional[str] = None
 
+    def __init__(self, var_name: str, desc: Optional[str] = None, *, prefix=None):
+        db0.set_prefix(self, prefix)
+        self.var_name = var_name
+        self.desc = desc
+
 
 @db0.memo
-@dataclass
+@dataclass(init=False)
 class StateSummary:
     """Handles described in a compacted slice of a job."""
 
     locals: Set[PyHandleDesc]
 
+    def __init__(self, locals: Set[PyHandleDesc], *, prefix=None):
+        db0.set_prefix(self, prefix)
+        self.locals = locals
+
 
 @db0.memo
-@dataclass
+@dataclass(init=False)
 class JobSummary:
     """Compact representation of prior job interactions and state."""
 
@@ -132,15 +142,31 @@ class JobSummary:
     system_summary: Optional[str] = None
     state: Optional[StateSummary] = None
 
+    def __init__(self, input_summary: str, output_summary: str,
+                 system_summary: Optional[str] = None,
+                 state: Optional[StateSummary] = None, *, prefix=None):
+        db0.set_prefix(self, prefix)
+        self.input_summary = input_summary
+        self.output_summary = output_summary
+        self.system_summary = system_summary
+        self.state = state
+
 
 @db0.memo
-@dataclass
+@dataclass(init=False)
 class JobCompactionResult:
     """A summary and the raw chat-log range it replaces."""
 
     chat_log_pos: int
     chat_log_len: int
     job_summary: JobSummary
+
+    def __init__(self, chat_log_pos: int, chat_log_len: int,
+                 job_summary: JobSummary, *, prefix=None):
+        db0.set_prefix(self, prefix)
+        self.chat_log_pos = chat_log_pos
+        self.chat_log_len = chat_log_len
+        self.job_summary = job_summary
 
 
 def format_job_summary(job_summary: JobSummary, py_env: PyEnv,
@@ -814,6 +840,55 @@ class Job:
     def add_locals(self, **kwargs) -> None:
         """Inject additional values into this job's Python local state."""
         self.py_env.update_state(**kwargs)
+
+    def get_diff_locals(self) -> Set[str]:
+        """Return current local names absent from warmup and compaction summaries.
+
+        Only names are compared; changing or reintroducing a previously
+        summarized variable does not make it new.
+        """
+        names = {name for name, _ in self.py_env.iter_locals()}
+        results = getattr(self, "_Job__job_summaries", None)
+        if isinstance(results, JobCompactionResult):
+            results = [results]
+        summaries = [getattr(self, "_Job__warmup_summary", None)]
+        summaries.extend(result.job_summary for result in results or ())
+        for summary in summaries:
+            if summary is not None and summary.state is not None:
+                names.difference_update(handle.var_name for handle in summary.state.locals)
+        return names
+
+    def compact(self, chat_log_pos: int, chat_log_len: int,
+                job_summary: JobSummary) -> None:
+        """Register a summary for a nonempty slice of the raw chat log.
+
+        Preserve previous summaries and execution state. Invalid, overlapping,
+        or warmup-containing ranges are rejected before changing stored results.
+        """
+        if (not isinstance(chat_log_pos, int) or isinstance(chat_log_pos, bool)
+                or not isinstance(chat_log_len, int) or isinstance(chat_log_len, bool)):
+            raise TypeError("chat_log_pos and chat_log_len must be integers")
+        if not isinstance(job_summary, JobSummary):
+            raise TypeError("job_summary must be a JobSummary")
+        end = chat_log_pos + chat_log_len
+        if chat_log_pos < 0 or chat_log_len <= 0 or end > len(self.chat_log):
+            raise ValueError("Invalid job summary chat-log range")
+        if any(isinstance(self.chat_log[index], WarmupLogItem)
+               for index in range(chat_log_pos, end)):
+            raise ValueError("Job summary range cannot cover warmup chat-log items")
+        summaries = getattr(self, "_Job__job_summaries", None)
+        previous = [summaries] if isinstance(summaries, JobCompactionResult) else summaries or ()
+        if any(chat_log_pos < result.chat_log_pos + result.chat_log_len
+               and result.chat_log_pos < end for result in previous):
+            raise ValueError("Job summary chat-log range overlaps an existing summary")
+        result = JobCompactionResult(chat_log_pos, chat_log_len, job_summary,
+                                     prefix=db0.get_prefix_of(self).name)
+        if summaries is None:
+            self.__job_summaries = result
+        elif isinstance(summaries, JobCompactionResult):
+            self.__job_summaries = [summaries, result]
+        else:
+            summaries.append(result)
 
     def get_compacted_chat_log(
         self,
@@ -1520,6 +1595,7 @@ class Job:
                     WarmupLogItem,
                     LLM_LogItem,
                     PostProcessedItem,
+                    SystemLogItem,
                     ReminderLogItem,
                     SubTaskLogItem,
                     NotificationLogItem,
@@ -1580,7 +1656,7 @@ class Job:
                     )
                 continue
 
-            if isinstance(item, PostProcessedItem):
+            if isinstance(item, (PostProcessedItem, SystemLogItem)):
                 if item.message:
                     yield ChatHistoryItem(
                         role=ChatRole.SYSTEM,
@@ -2089,6 +2165,13 @@ class Job:
         current_difficulty = self.get_current_difficulty()
         next_difficulty = _next_task_difficulty(current_difficulty)
         self._set_dynamic_difficulty(next_difficulty)
+
+    def post_turn_hook(self) -> None:
+        """Run after a completed LLM turn; subclasses may change the job's state.
+
+        The default implementation does nothing. Exceptions are critical and
+        propagate to the worker, which terminates the job with an error.
+        """
 
     def append_chat_log(
         self,

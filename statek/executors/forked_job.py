@@ -132,10 +132,11 @@ class ForkedJob(Job):
     @property
     def forked_at(self) -> int:
         """First raw source chat-log index excluded from the inherited history."""
-        return self.__forked_at
+        # Older forks stored an LLM count separately from the raw boundary.
+        return getattr(self, '_ForkedJob__inherited_log_len', self.__forked_at)
 
     def _execution_chat_log(self):
-        return self.chat_log[self.__forked_at:]
+        return self.chat_log[self.forked_at:]
 
     @property
     def num_execution_turns(self) -> int:
@@ -158,7 +159,7 @@ class ForkedJob(Job):
 
     def _exception_messages_by_turn(self):
         remaining = sum(isinstance(item, LLM_LogItem)
-                        for item in self.chat_log[:self.__forked_at])
+                        for item in self.chat_log[:self.forked_at])
         for item, messages in super()._exception_messages_by_turn():
             if isinstance(item, WarmupLogItem):
                 continue

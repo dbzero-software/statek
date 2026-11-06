@@ -999,6 +999,12 @@ def _release_ready_continuation(job: Job) -> bool:
     return True
 
 
+def _finish_llm_turn(job: Job) -> bool:
+    """Allow custom turn processing before reporting the final job status."""
+    job.post_turn_hook()
+    return job.status == JobStatus.DONE
+
+
 @_with_statek_job_context
 async def run_job_step(job: Job, provider: str = None) -> bool:
     """
@@ -1014,7 +1020,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         provider: The LLM API provider name (or None for default)
 
     Returns:
-        True if the job has been completed (exit called), False otherwise
+        True if the job is DONE, including completion by post_turn_hook, False otherwise
 
     """
 
@@ -1237,7 +1243,7 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
 
     if processed_step is None:
         harness.check_after_step(job)
-        return False
+        return _finish_llm_turn(job)
 
     processed_response = LLM_Response(step_data=processed_step, stats=response.stats)
     job.append_chat_log(
@@ -1269,20 +1275,20 @@ async def run_job_step(job: Job, provider: str = None) -> bool:
         reminder = getattr(job.job_def.agent, "reminder", None)
         if reminder is not None and job.handle_reminder(reminder):
             harness.check_after_step(job)
-            return False
+            return _finish_llm_turn(job)
         if _process_pending_notification_follow_up(job, harness):
-            return False
+            return _finish_llm_turn(job)
         harness.check_after_step(job)
         custom_exit(job)
         job.set_status(JobStatus.DONE)
         _log_pending_console(job)
-        return True
+        return _finish_llm_turn(job)
 
     # Harness post-check outside the design step count
     harness.check_after_step(job)
 
-    # Step 17: Return False
-    return False
+    # Step 17: Run the post-turn hook and report the resulting status
+    return _finish_llm_turn(job)
 
 
 def process_push_notifications(
