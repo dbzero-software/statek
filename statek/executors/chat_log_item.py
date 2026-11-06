@@ -96,8 +96,6 @@ class LLM_LogItem(ChatLogItem):
     request_difficulty: Optional[TaskDifficulty] = None
     # Cumulative approximate usage including this response; None for placeholders.
     cumulative_token_usage: Optional[int] = None
-    # Original provider text, before chat-style transformations.
-    raw_response_text: Optional[str] = None
 
 
 @db0.memo(no_default_tags=True)

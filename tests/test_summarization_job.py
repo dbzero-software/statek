@@ -161,10 +161,14 @@ async def test_execution_engine_retries_without_executing_json(job_factory, styl
     target.set_status(JobStatus.SUSPENDED)
     job = SummarizationJob(target, 2, target_job=target, chat_log_pos=1, chat_log_len=1)
     push_summarization_instr(job)
+    summary_response = result_text()
+    if style in ('MARKDOWN', 'MD_DIALOG'):
+        # These styles retain only Python-fenced text as plain llm_resp.
+        summary_response = f'```python\n{summary_response}\n```'
     api = MagicMock()
     api.process_request = AsyncMock(side_effect=[
         LLM_Response(LLM_StepData(text, None), LLM_Stats(0, 0, None))
-        for text in ('invalid', result_text())])
+        for text in ('invalid', summary_response)])
     with patch('statek.executors.utils.LLM_API.get', return_value=api), \
          patch('statek.executors.utils.get_llm_harness', return_value=MagicMock()), \
          patch('statek.executors.utils.handle_dialog', new_callable=AsyncMock), \

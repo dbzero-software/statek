@@ -2242,7 +2242,6 @@ class Job:
         chat_item = LLM_LogItem(
             console_pos=self.py_env.console_len,
             llm_resp=stored_resp,
-            raw_response_text=step_data.text,
             llm_reasoning_payload=step_data.reasoning_payload,
             request_difficulty=request_difficulty,
             cumulative_token_usage=(self.approx_token_usage if cumulative_token_usage is None
